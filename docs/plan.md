@@ -263,6 +263,34 @@ Restricting that view from the security company is a sound control, but guards r
 subjects (POPIA applies in South Africa). Worth a brief word with trustees on retention and
 access before the bot ships.
 
+## Candidate refinements (not yet built, revisit with evidence)
+- **Dual fence lines (near/far band, not just one side-assignment line)**: on some cameras the
+  guard passes close beside/under the fence, close enough that a single polyline's side test could
+  misclassify that proximity as far-side. Idea (2026-08-28, user): draw two polylines bounding the
+  fence structure itself (its near and far edge) instead of one, so a blob has to be genuinely
+  beyond the far line — not just past the single line — to score as a crossing. Deliberately not
+  building this now: doubles the per-camera drawing/config work for a problem we haven't observed
+  yet. Revisit only if backtesting turns up false positives that trace back to near-fence guard
+  proximity rather than an actual crossing.
+- **Per-camera normal-footprint model as a classification input**: idea (2026-08-28, user) —
+  build a per-camera positional heatmap from historical `guard`-labelled clips (where the blob
+  centroid/track usually falls), then flag detections that fall well outside that usual footprint
+  as an anomaly signal, even on the near side. Distinct from the `activity heatmap` already listed
+  under Explicitly deferred (Phase 5), which is a trustee-bot analytics *display* feature — this
+  one would feed `classify.py`/escalation directly, as a spatial prior rather than a dashboard.
+  Caveats the user flagged: flashlight glare/lighting changes could look like positional shift
+  without being one, so the footprint would need to be built from track geometry (centroid path),
+  not brightness; and it needs enough labelled `guard` clips per camera before a "usual" shape
+  means anything, which the labelling pass (Phase 3, step 26) hasn't produced yet. Revisit once
+  labelling gives a real per-camera sample size, not before.
+- **Annotated-video Telegram delivery option**: attach a copy of the alert clip with the motion
+  blob/bounding box and the fence polyline burned in per frame, as an optional alternative or
+  addition to the plain-text alert (2026-08-28, user request). Depends on `motion.py`/`classify.py`
+  (Phase 2/3, not yet built) to produce the per-frame contours to draw, and a `send_video`-capable
+  path in `telegram_alert.py` (currently text-only, `send_message` only). Natural fit as a Phase 4
+  addition once the base classifier and plain-text alerts are proven — no upstream pipeline to
+  draw from yet, so there's nothing to wire it into today.
+
 ## Explicitly deferred
 `main.py` live loop, listener queueing, delivery outbox and crash recovery, Dockerfile/compose and
 ARM64 build, live clip retention policy, run-comparison CLI, migration framework, per-camera

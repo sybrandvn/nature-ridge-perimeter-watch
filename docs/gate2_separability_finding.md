@@ -5,9 +5,13 @@ Generated from `scripts/spike.py` across every camera with labelled clips
 produce no detectable motion at all and are dropped, which is correct
 behaviour for genuinely blank frames.
 
-Per-camera fence geometry exists only for cam05/cam06/cam08; other cameras get
-`far_side_pixel_fraction=0.0` (ambiguous by design, see
-`src/zones.py::classify_zone`). Their remaining features are still valid.
+Per-camera fence geometry originally existed only for cam05/cam06/cam08; other
+cameras got `far_side_pixel_fraction=0.0` (ambiguous by design, see
+`src/zones.py::classify_zone`). **Updated 2026-08-28: all 18 labelled cameras
+now have real fence geometry** (see `config/cameras.yaml` and the "Does wider
+geometry bias the result?" section below) — the spike was rerun and every
+number in this document reflects the full 18-camera geometry, not the original
+3-camera one.
 
 ## Detector correction (matters for reading everything below)
 
@@ -116,17 +120,39 @@ it is.
 
 ## Flashlight false positives (plan.md requires this count)
 
-On the 3 cameras with fence geometry, 62 labelled `guard` clips:
+Across all 18 cameras (110 labelled `guard` clips):
 
-- **36/62 (58%)** have a far-side-majority pixel fraction — more than half the
+- **58/110 (53%)** have a far-side-majority pixel fraction — more than half the
   blob lands outside the fence line purely from geometry, despite being a guard
   patrol on the near side.
-- **23/36 (64%)** of those carry a light signal (`green_light_ratio > 0.05` or
+- **38/58 (66%)** of those carry a light signal (`green_light_ratio > 0.05` or
   `saturation_ratio > 0.15`).
 
 This confirms the plan's predicted failure mode ("a flashlight beam aimed down
 or across the fence lands on the far side easily") as real and frequent. The
 green-light feature is what makes those recoverable rather than pure noise.
+
+## Does wider geometry bias the result?
+
+Expanding fence geometry from 3 cameras to all 18 was checked directly against
+this question (2026-08-28) rather than assumed either way:
+
+| metric | 3-camera geometry | 18-camera geometry |
+|---|---|---|
+| guard far-side-majority rate | 58% (36/62) | 53% (58/110) |
+| ...recoverable via light signal | 64% (23/36) | 66% (38/58) |
+| environment insect-signature rate | 55% (12/22) | 55% (12/22, unchanged — doesn't use geometry) |
+| green-light guard identifier (recall / false-fire / animal+incident leak) | 61% / 2% / 0 | 61% / 2% / 0 (unchanged) |
+
+No meaningful bias: the headline rates hold within a few points across 3x more
+geometry and roughly double the guard sample. `far_side_pixel_fraction` alone
+is still not a clean separator on its own — on the 15 newly-geometried cameras,
+`environment` clips average a *higher* far-side fraction (0.85) than `guard`
+clips do (0.51), which is the opposite of naive intuition (insects near the
+lens can sit anywhere relative to the fence line, including past it, without
+ever crossing anything). This is consistent with, not a change to, the
+existing recommendation: far-side geometry is an escalation input combined
+with the green-light/shape signals, never a standalone classifier.
 
 ## IR-insect false positives (plan.md requires this count)
 

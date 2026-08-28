@@ -1,0 +1,28 @@
+# Environment
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# Telethon session (contains live auth; never commit)
+*.session
+*.session-journal
+
+# Local data: raw corpus, live captures, generated reports, sqlite db
+data/history/*
+data/live/*
+data/reports/*
+!data/history/.gitkeep
+!data/live/.gitkeep
+!data/reports/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+
+# Editors / OS
+.vscode/
+.DS_Store
+
+# Test/lint caches
+.pytest_cache/
+.ruff_cache/

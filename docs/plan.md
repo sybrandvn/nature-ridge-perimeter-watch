@@ -150,13 +150,25 @@ ship with raw support counts and are indicative only.
     any paint tool, then colour-threshold the red pixels back out to recover the polyline
     exactly. `far_side` must be recomputed with `src.zones.side_name` every time the points
     change, since it is relative to the polyline's direction, not to absolute screen position.
-12. Hand-label ~150 clips.
-13. Extract candidate features to a flat CSV: far-side pixel fraction, aspect ratio, solidity,
-    saturation, row-normalised area, edge density, path length, jitter, persistence.
-14. Decision gate — does any threshold combination separate guard and environment from
-    animal/incident at usable precision? Explicitly count flashlight and IR-insect clips landing
-    on the far side. If separation fails, stop and revisit scope (earlier ML, IR/brightness
-    handling, multi-frame reference modelling) rather than proceeding.
+12. [done] Hand-label ~150 clips. 165 labelled across all 18 cameras (target was
+    ~150): guard 111, environment 22, startup 11, unknown 9, incident 8, animal 4.
+13. [done] Extract candidate features to a flat CSV: far-side pixel fraction, aspect ratio, solidity,
+    saturation, green-light ratio (site-specific: the guard's flashlight reads as a
+    distinct green — added beyond the original feature list), row-normalised area, edge
+    density, path length, jitter, persistence. `scripts/spike.py` run per-camera into
+    `data/reports/spike_{camera_id}.csv`.
+14. [done, pending user sign-off] Decision gate — does any threshold combination separate guard and
+    environment from animal/incident at usable precision? Explicitly count flashlight and IR-insect
+    clips landing on the far side. Written finding: `docs/gate2_separability_finding.md`.
+    Headline: not a clean separation (12 positive-class clips is too few to certify), but the
+    flashlight (58% of guard clips on fenced cameras land far-side; 53% of those show a colour/green
+    signal) and IR-insect (41% of environment clips match the insect signature) failure modes the
+    plan predicted are both confirmed and quantified. The new `green_light_ratio` feature is a clean
+    guard-side confirmation signal (0% false positive rate vs animal/incident) but only fires on ~1/3
+    of guard clips, so it helps rather than solves on its own. If separation fails, stop and revisit
+    scope (earlier ML, IR/brightness handling, multi-frame reference modelling) rather than
+    proceeding — flagged for the user to confirm this counts as "usable" given the fail-safe,
+    escalation-only design (shape features may only escalate, never suppress, a far-side alert).
 
 ### Phase 1: Foundation
 15. Scaffold the `uv` Python 3.12 project: locked dependencies, ruff, pytest, `.env.example`,

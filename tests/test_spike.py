@@ -50,6 +50,23 @@ def test_largest_contour_finds_blob():
     assert cv2.contourArea(contour) > 0
 
 
+def test_largest_contour_rejects_blob_over_max_area():
+    mask = np.zeros((40, 40), dtype=np.uint8)
+    mask[0:35, 0:35] = 255  # whole-frame illumination change
+    mask[37:39, 37:39] = 255  # small real subject
+    unfiltered = spike.largest_contour(mask)
+    filtered = spike.largest_contour(mask, max_area=100)
+    assert cv2.contourArea(unfiltered) > 100
+    assert filtered is not None
+    assert cv2.contourArea(filtered) <= 100
+
+
+def test_largest_contour_returns_none_when_all_blobs_over_max_area():
+    mask = np.zeros((40, 40), dtype=np.uint8)
+    mask[0:35, 0:35] = 255
+    assert spike.largest_contour(mask, max_area=100) is None
+
+
 def test_contour_centroid_of_square():
     mask = np.zeros((20, 20), dtype=np.uint8)
     mask[4:10, 4:10] = 255
@@ -92,6 +109,32 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
         "persistence",
     ):
         assert key in result
+    assert result["persistence"] > 0
+
+
+def test_extract_clip_features_ignores_ir_warmup_brightness_swing(monkeypatch, tmp_path):
+    # Mirrors the real cam15 failure: the first frames swing globally as the IR
+    # gain settles, which dwarfs the actual subject's motion.
+    warmup = [_blank_frame(value=0 if i % 2 else 220) for i in range(10)]
+    subject = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40, 5, 12, 19, 26)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(warmup + subject))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
+    # The 8x8 square, not the 60x60 flare -- a whole-frame blob would be far from square.
+    assert result["aspect_ratio"] == pytest.approx(1.0, abs=0.3)
+    assert result["persistence"] > 0.5
+
+
+def test_extract_clip_features_keeps_warmup_frames_on_short_clips(monkeypatch, tmp_path):
+    # Startup clips are shorter than the warmup window; dropping it would leave nothing.
+    frames = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
     assert result["persistence"] > 0
 
 

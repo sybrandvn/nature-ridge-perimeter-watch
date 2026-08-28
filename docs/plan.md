@@ -156,19 +156,26 @@ ship with raw support counts and are indicative only.
     saturation, green-light ratio (site-specific: the guard's flashlight reads as a
     distinct green — added beyond the original feature list), row-normalised area, edge
     density, path length, jitter, persistence. `scripts/spike.py` run per-camera into
-    `data/reports/spike_{camera_id}.csv`.
+    `data/reports/spike_{camera_id}.csv`. The per-clip detector uses median-background
+    subtraction after dropping IR-warmup frames, not consecutive-frame differencing — the
+    latter locks onto the whole-frame brightness swing these cameras produce in the first
+    ~2 seconds and hid a porcupine entirely on cam15/15454.
 14. [done, pending user sign-off] Decision gate — does any threshold combination separate guard and
     environment from animal/incident at usable precision? Explicitly count flashlight and IR-insect
     clips landing on the far side. Written finding: `docs/gate2_separability_finding.md`.
-    Headline: not a clean separation (12 positive-class clips is too few to certify), but the
-    flashlight (58% of guard clips on fenced cameras land far-side; 53% of those show a colour/green
-    signal) and IR-insect (41% of environment clips match the insect signature) failure modes the
-    plan predicted are both confirmed and quantified. The new `green_light_ratio` feature is a clean
-    guard-side confirmation signal (0% false positive rate vs animal/incident) but only fires on ~1/3
-    of guard clips, so it helps rather than solves on its own. If separation fails, stop and revisit
-    scope (earlier ML, IR/brightness handling, multi-frame reference modelling) rather than
-    proceeding — flagged for the user to confirm this counts as "usable" given the fail-safe,
-    escalation-only design (shape features may only escalate, never suppress, a far-side alert).
+    Headline: the strongest result is `green_light_ratio` as a guard identifier — fires on 55% of
+    guard clips, 2% of non-guard, and 0/12 animal+incident. Shape/motion features separate
+    low-crawling subjects from upright ones in the right direction (animal/incident aspect ~0.75 vs
+    guard/environment ~1.07), and excluding green-lit clips cuts the false-positive rate from 40% to
+    24% at unchanged recall. Absolute precision is still only 0.22 at 0.75 recall against an 8.3%
+    base rate, on just 12 positive clips — usable as an escalation signal on top of far-side
+    geometry (the design this plan specifies), not as a standalone classifier. Both predicted
+    failure modes confirmed: 58% of guard clips on fenced cameras land far-side (64% of those
+    carrying a light signal), and 55% of environment clips match the IR-insect signature. If
+    separation fails, stop and revisit scope (earlier ML, IR/brightness handling, multi-frame
+    reference modelling) rather than proceeding — flagged for the user to confirm the
+    escalation-only reading counts as "usable", and that more animal/incident labels would move
+    confidence more than further feature work.
 
 ### Phase 1: Foundation
 15. Scaffold the `uv` Python 3.12 project: locked dependencies, ruff, pytest, `.env.example`,

@@ -1,11 +1,11 @@
 """Interactive ground-truth labeling CLI.
 
-Metadata-only for now: until scripts/meta_backfill.py's future video-download
-step populates `file_path`, this labels off caption/camera/timestamp context
-alone. Real visual labeling becomes practical once clips have local files.
+Defaults to clips that already have a downloaded video (`file_path` set), since most
+backfilled rows don't and walking them produces nothing to watch. Pass --include-no-file
+to fall back to the old metadata-only behaviour (label off caption/camera/timestamp alone).
 
 Run:
-    uv run python scripts/label.py [--camera CAM_ID] [--limit N]
+    uv run python scripts/label.py [--camera CAM_ID] [--limit N] [--include-no-file]
 """
 
 from __future__ import annotations
@@ -22,6 +22,25 @@ from src.config import load_app_config  # noqa: E402
 from src.db import VALID_LABELS  # noqa: E402
 
 PromptFn = Callable[[Mapping], "tuple[str, str | None] | None"]  # None => quit
+
+# Known rare-class clips from README.md section 4 (crawl incident, probe, animal
+# sightings), so a labeling session surfaces them early instead of behind months of
+# ordinary timestamp-ordered clips. Does not pre-fill labels -- the user still labels
+# every clip themselves.
+PRIORITY_MESSAGE_IDS: dict[str, frozenset[int]] = {
+    "cam06": frozenset({21519, 21520}),  # crawl incident, 2026-07-21
+    "cam08": frozenset({4054, 4055, 7360}),  # probe (4054/4055) + animal (7360)
+    "cam05": frozenset({18269}),  # animal, 2026-01-06
+}
+
+
+def _prioritize(rows: list[Mapping]) -> list[Mapping]:
+    """Move PRIORITY_MESSAGE_IDS clips to the front, preserving timestamp order elsewhere."""
+    priority, rest = [], []
+    for row in rows:
+        known_ids = PRIORITY_MESSAGE_IDS.get(row["camera_id"], frozenset())
+        (priority if row["message_id"] in known_ids else rest).append(row)
+    return priority + rest
 
 
 def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
@@ -52,12 +71,14 @@ def run_labeling_session(
     prompt_fn: PromptFn,
     limit: int | None = None,
     camera_id: str | None = None,
+    with_file_only: bool = False,
 ) -> int:
     labeled = 0
-    for row in db.iter_unlabeled_clips(conn, camera_id=camera_id):
+    rows = db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=with_file_only)
+    for row in _prioritize([dict(row) for row in rows]):
         if limit is not None and labeled >= limit:
             break
-        result = prompt_fn(dict(row))
+        result = prompt_fn(row)
         if result is None:
             break
         label, notes = result
@@ -76,12 +97,21 @@ def main() -> None:  # pragma: no cover - interactive I/O
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--camera", default=None, help="Restrict to one camera id")
     parser.add_argument("--limit", type=int, default=None, help="Max clips to label this run")
+    parser.add_argument(
+        "--include-no-file",
+        action="store_true",
+        help="Also walk clips with no downloaded video (metadata-only labeling)",
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
     conn = db.connect(app_cfg.db_path)
     labeled = run_labeling_session(
-        conn, prompt_fn=default_prompt, limit=args.limit, camera_id=args.camera
+        conn,
+        prompt_fn=default_prompt,
+        limit=args.limit,
+        camera_id=args.camera,
+        with_file_only=not args.include_no_file,
     )
     conn.close()
     print(f"\nLabeled {labeled} clip(s).")

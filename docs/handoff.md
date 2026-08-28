@@ -25,34 +25,36 @@ Phase 0 gates all downstream work, and neither gate has been decided yet:
 | 1. Pick spike cameras | done — `cam06` (crawl incident), `cam08` (probe + dusk animal), `cam05` (dusk animal) |
 | 2. Download clips | done — 142 clips on disk (`cam05` 50, `cam06` 46, `cam08` 46), spanning 2023-2026 |
 | 3. Fence polylines | done — all three cameras have `fence`/`far_side`/`depth_cutoff` in `config/cameras.yaml` |
-| 4. Hand-label ~150 clips | **not started — 0 rows in `labels`. This is the next task.** |
+| 4. Hand-label ~150 clips | **tooling ready, 0 rows labelled — waiting on the user to run it** |
 | 5. Run `scripts/spike.py` | blocked on step 4 |
 | 6. Read the CSV, decide gate 2 | blocked on step 5 |
 
-## The next task, and the blocker in front of it
+## The next task, and the blocker that was in front of it
 
 Step 4 is hand-labelling. The user does this, not the agent — it is ground truth about their own
 property. The agent's job is to make it painless.
 
-**Known blocker:** `src.db.iter_unlabeled_clips` (used by `scripts/label.py`) returns *all*
-unlabelled clips, not just ones with a downloaded file. With 16,887 clips and only 238 having a
-`file_path`, a labelling session currently walks thousands of file-less rows and the user cannot
-actually watch anything. `scripts/label.py`'s docstring still describes itself as metadata-only,
-from before clips were downloadable.
+**Blocker fixed (2026-08-28):** `src.db.iter_unlabeled_clips` now takes `with_file_only: bool =
+False`. `scripts/label.py` defaults its CLI to `with_file_only=True` (pass `--include-no-file` to
+get the old metadata-only behaviour walking all 16,887 rows). It also surfaces the known rare-class
+clips from `README.md` section 4 first (`PRIORITY_MESSAGE_IDS` in `scripts/label.py`: cam06
+21519/21520, cam08 4054/4055/7360, cam05 18269) so the crawl incident, probe, and animal sightings
+come up early in the session instead of possibly not at all if the user stops partway through.
+Priority clips are still labelled by the user, not pre-filled — this only changes order.
 
-So before asking the user to label:
+The user confirmed: no configured video player integration needed, printing the path is enough.
 
-1. Add a `with_file_only` (or similar) filter to `iter_unlabeled_clips`, defaulting `label.py` to
-   it. Keep the metadata-only path available; don't just delete it.
-2. Consider an optional configured video player so a clip opens on keypress rather than the user
-   copy-pasting paths — `docs/plan.md` step 26 already anticipates this. Confirm with the user
-   whether they want it before building it; printing the path may be enough.
-3. Sanity-check ordering. Straight timestamp order means a long run of ordinary clips before
-   anything interesting. Oversampling animal/incident is called for in the plan, and the known
-   incident clips are listed in `README.md` section 4 — worth surfacing those early or tagging
-   them so the rare classes actually make it into the sample.
+**Ready for the user to run:**
+```bash
+uv run python scripts/label.py --camera cam06
+uv run python scripts/label.py --camera cam08
+uv run python scripts/label.py --camera cam05
+```
+or omit `--camera` to go through all three spike cameras' downloaded clips (142 total) in one
+session, priority clips first per camera. Labels are one of
+`guard`/`animal`/`incident`/`environment`/`unknown` (`src.db.VALID_LABELS`).
 
-Labels are one of `guard`/`animal`/`incident`/`environment`/`unknown` (`src.db.VALID_LABELS`).
+Once ~150 clips are labelled, the remaining Phase 0c steps are still blocked in sequence:
 
 ## Things that will bite you
 

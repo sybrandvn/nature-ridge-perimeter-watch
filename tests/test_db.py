@@ -162,6 +162,35 @@ def test_iter_unlabeled_clips_excludes_labeled_rows(conn):
     assert [r["message_id"] for r in filtered] == [2]
 
 
+def test_iter_unlabeled_clips_with_file_only_excludes_rows_without_a_file(conn):
+    db.upsert_clip(
+        conn,
+        channel_id=CHANNEL,
+        message_id=1,
+        camera_id="cam01",
+        timestamp="2026-01-01T20:00:00Z",
+        caption=None,
+        file_path=None,
+        source="backfill",
+    )
+    db.upsert_clip(
+        conn,
+        channel_id=CHANNEL,
+        message_id=2,
+        camera_id="cam01",
+        timestamp="2026-01-01T20:01:00Z",
+        caption=None,
+        file_path="data/history/cam01/2.mp4",
+        source="backfill",
+    )
+
+    rows = list(db.iter_unlabeled_clips(conn, with_file_only=True))
+    assert [r["message_id"] for r in rows] == [2]
+
+    rows = list(db.iter_unlabeled_clips(conn))
+    assert {r["message_id"] for r in rows} == {1, 2}
+
+
 # --------------------------------------------------------------------------
 # labels
 # --------------------------------------------------------------------------

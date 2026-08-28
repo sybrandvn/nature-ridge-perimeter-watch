@@ -193,9 +193,17 @@ def iter_clips(
 
 
 def iter_unlabeled_clips(
-    conn: sqlite3.Connection, *, camera_id: str | None = None
+    conn: sqlite3.Connection,
+    *,
+    camera_id: str | None = None,
+    with_file_only: bool = False,
 ) -> Iterator[sqlite3.Row]:
-    """Clips with no row yet in `labels`, for driving a labeling CLI/session."""
+    """Clips with no row yet in `labels`, for driving a labeling CLI/session.
+
+    `with_file_only=True` restricts to clips that already have a downloaded video
+    (`file_path` set) -- most clips in the backfill don't, so an interactive labeling
+    session should default to this or it walks thousands of unwatchable rows.
+    """
     query = """
         SELECT clips.* FROM clips
         LEFT JOIN labels
@@ -205,7 +213,9 @@ def iter_unlabeled_clips(
     params: tuple[Any, ...] = ()
     if camera_id is not None:
         query += " AND clips.camera_id = ?"
-        params = (camera_id,)
+        params = (*params, camera_id)
+    if with_file_only:
+        query += " AND clips.file_path IS NOT NULL"
     query += " ORDER BY clips.timestamp"
     yield from conn.execute(query, params)
 

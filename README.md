@@ -86,6 +86,15 @@ the pipeline gets built.
 
 1. Pick 2-3 cameras with the richest incident history, ideally including whichever camera caught
    the known crawl incident.
+
+   **Found from the real backfilled data** (see `data/perimeter_watch.db`): nightly clip volume
+   jumped from a 30-day average of 12.6 to 28.65 (2.3x, sustained) starting **2026-07-21**, unlike
+   every other spike day in the history which reverts the next night. That night, `cam01b` alone
+   triggered at 20:11-20:16, then a dense multi-camera guard sweep followed at 20:31-21:41 across
+   cam06, cam09, cam10, cam01b, cam05, cam04, cam07, cam03 — consistent with the known crawl
+   incident and the guard response afterward. Recommended spike cameras: `cam01b` (incident
+   candidate), plus the two busiest cameras overall, `cam07` and `cam05`. Confirm against your own
+   memory of the event before committing to labelling effort around it.
 2. Get a small clip subset for those cameras onto local disk and set `clips.file_path` for them
    (manual export for now — full video backfill isn't built this round).
 3. Hand-enter fence polylines for those cameras in `config/cameras.yaml` (`fence`, `far_side`,

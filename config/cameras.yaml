@@ -18,11 +18,13 @@ unknown_camera_id: "unknown"
 cameras:
   - id: cam01
     aliases: ["MOTIONVIEWER 1"]
-  # cam01a/cam01b: distinct feeds seen later in the caption history (likely
-  # camera 1 was replaced/split into two devices) — kept separate from cam01
-  # rather than merged, since merging non-identical cameras would corrupt
-  # fence-order inference. Confirm with the physical layout and rename/merge
-  # if they are in fact the same position.
+  # cam01a: confirmed by the user to be mounted at the exact same physical spot as
+  # cam01 -- a straight replacement, not a second camera. Matches the data: cam01's
+  # last clip is 2025-09-04, cam01a's first is 2025-09-13. Kept as separate camera
+  # ids anyway (not merged) since the backfill/labels/spike pipeline is keyed by
+  # camera_id and merging would need every downstream row relabelled.
+  # cam01b: a different device, started 2025-09-11 (overlaps cam01a) -- not
+  # confirmed same spot as cam01/cam01a. Treat as a distinct position until checked.
   - id: cam01a
     aliases: ["MOTIONVIEWER 1A"]
   - id: cam01b

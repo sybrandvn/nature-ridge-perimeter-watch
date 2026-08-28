@@ -5,6 +5,7 @@ import pytest
 from src.features import (
     aspect_ratio,
     edge_density,
+    green_light_ratio,
     jitter,
     path_length,
     persistence,
@@ -60,6 +61,33 @@ def test_saturation_ratio_near_zero_for_greyscale_content():
     frame = np.full((50, 50, 3), 128, dtype=np.uint8)  # uniform grey, zero saturation
     contour = _rect_contour(10, 10, 20, 20)
     assert saturation_ratio(frame, contour) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_green_light_ratio_detects_green_flashlight():
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (29, 29), (0, 255, 0), thickness=-1)  # solid green (BGR)
+    contour = _rect_contour(10, 10, 20, 20)
+    assert green_light_ratio(frame, contour) > 0.9
+
+
+def test_green_light_ratio_ignores_non_green_colour():
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (29, 29), (0, 0, 255), thickness=-1)  # solid red (BGR)
+    contour = _rect_contour(10, 10, 20, 20)
+    assert green_light_ratio(frame, contour) == pytest.approx(0.0)
+
+
+def test_green_light_ratio_zero_for_greyscale_content():
+    frame = np.full((50, 50, 3), 128, dtype=np.uint8)  # uniform grey
+    contour = _rect_contour(10, 10, 20, 20)
+    assert green_light_ratio(frame, contour) == pytest.approx(0.0)
+
+
+def test_green_light_ratio_ignores_dim_green():
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (29, 29), (0, 40, 0), thickness=-1)  # dim green, low value
+    contour = _rect_contour(10, 10, 20, 20)
+    assert green_light_ratio(frame, contour) == pytest.approx(0.0)
 
 
 def test_edge_density_higher_for_textured_region():

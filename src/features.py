@@ -69,6 +69,34 @@ def saturation_ratio(frame_bgr: np.ndarray, contour: np.ndarray) -> float:
     return float(pixels.mean()) / 255.0
 
 
+def green_light_ratio(
+    frame_bgr: np.ndarray,
+    contour: np.ndarray,
+    *,
+    hue_low: int = 35,
+    hue_high: int = 85,
+    min_saturation: int = 60,
+    min_value: int = 60,
+) -> float:
+    """Fraction of contour pixels whose HSV hue falls in the green band with
+    enough saturation/brightness to be a real light source rather than IR noise.
+
+    Site-specific: the guard's flashlight reads as a distinct green in these
+    clips, which is a narrower and likely more reliable signal than
+    `saturation_ratio` alone (that also fires on any colour anomaly, e.g. a
+    reddish insect glare). Hue bounds use OpenCV's 0-179 scale.
+    """
+    mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+    cv2.drawContours(mask, [contour], -1, color=255, thickness=-1)
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    region = hsv[mask == 255]
+    if region.size == 0:
+        return 0.0
+    hue, sat, val = region[:, 0], region[:, 1], region[:, 2]
+    green = (hue >= hue_low) & (hue <= hue_high) & (sat >= min_saturation) & (val >= min_value)
+    return float(np.count_nonzero(green)) / region.shape[0]
+
+
 def edge_density(frame_bgr: np.ndarray, contour: np.ndarray) -> float:
     """Fraction of pixels inside the contour's bounding box that are Canny edges."""
     x, y, w, h = cv2.boundingRect(contour)

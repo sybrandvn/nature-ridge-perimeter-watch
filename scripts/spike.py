@@ -48,6 +48,7 @@ from src.config import CamerasConfig, CameraZone, load_app_config, load_cameras_
 from src.features import (  # noqa: E402
     aspect_ratio,
     edge_density,
+    green_light_ratio,
     jitter,
     path_length,
     persistence,
@@ -68,6 +69,7 @@ FEATURE_COLUMNS = (
     "aspect_ratio",
     "solidity",
     "saturation_ratio",
+    "green_light_ratio",
     "row_normalised_area",
     "edge_density",
     "path_length",
@@ -149,6 +151,7 @@ def extract_clip_features(
             "aspect_ratio": aspect_ratio(last_contour),
             "solidity": solidity(last_contour),
             "saturation_ratio": saturation_ratio(last_frame, last_contour),
+            "green_light_ratio": green_light_ratio(last_frame, last_contour),
             "row_normalised_area": row_normalised_area(last_contour, ref_row),
             "edge_density": edge_density(last_frame, last_contour),
             "path_length": path_length(centroids),

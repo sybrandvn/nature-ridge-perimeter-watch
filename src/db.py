@@ -171,6 +171,16 @@ def get_clip(conn: sqlite3.Connection, channel_id: str, message_id: int) -> sqli
     ).fetchone()
 
 
+def set_clip_file_path(
+    conn: sqlite3.Connection, *, channel_id: str, message_id: int, file_path: str
+) -> None:
+    """Record where a clip's video was downloaded to, without touching its other fields."""
+    conn.execute(
+        "UPDATE clips SET file_path = ? WHERE channel_id = ? AND message_id = ?",
+        (file_path, channel_id, message_id),
+    )
+
+
 def iter_clips(
     conn: sqlite3.Connection, *, camera_id: str | None = None
 ) -> Iterator[sqlite3.Row]:

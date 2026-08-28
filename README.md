@@ -95,8 +95,16 @@ the pipeline gets built.
    incident and the guard response afterward. Recommended spike cameras: `cam01b` (incident
    candidate), plus the two busiest cameras overall, `cam07` and `cam05`. Confirm against your own
    memory of the event before committing to labelling effort around it.
-2. Get a small clip subset for those cameras onto local disk and set `clips.file_path` for them
-   (manual export for now — full video backfill isn't built this round).
+2. Download a small clip subset for those cameras and record `clips.file_path` automatically:
+   ```bash
+   uv run python scripts/download_clips.py --camera cam01b --camera cam07 --camera cam05 \
+       --since 2026-07-20 --until 2026-07-22 --limit-per-camera 15
+   ```
+   Pulls from rows already in `clips` (from step 2 above) that don't have a file yet, downloads
+   each message's video via Telethon to `data/history/{camera_id}/{message_id}.mp4`, and updates
+   `clips.file_path`. Drop `--since`/`--until` to widen the window (e.g. to also pull ordinary
+   guard/animal nights for contrast, not just the incident window) — `--limit-per-camera` still
+   caps it to a spike-sized sample, not a full backfill.
 3. Hand-enter fence polylines for those cameras in `config/cameras.yaml` (`fence`, `far_side`,
    `depth_cutoff`; 2-4 points is enough to start).
 4. Label ~150 clips, oversampling animal/incident:

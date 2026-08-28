@@ -92,6 +92,25 @@ def test_upsert_clip_updates_existing_row(conn):
     assert rows[0]["file_path"] == "data/history/cam01/1.mp4"
 
 
+def test_set_clip_file_path_updates_only_that_field(conn):
+    db.upsert_clip(
+        conn,
+        channel_id=CHANNEL,
+        message_id=1,
+        camera_id="cam01",
+        timestamp="2026-01-01T20:00:00Z",
+        caption="Camera 1 motion",
+        file_path=None,
+        source="backfill",
+    )
+    db.set_clip_file_path(
+        conn, channel_id=CHANNEL, message_id=1, file_path="data/history/cam01/1.mp4"
+    )
+    row = db.get_clip(conn, CHANNEL, 1)
+    assert row["file_path"] == "data/history/cam01/1.mp4"
+    assert row["caption"] == "Camera 1 motion"
+
+
 def test_upsert_clip_rejects_invalid_source(conn):
     with pytest.raises(DbError, match="source"):
         db.upsert_clip(

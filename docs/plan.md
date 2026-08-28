@@ -121,7 +121,11 @@ ship with raw support counts and are indicative only.
 **0c — CV feasibility spike (gate 2)**
 10. Download a clip subset for 2-3 cameras chosen using 0a activity stats and known incident
     locations, ideally including the camera that caught the crawl. Span night, storm, animal,
-    guard, and intruder examples.
+    guard, and intruder examples. `scripts/download_clips.py` does this against rows already in
+    `clips` (from 0a): filter by camera and an optional timestamp window, cap per camera, fetch
+    each message's media via Telethon to `data/history/{camera_id}/{message_id}.mp4` through a
+    `.part` file and atomic rename, and record the path back into `clips.file_path`. Deliberately
+    small-scale and non-resumable — the full-history equivalent is Phase 1 step 21.
 11. Hand-enter fence polylines for those cameras in YAML (2-4 points each). No editor yet.
 12. Hand-label ~150 clips.
 13. Extract candidate features to a flat CSV: far-side pixel fraction, aspect ratio, solidity,
@@ -217,8 +221,8 @@ ARM64 build, live clip retention policy, run-comparison CLI, migration framework
 threshold sets, YOLO/ONNX, activity heatmap, trend analytics, probe-sequence live escalation.
 
 ## Relevant files
-- `scripts/meta_backfill.py`, `scripts/infer_camera_order.py`, `scripts/spike.py`,
-  `scripts/label.py`
+- `scripts/meta_backfill.py`, `scripts/infer_camera_order.py`, `scripts/download_clips.py`,
+  `scripts/spike.py`, `scripts/label.py`
 - `src/config.py`, `src/db.py`, `src/motion.py`, `src/zones.py`, `src/classify.py`,
   `src/backfill.py`, `src/sequence.py`, `src/backtester.py`
 - `src/telegram_alert.py`, `src/ntfy_alert.py` — functions only this round

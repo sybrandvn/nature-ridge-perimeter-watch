@@ -16,9 +16,8 @@ production motion pipeline before knowing it's worth building.
 Workflow (see docs/plan.md Phase 0c):
   1. Pick 2-3 cameras with the richest incident history (needs user input --
      see the "which cameras" question in README.md).
-  2. Download a clip subset for those cameras (requires live Telegram access;
-     not implemented here -- clips are expected to already exist locally,
-     referenced via clips.file_path, e.g. from a manual export).
+  2. Download a clip subset for those cameras with scripts/download_clips.py
+     (requires live Telegram access; writes clips.file_path automatically).
   3. Hand-enter fence polylines for those cameras in config/cameras.yaml.
   4. Hand-label ~150 clips with scripts/label.py.
   5. Run this script to extract features to a CSV.

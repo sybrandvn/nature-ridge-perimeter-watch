@@ -30,19 +30,21 @@ cameras:
     aliases: ["MOTIONVIEWER 4"]
   - id: cam05
     aliases: ["MOTIONVIEWER 5"]
-    # Drawn from data/history/cam05/4800.mp4 (middle frame): fence rail runs
-    # top-left to lower-middle, hugging the lit picket edge; open ground is
+    # Drawn from data/history/cam05/4800.mp4 (middle frame): camera looks
+    # nearly head-on at a picket/mesh fence, so the line is close to
+    # vertical, hugging the right edge of the picket band. Open ground is
     # to the left of that line walking from the first point to the second.
-    fence: [[0.0, 0.179], [0.469, 0.72]]
+    fence: [[0.421875, 0.25], [0.3125, 0.979166]]
     far_side: left
     depth_cutoff: 0.05
   - id: cam06
     aliases: ["MOTIONVIEWER 6"]
-    # Drawn from data/history/cam06/21520.mp4 (crawl incident clip): fence rail
-    # runs bottom-left to top-middle, same orientation as cam08; the dark open
-    # background to the right of that line is outside the fence.
-    fence: [[0.0, 0.679], [0.459, 0.0125]]
-    far_side: right
+    # Drawn from data/history/cam06/21520.mp4 (crawl incident clip): same
+    # near-head-on picket fence geometry as cam05 (nearly vertical line,
+    # not a receding diagonal); open background is to the left of that line
+    # walking from the first point to the second.
+    fence: [[0.4375, 0.166666], [0.4, 0.958333]]
+    far_side: left
     depth_cutoff: 0.05
   - id: cam07
     aliases: ["MOTIONVIEWER 7"]

@@ -48,6 +48,7 @@ from src.config import CamerasConfig, CameraZone, load_app_config, load_cameras_
 from src.features import (  # noqa: E402
     aspect_ratio,
     edge_density,
+    green_light_flicker,
     green_light_ratio,
     jitter,
     path_length,
@@ -70,6 +71,7 @@ FEATURE_COLUMNS = (
     "solidity",
     "saturation_ratio",
     "green_light_ratio",
+    "green_light_flicker",
     "row_normalised_area",
     "edge_density",
     "path_length",
@@ -105,6 +107,11 @@ def contour_centroid(contour: np.ndarray) -> tuple[float, float] | None:
 
 def normalized_contour_points(contour: np.ndarray, frame_width: int, frame_height: int) -> list:
     return [(float(x) / frame_width, float(y) / frame_height) for [[x, y]] in contour]
+
+
+def _whole_frame_contour(frame_width: int, frame_height: int) -> np.ndarray:
+    w, h = frame_width - 1, frame_height - 1
+    return np.array([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]], dtype=np.int32)
 
 
 def extract_clip_features(
@@ -157,12 +164,15 @@ def extract_clip_features(
     kernel = np.ones((3, 3), np.uint8)
 
     centroids: list[tuple[float, float]] = []
+    whole_frame_green_ratios: list[float] = []
     frames_detected = 0
     best_contour: np.ndarray | None = None
     best_frame: np.ndarray | None = None
     best_area = -1.0
+    whole_frame = _whole_frame_contour(frame_width, frame_height)
 
     for frame, gray in zip(considered, grays, strict=True):
+        whole_frame_green_ratios.append(green_light_ratio(frame, whole_frame))
         diff = cv2.absdiff(gray, background)
         _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
@@ -195,6 +205,7 @@ def extract_clip_features(
         "solidity": solidity(best_contour),
         "saturation_ratio": saturation_ratio(best_frame, best_contour),
         "green_light_ratio": green_light_ratio(best_frame, best_contour),
+        "green_light_flicker": green_light_flicker(whole_frame_green_ratios),
         "row_normalised_area": row_normalised_area(best_contour, ref_row),
         "edge_density": edge_density(best_frame, best_contour),
         "path_length": path_length(centroids),

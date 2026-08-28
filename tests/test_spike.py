@@ -102,6 +102,7 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
         "aspect_ratio",
         "solidity",
         "saturation_ratio",
+        "green_light_flicker",
         "row_normalised_area",
         "edge_density",
         "path_length",
@@ -136,6 +137,26 @@ def test_extract_clip_features_keeps_warmup_frames_on_short_clips(monkeypatch, t
 
     assert result is not None
     assert result["persistence"] > 0
+
+
+def test_extract_clip_features_flags_swinging_flashlight(monkeypatch, tmp_path):
+    # A beam that sweeps in and out of frame, not just present in one frame.
+    def _frame_with_square_and_green(pos: int, green: bool) -> np.ndarray:
+        frame = _frame_with_square(pos)
+        if green:
+            cv2.rectangle(frame, (0, 0), (30, 30), (0, 255, 0), thickness=-1)
+        return frame
+
+    positions = (5, 12, 19, 26, 33, 40, 5, 12, 19, 26)
+    frames = [
+        _frame_with_square_and_green(pos, green=i % 2 == 0) for i, pos in enumerate(positions)
+    ]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
+    assert result["green_light_flicker"] > 0.1
 
 
 def test_iter_labelled_clips_with_files_requires_both_file_and_label(tmp_path: Path):

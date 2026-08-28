@@ -140,6 +140,24 @@ def persistence(frames_detected: int, total_frames: int) -> float:
     return frames_detected / total_frames
 
 
+def green_light_flicker(whole_frame_green_ratios: Sequence[float]) -> float:
+    """Std deviation of the whole-frame green-hue ratio across a clip's frames.
+
+    Site-specific: the guard sweeps the flashlight rather than holding it
+    still, so its green signal spikes up and down between frames rather than
+    sitting at one level. Distinct from `green_light_ratio`, which reads a
+    single clearest frame -- this catches guard clips where the beam isn't in
+    frame at the moment of largest motion, at the cost of also needing a
+    high-variance swing rather than just presence.
+    """
+    if len(whole_frame_green_ratios) < 2:
+        return 0.0
+    n = len(whole_frame_green_ratios)
+    mean = sum(whole_frame_green_ratios) / n
+    variance = sum((v - mean) ** 2 for v in whole_frame_green_ratios) / n
+    return math.sqrt(variance)
+
+
 def _hhmm_to_minutes(value: str) -> int:
     hours, minutes = value.split(":")
     return int(hours) * 60 + int(minutes)

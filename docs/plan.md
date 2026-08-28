@@ -154,17 +154,21 @@ ship with raw support counts and are indicative only.
     ~150): guard 111, environment 22, startup 11, unknown 9, incident 8, animal 4.
 13. [done] Extract candidate features to a flat CSV: far-side pixel fraction, aspect ratio, solidity,
     saturation, green-light ratio (site-specific: the guard's flashlight reads as a
-    distinct green — added beyond the original feature list), row-normalised area, edge
-    density, path length, jitter, persistence. `scripts/spike.py` run per-camera into
-    `data/reports/spike_{camera_id}.csv`. The per-clip detector uses median-background
-    subtraction after dropping IR-warmup frames, not consecutive-frame differencing — the
-    latter locks onto the whole-frame brightness swing these cameras produce in the first
-    ~2 seconds and hid a porcupine entirely on cam15/15454.
+    distinct green — added beyond the original feature list), green-light flicker (std
+    deviation of the whole-frame green ratio across the clip -- the guard sweeps the beam
+    rather than holding it still, catching guard clips the single-frame reading misses),
+    row-normalised area, edge density, path length, jitter, persistence. `scripts/spike.py`
+    run per-camera into `data/reports/spike_{camera_id}.csv`. The per-clip detector uses
+    median-background subtraction after dropping IR-warmup frames, not consecutive-frame
+    differencing — the latter locks onto the whole-frame brightness swing these cameras
+    produce in the first ~2 seconds and hid a porcupine entirely on cam15/15454.
 14. [done, pending user sign-off] Decision gate — does any threshold combination separate guard and
     environment from animal/incident at usable precision? Explicitly count flashlight and IR-insect
     clips landing on the far side. Written finding: `docs/gate2_separability_finding.md`.
-    Headline: the strongest result is `green_light_ratio` as a guard identifier — fires on 55% of
-    guard clips, 2% of non-guard, and 0/12 animal+incident. Shape/motion features separate
+    Headline: the strongest result is `green_light_ratio` combined with `green_light_flicker`
+    (temporal variance, catching a swept beam a single frame would miss) as a guard
+    identifier — fires on 61% of guard clips, 2% of non-guard, and 0/12 animal+incident.
+    Shape/motion features separate
     low-crawling subjects from upright ones in the right direction (animal/incident aspect ~0.75 vs
     guard/environment ~1.07), and excluding green-lit clips cuts the false-positive rate from 40% to
     24% at unchanged recall. Absolute precision is still only 0.22 at 0.75 recall against an 8.3%

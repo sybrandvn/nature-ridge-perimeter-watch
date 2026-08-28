@@ -46,7 +46,8 @@ few positives to certify precision/recall; treat rates below as indicative.
 
 ## The strongest result: green flashlight identifies the guard
 
-`green_light_ratio > 0.05` fires on:
+`green_light_ratio > 0.05` (green hue on the clip's clearest motion frame)
+fires on:
 
 - **60/110 guard clips (55%)**
 - **1/50 non-guard clips (2%)**
@@ -57,6 +58,31 @@ detector fix it is a clean positive identifier for "this is our guard" with
 essentially no leakage into the classes we care about. It doesn't fire on all
 guard clips (the light isn't always aimed into frame), so absence proves
 nothing — but presence is highly informative.
+
+### Flicker adds recall: the guard sweeps the beam, doesn't hold it still
+
+The single-frame reading above only looks at whichever frame has the largest
+motion blob. It misses guard clips where the beam sweeps into frame at a
+different moment. `green_light_flicker` (std deviation of the whole-frame green
+ratio across every frame of the clip, after dropping IR-warmup frames) picks up
+exactly that: a beam swinging in and out of shot spikes the ratio up and down,
+where ambient/reflected green sits flat near zero.
+
+`green_light_flicker > 0.02` alone:
+
+- **27/110 guard clips (25%)**
+- **0/50 non-guard clips (0%)**
+- **0/12 animal or incident clips**
+
+Combined as `green_light_ratio > 0.05 OR green_light_flicker > 0.02`:
+
+- **67/110 guard clips (61%)**, up from 55% with the single-frame reading alone
+- **1/50 non-guard clips (2%)** — unchanged
+- **0/12 animal or incident clips** — unchanged
+
+27 guard clips clear the flicker threshold; only 20 of those also clear the
+single-frame ratio threshold, so flicker genuinely catches guard clips the
+single-frame reading misses, at no added false-positive cost on this sample.
 
 Note this is a *confirmation* signal, not a suppression one. `docs/plan.md`'s
 fail-safe rule stands: nothing here may downgrade a far-side alert.
@@ -115,7 +141,8 @@ false-positive source.
 
 Materially stronger than the first pass, but still one open decision:
 
-1. The green flashlight feature is a genuine result — a 55%-hit, 2%-false-alarm
+1. The green flashlight feature is a genuine result — combining single-frame
+   presence with the flicker/variance signal gets a 61%-hit, 2%-false-alarm
    guard identifier, with zero leakage into animal/incident. Worth keeping
    regardless of what happens at this gate.
 2. Both predicted failure modes are confirmed and quantified (58% flashlight

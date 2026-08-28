@@ -5,6 +5,7 @@ import pytest
 from src.features import (
     aspect_ratio,
     edge_density,
+    green_light_flicker,
     green_light_ratio,
     jitter,
     path_length,
@@ -88,6 +89,20 @@ def test_green_light_ratio_ignores_dim_green():
     cv2.rectangle(frame, (10, 10), (29, 29), (0, 40, 0), thickness=-1)  # dim green, low value
     contour = _rect_contour(10, 10, 20, 20)
     assert green_light_ratio(frame, contour) == pytest.approx(0.0)
+
+
+def test_green_light_flicker_high_for_swinging_beam():
+    # on/off/on/off, like a flashlight beam swinging in and out of frame
+    assert green_light_flicker([0.0, 0.8, 0.0, 0.7, 0.0]) > 0.3
+
+
+def test_green_light_flicker_zero_for_steady_signal():
+    assert green_light_flicker([0.2, 0.2, 0.2, 0.2]) == pytest.approx(0.0)
+
+
+def test_green_light_flicker_zero_for_fewer_than_two_values():
+    assert green_light_flicker([]) == 0.0
+    assert green_light_flicker([0.5]) == 0.0
 
 
 def test_edge_density_higher_for_textured_region():

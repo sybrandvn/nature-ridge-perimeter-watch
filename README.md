@@ -135,9 +135,13 @@ the pipeline gets built.
    - **Animal, 2024-08-26**: `cam08`'s first alert of the night fired at 18:04 SAST, again right
      at dusk, "not as dark out" per recollection.
 
-   All 3 animal sightings, the crawl incident, and 1 of the 2 probes are visually confirmed
-   against the downloaded footage. The second probe is still unlocated — timing patterns alone
-   aren't reliable enough on their own; a visual check is required before trusting a candidate.
+   All 3 animal sightings, the crawl incident, and the probe are visually confirmed against the
+   downloaded footage. `docs/plan.md`'s site facts mention 2 probes, but only one (`cam08`) had
+   enough independent evidence to pin down; the second isn't being chased further. Timing
+   patterns alone aren't reliable enough on their own — every purely timing-based candidate this
+   session (`cam04`/`cam13`/`cam12`/`cam07`, `cam10`) turned out to be a false positive; a visual
+   check (or independent ground truth like a forwarded message) is required before trusting a
+   candidate.
    Recommended spike cameras: `cam06` (incident), `cam08` (probe + animal), plus `cam05` (animal,
    dusk-lit so easier to see).
 2. Download a small clip subset for those cameras and record `clips.file_path` automatically:

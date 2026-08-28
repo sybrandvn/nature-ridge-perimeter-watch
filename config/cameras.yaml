@@ -4,6 +4,11 @@
 # discovered/filled in by scripts/infer_camera_order.py (Phase 0b) and the browser
 # zone editor (Phase 2) — an empty entry with just `id`/`aliases` is valid and means
 # "not yet configured", which classify.py treats as ambiguous rather than a crash.
+#
+# `far_side` (`left`/`right`) is always relative to the directed polyline (first
+# point -> second point) in that camera's own frame, not a compass direction, since
+# each camera's mounting angle differs. Per the user, the exterior side of the
+# fence (what `far_side` picks out) is compass south for this property.
 unknown_camera_id: "unknown"
 
 # Discovered from real backfilled captions (format: "Cam Alert*: ... NATURE RIDGE
@@ -30,21 +35,22 @@ cameras:
     aliases: ["MOTIONVIEWER 4"]
   - id: cam05
     aliases: ["MOTIONVIEWER 5"]
-    # Drawn from data/history/cam05/4800.mp4 (middle frame): camera looks
-    # nearly head-on at a picket/mesh fence, so the line is close to
-    # vertical, hugging the right edge of the picket band. Open ground is
-    # to the left of that line walking from the first point to the second.
-    fence: [[0.421875, 0.25], [0.3125, 0.979166]]
+    # Drawn from data/history/cam05/4800.mp4 (middle frame): camera looks down
+    # the fence line at a shallow angle (like cam06/cam08), so the picket tops
+    # recede diagonally; line traced along that picket-tip envelope. Open
+    # ground (south, outside the fence) is to the left of that line walking
+    # from the first point to the second.
+    fence: [[0.30625, 0.366666], [0.43125, 0.958333]]
     far_side: left
     depth_cutoff: 0.05
   - id: cam06
     aliases: ["MOTIONVIEWER 6"]
-    # Drawn from data/history/cam06/21520.mp4 (crawl incident clip): same
-    # near-head-on picket fence geometry as cam05 (nearly vertical line,
-    # not a receding diagonal); open background is to the left of that line
+    # Drawn from data/history/cam06/21520.mp4 (crawl incident clip): traced
+    # along the receding picket-tip envelope, same geometry as cam05/cam08.
+    # Open background (south, outside the fence) is to the right of that line
     # walking from the first point to the second.
-    fence: [[0.4375, 0.166666], [0.4, 0.958333]]
-    far_side: left
+    fence: [[0.28125, 0.625], [0.453125, 0.333333]]
+    far_side: right
     depth_cutoff: 0.05
   - id: cam07
     aliases: ["MOTIONVIEWER 7"]

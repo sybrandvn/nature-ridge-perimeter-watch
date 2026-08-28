@@ -9,3 +9,7 @@ class ConfigError(ValueError):
 
 class DbError(RuntimeError):
     """Raised for schema, constraint, or persistence failures in src.db."""
+
+
+class SequenceError(ValueError):
+    """Raised when patrol-pass data is insufficient to infer a camera order."""

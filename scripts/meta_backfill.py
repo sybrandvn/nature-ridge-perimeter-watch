@@ -25,7 +25,12 @@ from typing import Any, Protocol
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import db  # noqa: E402
-from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
+from src.config import (  # noqa: E402
+    CamerasConfig,
+    load_app_config,
+    load_cameras_config,
+    resolve_channel_ref,
+)
 from src.message_parsing import parse_message  # noqa: E402
 
 logger = logging.getLogger("meta_backfill")
@@ -108,8 +113,9 @@ async def main() -> None:  # pragma: no cover - requires real Telegram credentia
         str(app_cfg.telegram_session_path), app_cfg.telegram_api_id, app_cfg.telegram_api_hash
     )
     async with client:
+        source_channel = resolve_channel_ref(app_cfg.source_channel)
         counts = await run_backfill(
-            client.iter_messages(app_cfg.source_channel, reverse=True),
+            client.iter_messages(source_channel, reverse=True),
             channel_id=str(app_cfg.source_channel),
             cameras=cameras_cfg,
             conn=conn,

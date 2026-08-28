@@ -137,6 +137,19 @@ def load_app_config_from_mapping(
     )
 
 
+def resolve_channel_ref(value: str) -> int | str:
+    """Coerce a numeric channel/chat id string to int for Telethon.
+
+    Telethon's string-based entity lookup treats numeric strings as phone
+    numbers (stripping a leading "-"), so negative chat/channel ids must be
+    passed as int instead; usernames like "@name" pass through unchanged.
+    """
+    text = value.strip()
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    return text
+
+
 def _parse_id_list(field_name: str, raw: str | None) -> tuple[int, ...]:
     if not raw:
         return ()

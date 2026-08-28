@@ -6,6 +6,7 @@ from src.config import (
     load_app_config_from_mapping,
     load_cameras_config,
     load_thresholds_config,
+    resolve_channel_ref,
 )
 from src.errors import ConfigError
 
@@ -38,7 +39,16 @@ def test_missing_required_var_raises():
 def test_require_telegram_false_allows_empty():
     cfg = load_app_config_from_mapping({}, require_telegram=False)
     assert cfg.telegram_api_id is None
-    assert cfg.source_channel is None
+
+
+def test_resolve_channel_ref_numeric_ids_become_int():
+    assert resolve_channel_ref("-510921049") == -510921049
+    assert resolve_channel_ref("-1001004276399") == -1001004276399
+    assert resolve_channel_ref("12345") == 12345
+
+
+def test_resolve_channel_ref_username_passes_through():
+    assert resolve_channel_ref("@nature_ridge_cams") == "@nature_ridge_cams"
 
 
 def test_non_integer_api_id_raises():

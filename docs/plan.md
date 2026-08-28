@@ -49,7 +49,11 @@ real value is discovering far-side clusters in history that nobody flagged at th
 sequences remain load-bearing, because they drive camera ordering and patrol analytics.
 
 ## Night-only consequences
-- Single threshold profile; no day/night split, no colour features.
+- Single threshold profile; no day/night split, no colour features. A derived `time_of_day` tag
+  (`src.features.time_of_day`, from the clip timestamp vs the operating window) rides along in the
+  spike CSV as a descriptive column only — dusk-lit clips like the 18:04/18:21 SAST animal
+  sightings look different, and it's worth being able to see that during analysis without
+  branching the thresholds on it.
 - IR insect blobs near the lens (large, bright, fast, out of focus, erratic) are expected to be
   the largest false-positive source, ahead of the flashlight. Low edge density plus high centroid
   jitter are the intended discriminators.
@@ -127,14 +131,23 @@ ship with raw support counts and are indicative only.
    are retained as approximate spacing for later coverage-gap analysis.
 
 **0c — CV feasibility spike (gate 2)**
-10. Download a clip subset for 2-3 cameras chosen using 0a activity stats and known incident
+10. [done] Download a clip subset for 2-3 cameras chosen using 0a activity stats and known incident
     locations, ideally including the camera that caught the crawl. Span night, storm, animal,
     guard, and intruder examples. `scripts/download_clips.py` does this against rows already in
     `clips` (from 0a): filter by camera and an optional timestamp window, cap per camera, fetch
     each message's media via Telethon to `data/history/{camera_id}/{message_id}.mp4` through a
     `.part` file and atomic rename, and record the path back into `clips.file_path`. Deliberately
     small-scale and non-resumable — the full-history equivalent is Phase 1 step 21.
-11. Hand-enter fence polylines for those cameras in YAML (2-4 points each). No editor yet.
+    Cameras chosen: `cam06` (crawl incident), `cam08` (probe + dusk animal), `cam05` (dusk
+    animal). 142 clips downloaded across them, spanning 2023-2026 so ordinary nights are
+    represented alongside the incident windows.
+11. [done] Hand-enter fence polylines for those cameras in YAML (2-4 points each). No editor yet.
+    Reading coordinates off a zoomed screenshot by eye proved unreliable on low-contrast IR
+    frames — three separate attempts tracked a bright diagonal cable rather than the fence. What
+    worked: hand the user a clean upscaled reference frame, have them trace the fence in red in
+    any paint tool, then colour-threshold the red pixels back out to recover the polyline
+    exactly. `far_side` must be recomputed with `src.zones.side_name` every time the points
+    change, since it is relative to the polyline's direction, not to absolute screen position.
 12. Hand-label ~150 clips.
 13. Extract candidate features to a flat CSV: far-side pixel fraction, aspect ratio, solidity,
     saturation, row-normalised area, edge density, path length, jitter, persistence.

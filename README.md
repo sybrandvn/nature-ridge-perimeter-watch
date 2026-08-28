@@ -164,9 +164,30 @@ the pipeline gets built.
       ```
       Defaults to the clip's middle frame; pass `--frame-index N` if that frame is unhelpful
       (e.g. too dark, or before/after the subject enters frame).
-   2. Open the PNG and pick 2-4 points along the fence line itself, in pixel coordinates, in
-      either order (top-to-bottom or bottom-to-top — just be consistent for step 4).
-   3. Normalise each point to `(x / image_width, y / image_height)`, both in `[0, 1]`.
+   2. Trace the fence line in red, by hand, on that frame. Upscale it first so it's drawable
+      (`cv2.resize(..., interpolation=cv2.INTER_NEAREST)` at 4x), open it in any paint tool
+      (Snipping Tool, Paint, Preview), draw a red line along the fence, and save over the file.
+
+      **Do not try to read the coordinates off the image by eye.** These are low-contrast IR
+      frames and it is genuinely hard to tell the fence from a lit cable, a spider thread, or a
+      guy wire — three separate attempts on `cam05`/`cam06` locked onto the wrong feature before
+      this approach was adopted. A human tracing the line directly is both faster and correct.
+   3. Recover the polyline from the red pixels — exact, no eyeballing:
+      ```bash
+      uv run python -c "
+      import cv2, numpy as np
+      img = cv2.imread('/tmp/cam05.png')
+      h, w = img.shape[:2]
+      b, g, r = (img[:,:,i].astype(int) for i in range(3))
+      mask = (r > 150) & (g < 100) & (b < 100) & (r - g > 60) & (r - b > 60)
+      ys, xs = np.where(mask)
+      for i in range(3):  # top, middle, bottom samples
+          y = ys.min() + (ys.max() - ys.min()) * i / 2
+          band = (ys >= y - 3) & (ys <= y + 3)
+          print(round(xs[band].mean() / w, 4), round(y / h, 4))
+      "
+      ```
+      Three points captures the slight curve of a hand-drawn line; use more if the fence bends.
    4. Work out `far_side`: pick any point you know is outside the fence (vegetation, sky) and
       check which side it falls on:
       ```bash
@@ -176,13 +197,22 @@ the pipeline gets built.
       print(side_name((0.78, 0.42), fence))  # a point you know is outside the fence
       "
       ```
-      Whatever it prints (`left` or `right`) is your `far_side` value.
+      Whatever it prints (`left` or `right`) is your `far_side` value. **Recompute this every
+      time the points change** — it is relative to the direction the polyline runs, not to
+      absolute screen position, so reversing the point order flips it.
    5. Set `depth_cutoff` to the row (as a `y` fraction) beyond which perspective makes the fence
       line too thin/distant to reliably judge a side — 0.0-0.1 is typical for a camera looking
       down a long fence run.
+   6. Draw the resulting polyline back onto the clean frame and look at it before committing, as
+      a final check that the extraction landed where you intended.
 
    `cam08` in `config/cameras.yaml` is a fully worked example from `data/history/cam08/7360.mp4`
-   (dusk frame, fence line clearly visible running bottom-left to top-middle).
+   (dusk frame, fence line clearly visible running bottom-left to top-middle). `cam05` and
+   `cam06` were both produced with the red-trace method above.
+
+   Note that cameras can shift on their mounts over time, so a polyline is only valid for the
+   era it was drawn in — `docs/plan.md` (Geometry model) covers the dated-versioning scheme this
+   needs before Phase 2.
 4. Label ~150 clips, oversampling animal/incident:
    ```bash
    uv run python scripts/label.py --camera cam_north

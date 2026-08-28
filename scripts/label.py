@@ -60,6 +60,7 @@ LABEL_EXAMPLES: dict[str, str] = {
     "incident": "a person: crawling, probing, or climbing, usually far/exterior side",
     "environment": "IR-attracted insects, rain streaks, wind-blown vegetation, shadow artifacts",
     "unknown": "can't tell / too ambiguous to call confidently",
+    "startup": "short blank clip, camera waking up -- not ambiguous, just empty",
 }
 
 
@@ -103,7 +104,7 @@ def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
         print(f"  file: {clip['file_path']}")
         duration = _clip_duration_seconds(clip["file_path"])
         if duration is not None:
-            note = "  <- often blank/pre-alert, camera waking up" if duration < 2.0 else ""
+            note = "  <- often 'startup': camera waking up, usually blank" if duration < 2.0 else ""
             print(f"  duration: {duration:.1f}s{note}")
     else:
         print("  (no local file yet -- metadata-only label)")

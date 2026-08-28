@@ -16,9 +16,9 @@ from typing import Any
 
 from src.errors import DbError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-VALID_LABELS = ("guard", "animal", "incident", "environment", "unknown")
+VALID_LABELS = ("guard", "animal", "incident", "environment", "unknown", "startup")
 VALID_SOURCES = ("live", "backfill")
 VALID_PREDICTIONS = ("guard_side", "far_side_alert", "far_side_priority", "ambiguous")
 
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS labels (
     channel_id TEXT NOT NULL,
     message_id INTEGER NOT NULL,
     label TEXT NOT NULL CHECK (
-        label IN ('guard', 'animal', 'incident', 'environment', 'unknown')
+        label IN ('guard', 'animal', 'incident', 'environment', 'unknown', 'startup')
     ),
     notes TEXT,
     labeled_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

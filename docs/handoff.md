@@ -65,7 +65,10 @@ uv run python scripts/label.py --camera cam05
 ```
 or omit `--camera` to go through all three spike cameras' downloaded clips (142 total) in one
 session, priority clips first per camera. Labels are one of
-`guard`/`animal`/`incident`/`environment`/`unknown` (`src.db.VALID_LABELS`).
+`guard`/`animal`/`incident`/`environment`/`unknown`/`startup` (`src.db.VALID_LABELS`). `startup`
+(added 2026-08-28, schema_version 2) is for the short (<2s) near-blank clip many triggers send
+before the real clip a few minutes later -- `scripts/label.py` flags these by duration and can
+bulk-confirm a run of them.
 
 Once ~150 clips are labelled, the remaining Phase 0c steps are still blocked in sequence:
 

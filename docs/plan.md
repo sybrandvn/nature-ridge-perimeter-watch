@@ -26,10 +26,12 @@ tested, manually-invokable functions only.
 - Probes and animals were not observed as multi-camera sequences; only patrols were.
 
 ## Ground truth labels
-`guard`, `animal`, `incident`, `environment`, `unknown`.
+`guard`, `animal`, `incident`, `environment`, `unknown`, `startup`.
 `environment` covers IR-attracted insects, rain streaks, wind-blown vegetation, and shadow
 artifacts. Naming it separately makes false-page burden directly measurable instead of hiding it
-inside `unknown`.
+inside `unknown`. `startup` (added 2026-08-28) covers the short (<2s) near-blank clip many
+triggers send immediately, before the real clip a few minutes later -- the camera waking up, not
+an ambiguous sighting, so it's kept out of `unknown` too.
 
 ## Crawl / shape policy
 Bounding-box h/w for a crawling person (~0.4-0.7) overlaps large animals (~0.5-1.2). Classical CV

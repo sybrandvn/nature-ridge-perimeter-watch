@@ -42,7 +42,20 @@ clips from `README.md` section 4 first (`PRIORITY_MESSAGE_IDS` in `scripts/label
 come up early in the session instead of possibly not at all if the user stops partway through.
 Priority clips are still labelled by the user, not pre-filled — this only changes order.
 
-The user confirmed: no configured video player integration needed, printing the path is enough.
+The user confirmed: no configured video player integration needed, printing the path is enough
+(and it's clickable via OSC 8 terminal hyperlinks in most terminals -- confirmed working). Each
+prompt also shows single-letter shortcuts (`g`/`a`/`i`/`e`/`u`) and a one-line example per label,
+since typing the full word every clip was slow.
+
+**Short/blank clip handling (2026-08-28):** many triggers send a very short (<2s, empirically
+0.2-1.8s in the downloaded set) near-blank clip immediately, followed ~3-5 minutes later by the
+real clip -- the camera waking up, usually nothing visible. `--short-clip-seconds` (default 2.0)
+flags these via `_clip_duration_seconds` (cv2 frame_count/fps); `default_prompt` shows the
+duration and a note. After `--confirm-short-count` (default 3) of them get labelled the same in a
+row, the user is asked once whether to bulk-apply that label to the rest of the session's short
+clips without reviewing each one. Priority clips (see above) are never eligible for this bulk
+path even if short -- cam06's `21519` ("Initial" alert) is itself a short clip but is a known real
+event, not blank.
 
 **Ready for the user to run:**
 ```bash

@@ -4,8 +4,14 @@ Defaults to clips that already have a downloaded video (`file_path` set), since 
 backfilled rows don't and walking them produces nothing to watch. Pass --include-no-file
 to fall back to the old metadata-only behaviour (label off caption/camera/timestamp alone).
 
+Many triggers send a very short (<2s) near-blank clip immediately, followed a few minutes
+later by the real (longer) clip -- the camera waking up, nothing visible. --short-clip-seconds
+flags these; after --confirm-short-count of them get the same label in a row, you're asked
+once whether to bulk-apply that label to the rest without reviewing each one.
+
 Run:
     uv run python scripts/label.py [--camera CAM_ID] [--limit N] [--include-no-file]
+        [--short-clip-seconds SECS] [--confirm-short-count N]
 """
 
 from __future__ import annotations
@@ -15,6 +21,8 @@ import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+import cv2
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import db  # noqa: E402
@@ -22,6 +30,8 @@ from src.config import load_app_config  # noqa: E402
 from src.db import VALID_LABELS  # noqa: E402
 
 PromptFn = Callable[[Mapping], "tuple[str, str | None] | None"]  # None => quit
+BulkConfirmFn = Callable[[str, int], bool]
+DurationFn = Callable[[str], "float | None"]
 
 # Known rare-class clips from README.md section 4 (crawl incident, probe, animal
 # sightings), so a labeling session surfaces them early instead of behind months of
@@ -68,6 +78,27 @@ def _resolve_label(raw: str) -> str | None:
     return next((label for label in VALID_LABELS if raw == label[0]), None)
 
 
+def _clip_duration_seconds(path: str) -> float | None:
+    """Video duration in seconds, or None if the file is missing/unreadable."""
+    cap = cv2.VideoCapture(path)
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    finally:
+        cap.release()
+    if not fps or not frame_count:
+        return None
+    return frame_count / fps
+
+
+def _default_bulk_confirm(label: str, remaining: int) -> bool:  # pragma: no cover - interactive I/O
+    raw = input(
+        f"{remaining} more short clip(s) look like the same pattern -- label them all "
+        f"'{label}' without reviewing each one? [y/N] "
+    ).strip().lower()
+    return raw in ("y", "yes")
+
+
 def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
     print(
         f"\n[{clip['channel_id']}#{clip['message_id']}] "
@@ -77,6 +108,10 @@ def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
         print(f"  caption: {clip['caption']}")
     if clip["file_path"]:
         print(f"  file: {_hyperlink(clip['file_path'])}")
+        duration = _clip_duration_seconds(clip["file_path"])
+        if duration is not None:
+            note = "  <- often blank/pre-alert, camera waking up" if duration < 2.0 else ""
+            print(f"  duration: {duration:.1f}s{note}")
     else:
         print("  (no local file yet -- metadata-only label)")
 
@@ -102,12 +137,56 @@ def run_labeling_session(
     limit: int | None = None,
     camera_id: str | None = None,
     with_file_only: bool = False,
+    short_clip_seconds: float | None = None,
+    confirm_short_count: int = 3,
+    bulk_confirm_fn: BulkConfirmFn | None = None,
+    duration_fn: DurationFn = _clip_duration_seconds,
 ) -> int:
     labeled = 0
     rows = db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=with_file_only)
-    for row in _prioritize([dict(row) for row in rows]):
+    rows = _prioritize([dict(row) for row in rows])
+
+    # Priority clips are known real events -- never eligible for the short-clip bulk
+    # shortcut below, even if one happens to be short (e.g. cam06's Initial alert 21519).
+    priority_ids = {
+        (row["channel_id"], row["message_id"])
+        for row in rows
+        if row["message_id"] in PRIORITY_MESSAGE_IDS.get(row["camera_id"], frozenset())
+    }
+
+    def is_short(row: Mapping) -> bool:
+        if short_clip_seconds is None or not row["file_path"]:
+            return False
+        if (row["channel_id"], row["message_id"]) in priority_ids:
+            return False
+        duration = duration_fn(row["file_path"])
+        return duration is not None and duration < short_clip_seconds
+
+    short_flags = {(row["channel_id"], row["message_id"]): is_short(row) for row in rows}
+    remaining_short = sum(short_flags.values())
+    confirm = bulk_confirm_fn or _default_bulk_confirm
+    last_short_label: str | None = None
+    short_streak = 0
+    bulk_label: str | None = None
+
+    for row in rows:
         if limit is not None and labeled >= limit:
             break
+        key = (row["channel_id"], row["message_id"])
+        short = short_flags[key]
+
+        if short and bulk_label is not None:
+            db.upsert_label(
+                conn,
+                channel_id=row["channel_id"],
+                message_id=row["message_id"],
+                label=bulk_label,
+                notes="bulk: matches short blank-clip pattern",
+            )
+            labeled += 1
+            remaining_short -= 1
+            continue
+
         result = prompt_fn(row)
         if result is None:
             break
@@ -120,6 +199,18 @@ def run_labeling_session(
             notes=notes,
         )
         labeled += 1
+
+        if short:
+            remaining_short -= 1
+            short_streak = short_streak + 1 if label == last_short_label else 1
+            last_short_label = label
+            if (
+                bulk_label is None
+                and short_streak == confirm_short_count
+                and remaining_short > 0
+                and confirm(label, remaining_short)
+            ):
+                bulk_label = label
     return labeled
 
 
@@ -132,6 +223,18 @@ def main() -> None:  # pragma: no cover - interactive I/O
         action="store_true",
         help="Also walk clips with no downloaded video (metadata-only labeling)",
     )
+    parser.add_argument(
+        "--short-clip-seconds",
+        type=float,
+        default=2.0,
+        help="Flag clips shorter than this as likely blank pre-alert clips (0 disables)",
+    )
+    parser.add_argument(
+        "--confirm-short-count",
+        type=int,
+        default=3,
+        help="Short clips to confirm individually before offering to bulk-label the rest",
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
@@ -142,6 +245,8 @@ def main() -> None:  # pragma: no cover - interactive I/O
         limit=args.limit,
         camera_id=args.camera,
         with_file_only=not args.include_no_file,
+        short_clip_seconds=args.short_clip_seconds or None,
+        confirm_short_count=args.confirm_short_count,
     )
     conn.close()
     print(f"\nLabeled {labeled} clip(s).")

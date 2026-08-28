@@ -4,6 +4,17 @@ from scripts.label import _hyperlink, _resolve_label, run_labeling_session
 from src import db
 from src.db import VALID_LABELS
 
+SHORT_DURATIONS = {
+    "data/history/cam01/short1.mp4": 0.8,
+    "data/history/cam01/short2.mp4": 1.0,
+    "data/history/cam01/short3.mp4": 1.2,
+    "data/history/cam01/short4.mp4": 0.6,
+}
+
+
+def _fake_duration_fn(path: str) -> float | None:
+    return SHORT_DURATIONS.get(path, 8.0)
+
 
 def _seed(
     conn,
@@ -131,3 +142,110 @@ def test_hyperlink_wraps_path_in_osc8_escape_with_file_uri(tmp_path: Path):
     assert link.startswith("\033]8;;file://")
     assert str(target) in link
     assert link.endswith("\033]8;;\033\\")
+
+
+def test_short_clips_prompted_individually_until_confirm_count_reached(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    for i, path in enumerate(SHORT_DURATIONS, start=1):
+        _seed(conn, i, file_path=path)
+    _seed(conn, 5, file_path="data/history/cam01/normal.mp4")  # 8.0s per fake duration_fn
+
+    prompted: list[int] = []
+
+    def prompt_fn(clip):
+        prompted.append(clip["message_id"])
+        return "environment", None
+
+    confirm_calls: list[tuple[str, int]] = []
+
+    def bulk_confirm_fn(label, remaining):
+        confirm_calls.append((label, remaining))
+        return True
+
+    labeled = run_labeling_session(
+        conn,
+        prompt_fn=prompt_fn,
+        short_clip_seconds=2.0,
+        confirm_short_count=3,
+        bulk_confirm_fn=bulk_confirm_fn,
+        duration_fn=_fake_duration_fn,
+    )
+
+    # 3 short clips prompted individually, the 4th bulk-applied without a prompt.
+    assert prompted == [1, 2, 3, 5]
+    assert confirm_calls == [("environment", 1)]
+    assert labeled == 5
+    assert db.get_label(conn, "chan1", 4)["notes"] == "bulk: matches short blank-clip pattern"
+    conn.close()
+
+
+def test_short_clip_bulk_not_offered_when_labels_differ(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    for i, path in enumerate(SHORT_DURATIONS, start=1):
+        _seed(conn, i, file_path=path)
+
+    responses = iter(["environment", "unknown", "environment", "environment"])
+
+    def prompt_fn(clip):
+        return next(responses), None
+
+    confirm_calls = []
+    labeled = run_labeling_session(
+        conn,
+        prompt_fn=prompt_fn,
+        short_clip_seconds=2.0,
+        confirm_short_count=3,
+        bulk_confirm_fn=lambda label, remaining: confirm_calls.append((label, remaining)) or True,
+        duration_fn=_fake_duration_fn,
+    )
+
+    assert labeled == 4
+    assert confirm_calls == []
+    conn.close()
+
+
+def test_short_clip_detection_disabled_by_default(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    for i, path in enumerate(SHORT_DURATIONS, start=1):
+        _seed(conn, i, file_path=path)
+
+    prompted: list[int] = []
+
+    def prompt_fn(clip):
+        prompted.append(clip["message_id"])
+        return "environment", None
+
+    run_labeling_session(conn, prompt_fn=prompt_fn, duration_fn=_fake_duration_fn)
+
+    assert prompted == [1, 2, 3, 4]
+    conn.close()
+
+
+def test_priority_clip_never_bulk_labeled_even_if_short(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    _seed(conn, 21519, camera_id="cam06", file_path="data/history/cam06/21519.mp4")
+    for i, path in enumerate(SHORT_DURATIONS, start=1):
+        _seed(conn, 100 + i, camera_id="cam06", file_path=path)
+
+    def fake_duration(path):
+        if path == "data/history/cam06/21519.mp4":
+            return 0.8
+        return _fake_duration_fn(path)
+
+    prompted: list[int] = []
+
+    def prompt_fn(clip):
+        prompted.append(clip["message_id"])
+        return "incident" if clip["message_id"] == 21519 else "environment", None
+
+    run_labeling_session(
+        conn,
+        prompt_fn=prompt_fn,
+        short_clip_seconds=2.0,
+        confirm_short_count=2,
+        bulk_confirm_fn=lambda label, remaining: True,
+        duration_fn=fake_duration,
+    )
+
+    assert 21519 in prompted  # always prompted individually, never bulk-applied
+    conn.close()

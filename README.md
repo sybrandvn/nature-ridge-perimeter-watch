@@ -87,14 +87,33 @@ the pipeline gets built.
 1. Pick 2-3 cameras with the richest incident history, ideally including whichever camera caught
    the known crawl incident.
 
-   **Found from the real backfilled data** (see `data/perimeter_watch.db`): nightly clip volume
-   jumped from a 30-day average of 12.6 to 28.65 (2.3x, sustained) starting **2026-07-21**, unlike
-   every other spike day in the history which reverts the next night. That night, `cam01b` alone
-   triggered at 20:11-20:16, then a dense multi-camera guard sweep followed at 20:31-21:41 across
-   cam06, cam09, cam10, cam01b, cam05, cam04, cam07, cam03 — consistent with the known crawl
-   incident and the guard response afterward. Recommended spike cameras: `cam01b` (incident
-   candidate), plus the two busiest cameras overall, `cam07` and `cam05`. Confirm against your own
-   memory of the event before committing to labelling effort around it.
+   **Found from the real backfilled data** (see `data/perimeter_watch.db`) by matching your
+   recollections against clip timing patterns — an isolated single-camera trigger reads as a
+   probe/animal, a dense multi-camera sweep in a tight window reads as a guard patrol:
+
+   - **Crawl incident, 2026-07-21**: nightly clip volume jumped from a 30-day average of 12.6 to
+     28.65 (2.3x, sustained) starting this night, unlike every other spike day in the history
+     which reverts the next night. `cam01b` alone triggered at 20:11-20:16, then a dense
+     multi-camera guard sweep followed at 20:31-21:41 across cam06, cam09, cam10, cam01b, cam05,
+     cam04, cam07, cam03.
+   - **Security probe, 2024-03-16**: no volume spike, but `cam04` re-triggered 7 separate times
+     between 19:33 and 03:47 the next morning — a lingering, repeated re-trigger pattern on one
+     camera, not a sweep — with `cam13` re-triggering 3 times nearby in time, and single triggers
+     on `cam12` and `cam07`. Matches the plan's probe signature (no multi-camera sequence, just
+     dwelling near one point on the fence).
+   - **Animal, 2026-01-06**: tree fell over the fence during the day (cameras don't run then); an
+     animal was seen climbing it "while still light out". `cam05`'s very first alert of the night
+     fired at 18:21 SAST, right at dusk startup — the earliest trigger of any camera that
+     evening.
+   - **Animal, 2025-07-15**: `cam15` fired a single isolated trigger at 02:28 SAST, deep in the
+     night, no other camera active nearby in time.
+   - **Animal, 2024-08-26**: `cam08`'s first alert of the night fired at 18:04 SAST, again right
+     at dusk, "not as dark out" per recollection.
+
+   That's 1 crawl + 2 probe-pattern cameras (cam04, cam13) + 3 animal sightings (cam05, cam15,
+   cam08) — matching the site facts in `docs/plan.md` exactly. Recommended spike cameras:
+   `cam01b` (incident), `cam04` (probe), plus `cam08` or `cam05` (animal, dusk-lit so easier to
+   see). Confirm against your own memory before committing labelling effort.
 2. Download a small clip subset for those cameras and record `clips.file_path` automatically:
    ```bash
    uv run python scripts/download_clips.py --camera cam01b --camera cam07 --camera cam05 \
@@ -107,6 +126,33 @@ the pipeline gets built.
    caps it to a spike-sized sample, not a full backfill.
 3. Hand-enter fence polylines for those cameras in `config/cameras.yaml` (`fence`, `far_side`,
    `depth_cutoff`; 2-4 points is enough to start).
+
+   **How to draw one** (no editor yet — see Phase 2 step 24 in `docs/plan.md`):
+   1. Extract a still frame from a downloaded clip:
+      ```bash
+      uv run python scripts/extract_frame.py data/history/cam08/7360.mp4 --out /tmp/cam08.png
+      ```
+      Defaults to the clip's middle frame; pass `--frame-index N` if that frame is unhelpful
+      (e.g. too dark, or before/after the subject enters frame).
+   2. Open the PNG and pick 2-4 points along the fence line itself, in pixel coordinates, in
+      either order (top-to-bottom or bottom-to-top — just be consistent for step 4).
+   3. Normalise each point to `(x / image_width, y / image_height)`, both in `[0, 1]`.
+   4. Work out `far_side`: pick any point you know is outside the fence (vegetation, sky) and
+      check which side it falls on:
+      ```bash
+      uv run python -c "
+      from src.zones import side_name
+      fence = [(0.03, 0.96), (0.47, 0.06)]   # your normalised points, in order
+      print(side_name((0.78, 0.42), fence))  # a point you know is outside the fence
+      "
+      ```
+      Whatever it prints (`left` or `right`) is your `far_side` value.
+   5. Set `depth_cutoff` to the row (as a `y` fraction) beyond which perspective makes the fence
+      line too thin/distant to reliably judge a side — 0.0-0.1 is typical for a camera looking
+      down a long fence run.
+
+   `cam08` in `config/cameras.yaml` is a fully worked example from `data/history/cam08/7360.mp4`
+   (dusk frame, fence line clearly visible running bottom-left to top-middle).
 4. Label ~150 clips, oversampling animal/incident:
    ```bash
    uv run python scripts/label.py --camera cam_north

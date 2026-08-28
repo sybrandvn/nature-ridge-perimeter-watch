@@ -36,6 +36,12 @@ cameras:
     aliases: ["MOTIONVIEWER 7"]
   - id: cam08
     aliases: ["MOTIONVIEWER 8"]
+    # Worked example (see README.md "How to draw a fence polyline"): fence runs
+    # diagonally bottom-left to top-middle in frame; vegetation/outside is to
+    # the right of that line walking from the first point to the second.
+    fence: [[0.03, 0.96], [0.47, 0.06]]
+    far_side: right
+    depth_cutoff: 0.05
   - id: cam09
     aliases: ["MOTIONVIEWER 9"]
   - id: cam10

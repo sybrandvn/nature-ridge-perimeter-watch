@@ -63,13 +63,6 @@ LABEL_EXAMPLES: dict[str, str] = {
 }
 
 
-def _hyperlink(path_str: str) -> str:
-    """OSC 8 terminal hyperlink so `path_str` is clickable in terminals that render it
-    (VS Code, iTerm2, GNOME Terminal, Windows Terminal); plain text otherwise."""
-    uri = Path(path_str).resolve().as_uri()
-    return f"\033]8;;{uri}\033\\{path_str}\033]8;;\033\\"
-
-
 def _resolve_label(raw: str) -> str | None:
     """Accept a full label name or its single-letter shortcut (g/a/i/e/u); else None."""
     raw = raw.strip().lower()
@@ -107,7 +100,7 @@ def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
     if clip["caption"]:
         print(f"  caption: {clip['caption']}")
     if clip["file_path"]:
-        print(f"  file: {_hyperlink(clip['file_path'])}")
+        print(f"  file: {clip['file_path']}")
         duration = _clip_duration_seconds(clip["file_path"])
         if duration is not None:
             note = "  <- often blank/pre-alert, camera waking up" if duration < 2.0 else ""

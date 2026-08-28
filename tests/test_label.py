@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.label import _hyperlink, _resolve_label, run_labeling_session
+from scripts.label import _resolve_label, run_labeling_session
 from src import db
 from src.db import VALID_LABELS
 
@@ -132,16 +132,6 @@ def test_resolve_label_rejects_unknown_input():
     assert _resolve_label("bogus") is None
     assert _resolve_label("") is None
 
-
-def test_hyperlink_wraps_path_in_osc8_escape_with_file_uri(tmp_path: Path):
-    target = tmp_path / "clip.mp4"
-    target.write_bytes(b"")
-
-    link = _hyperlink(str(target))
-
-    assert link.startswith("\033]8;;file://")
-    assert str(target) in link
-    assert link.endswith("\033]8;;\033\\")
 
 
 def test_short_clips_prompted_individually_until_confirm_count_reached(tmp_path: Path):

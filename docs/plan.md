@@ -62,6 +62,14 @@ chronic false triggers). One polyline cannot leave gaps or overlaps the way two 
 polygons can, and halves the drawing work. Side assignment uses the fraction of blob foreground
 pixels past the line, so straddling blobs degrade gracefully.
 
+Camera mounts can shift over time (knocked, re-aimed, re-mounted), which moves the fence line in
+frame. A single fixed polyline per camera can't survive that, so `fence`/`far_side`/`depth_cutoff`
+need to become a dated history (e.g. a list of `{effective_from, fence, far_side, depth_cutoff}`
+entries per camera) rather than one static value, with lookups picking the entry whose
+`effective_from` is the latest one at or before a clip's timestamp. Not needed for the Phase 0c
+spike (hand-picked, single snapshot in time), but required before Phase 2's zone editor and
+live classification are trusted long-term.
+
 ## Perspective consequences
 - Aspect ratio is depth-invariant but distinguishes posture, not species — escalation signal only.
 - Blob area is depth-dependent — a noise floor scaling with image row, never an absolute
@@ -163,7 +171,9 @@ ship with raw support counts and are indicative only.
 23. `zones.py` applies polyline, side assignment, depth cutoff, and ignore regions on top of
     cached tracks. Cheap and re-runnable, so polygon iteration never triggers re-extraction.
 24. Browser zone editor on localhost: extract a reference frame, draw the polyline, click the far
-    side, drag the depth cutoff, add ignore polygons, write `cameras.yaml` atomically.
+    side, drag the depth cutoff, add ignore polygons, write `cameras.yaml` atomically. Saves a new
+    dated fence version rather than overwriting, so a re-aimed camera keeps its old geometry valid
+    for clips predating the change (see Geometry model).
 25. `classify.py` rule engine producing `guard_side`, `far_side_alert`, `far_side_priority`,
     `ambiguous`, each with reason codes and contributing thresholds. Implements fail-safe
     escalation. Unknown camera, missing fence line, above depth cutoff, or undecodable video
@@ -227,8 +237,8 @@ threshold sets, YOLO/ONNX, activity heatmap, trend analytics, probe-sequence liv
   `src/backfill.py`, `src/sequence.py`, `src/backtester.py`
 - `src/telegram_alert.py`, `src/ntfy_alert.py` — functions only this round
 - `src/bot.py` — Phase 5
-- `config/cameras.yaml` (fence polyline, far side, depth cutoff, ignore regions, confirmed order,
-  operating window), `config/thresholds.yaml`
+- `config/cameras.yaml` (dated fence polyline history, far side, depth cutoff, ignore regions,
+  confirmed order, operating window), `config/thresholds.yaml`
 - `tests/`, `README.md`, `pyproject.toml`, `uv.lock`
 
 ## Verification

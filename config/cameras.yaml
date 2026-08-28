@@ -35,22 +35,24 @@ cameras:
     aliases: ["MOTIONVIEWER 4"]
   - id: cam05
     aliases: ["MOTIONVIEWER 5"]
-    # Drawn from data/history/cam05/4800.mp4 (middle frame): camera looks down
-    # the fence line at a shallow angle (like cam06/cam08), so the picket tops
-    # recede diagonally; line traced along that picket-tip envelope. Open
-    # ground (south, outside the fence) is to the left of that line walking
-    # from the first point to the second.
-    fence: [[0.30625, 0.366666], [0.43125, 0.958333]]
+    # Drawn from data/history/cam05/4800.mp4 (middle frame). Provisional --
+    # 2026-08-28 attempts to aim at picket tips over-corrected back toward a
+    # perpendicular guess; reverted to this earlier, closer approximation
+    # pending a user-hand-drawn reference (see docs/plan.md fence versioning
+    # note). Open ground is to the left of that line walking from the first
+    # point to the second.
+    fence: [[0.421875, 0.25], [0.3125, 0.979166]]
     far_side: left
     depth_cutoff: 0.05
   - id: cam06
     aliases: ["MOTIONVIEWER 6"]
-    # Drawn from data/history/cam06/21520.mp4 (crawl incident clip): traced
-    # along the receding picket-tip envelope, same geometry as cam05/cam08.
-    # Open background (south, outside the fence) is to the right of that line
-    # walking from the first point to the second.
-    fence: [[0.28125, 0.625], [0.453125, 0.333333]]
-    far_side: right
+    # Drawn from data/history/cam06/21520.mp4 (crawl incident clip). Provisional
+    # -- 2026-08-28 tip-aiming attempt regressed toward a perpendicular guess;
+    # reverted to this earlier, closer approximation pending a user-hand-drawn
+    # reference (see docs/plan.md fence versioning note). Open background is
+    # to the left of that line walking from the first point to the second.
+    fence: [[0.4375, 0.166666], [0.4, 0.958333]]
+    far_side: left
     depth_cutoff: 0.05
   - id: cam07
     aliases: ["MOTIONVIEWER 7"]

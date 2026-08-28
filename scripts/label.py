@@ -14,6 +14,11 @@ Some triggers also send two alert messages for the same physical event -- e.g. a
 timestamp. Once you label one, its still-unlabeled sibling shows a suggested label
 you can accept with Enter, or override by typing another letter/word as usual.
 
+Omitting --camera walks every camera's remaining clips shuffled and interleaved
+round-robin across cameras, so a session gets a spread instead of exhausting one
+camera's queue before moving to the next. Priority clips (known rare events) still
+come first, unshuffled.
+
 Run:
     uv run python scripts/label.py [--camera CAM_ID] [--limit N] [--include-no-file]
         [--short-clip-seconds SECS] [--confirm-short-count N]
@@ -22,6 +27,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import random
 import re
 import sys
 from collections.abc import Callable, Mapping
@@ -55,13 +61,34 @@ PRIORITY_MESSAGE_IDS: dict[str, frozenset[int]] = {
 _EVENT_TS_RE = re.compile(r"@\s*(\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
 
-def _prioritize(rows: list[Mapping]) -> list[Mapping]:
-    """Move PRIORITY_MESSAGE_IDS clips to the front, preserving timestamp order elsewhere."""
+def _prioritize(rows: list[Mapping]) -> tuple[list[Mapping], list[Mapping]]:
+    """Split into (priority, rest), each preserving timestamp order."""
     priority, rest = [], []
     for row in rows:
         known_ids = PRIORITY_MESSAGE_IDS.get(row["camera_id"], frozenset())
         (priority if row["message_id"] in known_ids else rest).append(row)
-    return priority + rest
+    return priority, rest
+
+
+def _spread_by_camera(rows: list[Mapping], rng: random.Random) -> list[Mapping]:
+    """Shuffle within each camera's clips, then round-robin across cameras, so a
+    --camera-less session doesn't spend dozens of clips in a row on one camera before
+    moving to the next. A no-op when rows only span one camera (i.e. --camera was set)."""
+    by_camera: dict[str, list[Mapping]] = {}
+    for row in rows:
+        by_camera.setdefault(row["camera_id"], []).append(row)
+    if len(by_camera) <= 1:
+        return rows
+    for group in by_camera.values():
+        rng.shuffle(group)
+    camera_order = list(by_camera)
+    rng.shuffle(camera_order)
+    result: list[Mapping] = []
+    while any(by_camera[cam] for cam in camera_order):
+        for cam in camera_order:
+            if by_camera[cam]:
+                result.append(by_camera[cam].pop(0))
+    return result
 
 
 def _event_key(camera_id: str, caption: str | None) -> str | None:
@@ -180,10 +207,13 @@ def run_labeling_session(
     confirm_short_count: int = 3,
     bulk_confirm_fn: BulkConfirmFn | None = None,
     duration_fn: DurationFn = _clip_duration_seconds,
+    rng: random.Random | None = None,
 ) -> int:
     labeled = 0
     rows = db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=with_file_only)
-    rows = _prioritize([dict(row) for row in rows])
+    priority, rest = _prioritize([dict(row) for row in rows])
+    rest = _spread_by_camera(rest, rng or random.Random())
+    rows = priority + rest
 
     # Priority clips are known real events -- never eligible for the short-clip bulk
     # shortcut below, even if one happens to be short (e.g. cam06's Initial alert 21519).

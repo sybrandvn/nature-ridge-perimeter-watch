@@ -1,3 +1,4 @@
+import random
 from pathlib import Path
 
 from scripts.label import _event_key, _resolve_label, run_labeling_session
@@ -294,4 +295,67 @@ def test_event_suggestion_persists_across_sessions(tmp_path: Path):
     run_labeling_session(conn, prompt_fn=prompt_fn)
 
     assert seen_suggestions == ["guard"]
+    conn.close()
+
+
+def test_run_labeling_session_spreads_rest_across_cameras(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    for cam_num, cam in enumerate(("cam01", "cam02", "cam03"), start=1):
+        for i in range(3):
+            _seed(
+                conn,
+                cam_num * 100 + i,
+                camera_id=cam,
+                timestamp=f"2026-01-01T{20 + i:02d}:00:00Z",
+            )
+
+    seen_cameras: list[str] = []
+
+    def prompt_fn(clip):
+        seen_cameras.append(clip["camera_id"])
+        return "guard", None
+
+    run_labeling_session(conn, prompt_fn=prompt_fn, rng=random.Random(0))
+
+    assert len(seen_cameras) == 9
+    # round-robin: each consecutive triple covers all three cameras, never the same
+    # camera three times in a row like plain timestamp order would produce.
+    for i in range(0, 9, 3):
+        assert set(seen_cameras[i : i + 3]) == {"cam01", "cam02", "cam03"}
+
+
+def test_run_labeling_session_single_camera_filter_not_shuffled(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    _seed(conn, 1, camera_id="cam01", timestamp="2026-01-01T20:00:00Z")
+    _seed(conn, 2, camera_id="cam01", timestamp="2026-01-01T21:00:00Z")
+    _seed(conn, 3, camera_id="cam01", timestamp="2026-01-01T22:00:00Z")
+
+    seen_ids: list[int] = []
+
+    def prompt_fn(clip):
+        seen_ids.append(clip["message_id"])
+        return "guard", None
+
+    run_labeling_session(conn, prompt_fn=prompt_fn, camera_id="cam01", rng=random.Random(0))
+
+    assert seen_ids == [1, 2, 3]  # untouched: only one camera present
+    conn.close()
+
+
+def test_priority_clips_stay_first_when_spread_across_cameras(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    _seed(conn, 21519, camera_id="cam06", timestamp="2026-01-01T20:00:00Z")
+    for cam_num, cam in enumerate(("cam01", "cam02"), start=1):
+        _seed(conn, cam_num * 100 + 1, camera_id=cam, timestamp="2026-01-01T19:00:00Z")
+        _seed(conn, cam_num * 100 + 2, camera_id=cam, timestamp="2026-01-01T21:00:00Z")
+
+    seen: list[tuple[str, int]] = []
+
+    def prompt_fn(clip):
+        seen.append((clip["camera_id"], clip["message_id"]))
+        return "incident" if clip["camera_id"] == "cam06" else "guard", None
+
+    run_labeling_session(conn, prompt_fn=prompt_fn, rng=random.Random(0))
+
+    assert seen[0] == ("cam06", 21519)
     conn.close()

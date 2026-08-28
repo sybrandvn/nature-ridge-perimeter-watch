@@ -1,0 +1,134 @@
+# Nature Ridge Perimeter Watch
+
+Motion-based perimeter fence monitoring built from a Telegram security-camera feed. This round
+covers discovery, feasibility validation, and calibration tooling — **not** a live alerting
+service (see [docs/plan.md](docs/plan.md) for the full plan and what's explicitly deferred).
+
+Two gates decide whether the rest of the pipeline gets built:
+
+1. **Gate 1 — camera order.** The fence camera order is unknown and must be inferred from patrol
+   timestamp patterns alone (`src/sequence.py`).
+2. **Gate 2 — CV feasibility.** Classical computer-vision features must actually separate
+   guard/environment clips from animal/incident clips on a hand-labelled sample (`scripts/spike.py`).
+
+Either gate failing changes the plan rather than getting silently worked around.
+
+## Setup
+
+```bash
+uv sync
+cp .env.example .env   # fill in Telegram credentials, channel id, etc.
+```
+
+Config lives in two places:
+
+- `.env` — secrets and environment-specific paths (see `.env.example` for every variable).
+- `config/cameras.yaml` / `config/thresholds.yaml` — camera roster, fence geometry, and
+  motion/classification thresholds. Both start as skeletons and get filled in as you work through
+  the steps below.
+
+Run tests and lint after any change:
+
+```bash
+uv run ruff check . --fix
+uv run pytest -q
+```
+
+## Workflow
+
+### 1. First Telegram auth
+
+The first time any script touches Telethon, it will prompt interactively for your phone number
+and login code, then persist a session file at `TELEGRAM_SESSION_PATH`. Do this once, in a
+terminal you control directly (not piped through anything that would swallow the prompt).
+
+### 2. Metadata-only backfill (Phase 0a)
+
+```bash
+uv run python scripts/meta_backfill.py
+```
+
+Walks the full channel history and records **metadata only** — no video downloads yet — into the
+`clips` and `system_events` tables: camera id (resolved from the caption via
+`config/cameras.yaml` aliases, or `unknown` if unresolved), timestamp, and caption text. Camera
+health notifications (battery, power loss/restore) are captured separately in `system_events`.
+Safe to re-run; it's idempotent (upserts on `channel_id, message_id`).
+
+If most clips resolve to `unknown`, add the real caption patterns you're seeing as aliases in
+`config/cameras.yaml` and re-run.
+
+### 3. Camera-order inference (Phase 0b, gate 1)
+
+```bash
+uv run python scripts/infer_camera_order.py
+```
+
+Infers the fence order purely from patrol timing patterns in the backfilled metadata — segments
+patrol passes, builds a transition-time matrix, and seriates it (spectral + reversal-minimising
+local search, cross-checked against an independent greedy-chain ordering). Prints:
+
+- the inferred order and reversal cost,
+- cross-check agreement between the two independent methods,
+- entry-point candidates (should match your 2 known gates),
+- any co-located or unplaced cameras,
+- split-half stability.
+
+**This is a hypothesis, not an authority.** Confirm it against your own mental map of the fence
+before writing it into `config/cameras.yaml`'s `order` fields. If agreement is low or entry
+points don't match the known gates, don't proceed to the spike — revisit the backfill data first
+(enough patrol passes? gaps too large? `max_gap_seconds`/`min_cameras` tuned for your patrol
+cadence?).
+
+### 4. CV feasibility spike (Phase 0c, gate 2)
+
+This is the step that decides whether classical CV is viable at all before any of the rest of
+the pipeline gets built.
+
+1. Pick 2-3 cameras with the richest incident history, ideally including whichever camera caught
+   the known crawl incident.
+2. Get a small clip subset for those cameras onto local disk and set `clips.file_path` for them
+   (manual export for now — full video backfill isn't built this round).
+3. Hand-enter fence polylines for those cameras in `config/cameras.yaml` (`fence`, `far_side`,
+   `depth_cutoff`; 2-4 points is enough to start).
+4. Label ~150 clips, oversampling animal/incident:
+   ```bash
+   uv run python scripts/label.py --camera cam_north
+   ```
+5. Extract features to CSV:
+   ```bash
+   uv run python scripts/spike.py --camera cam_north --out data/reports/spike_cam_north.csv
+   ```
+6. Inspect the CSV by hand (or a notebook). Does any threshold combination separate
+   guard/environment from animal/incident at usable precision? Explicitly count flashlight and
+   IR-insect clips landing on the far side. **If separation fails, stop and revisit scope**
+   (earlier ML, IR/brightness handling, multi-frame reference modelling) rather than pushing on
+   to Phase 1.
+
+### 5. Backfill, label, and backtest (Phase 1+, after both gates pass)
+
+Not built this round — see `docs/plan.md` for the full Phase 1-5 plan (full video backfill,
+`src/motion.py`/`src/classify.py`, the backtester and threshold-iteration loop, manual alert
+tests, and the later trustee/security query bot).
+
+## Fail-safe classification policy
+
+Bounding-box aspect ratio for a crawling person overlaps large animals — classical CV cannot
+reliably tell them apart from a short clip. So: shape/trajectory evidence may only **escalate** a
+far-side alert to `far_side_priority`. Nothing about blob shape is ever allowed to downgrade or
+suppress a far-side alert. This must be preserved in `classify.py` when it's built.
+
+## Repo layout
+
+```
+config/            cameras.yaml, thresholds.yaml
+scripts/           CLI entry points (meta_backfill, infer_camera_order, label, spike)
+src/               config, db, sequence, zones, features, message_parsing, errors
+tests/             pytest suite (unit tests only; no live Telegram/video needed)
+docs/plan.md       full implementation plan, scope decisions, and what's deferred
+```
+
+## Sensitivity note
+
+Patrol-compliance analytics (later phase) profile identifiable individuals' movements and working
+patterns. Guards are data subjects under POPIA — worth a word with trustees on retention and
+access scope before that bot ships.

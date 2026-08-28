@@ -94,9 +94,16 @@ the pipeline gets built.
    - **Crawl incident, 2026-07-21 — visually confirmed**: nightly clip volume jumped from a
      30-day average of 12.6 to 28.65 (2.3x, sustained) starting this night, unlike every other
      spike day in the history which reverts the next night. `cam01b` alone triggered at
-     20:11-20:16, then a dense multi-camera guard sweep followed at 20:31-21:41 across cam06,
-     cam09, cam10, cam01b, cam05, cam04, cam07, cam03. `data/history/cam01b/21491.mp4` shows a
-     person in frame near the fence, IR-lit.
+     20:11-20:16 UTC (message ids `21517`/`21518`), then a dense multi-camera guard sweep
+     followed at 20:31-21:41 UTC across cam06, cam09, cam10, cam01b, cam05, cam04, cam07, cam03
+     (cam01b's own clips in that later window, `21525`/`21526` and `21539`/`21540`, are the guard
+     sweep passing back through, not the incident itself). **The incident clip is
+     `data/history/cam01b/21518.mp4`** (the "Timeout" continuation of the same alert as
+     `21517.mp4`) — a person is visible on the right edge of frame near the treeline, lit by a
+     blue light, around frame 4 of 25 (~0.8s in); they're gone from frame by frame 8. Easy to
+     miss on a quick scrub since it's brief and at the frame edge. (Earlier I pointed at
+     `21491.mp4` by mistake — that clip is actually from the night before, 2026-07-20, unrelated
+     baseline activity, not the incident.)
    - **2024-03-16 `cam04`/`cam13` re-trigger night — NOT confirmed as a probe**: no volume spike,
      but `cam04` re-triggered 7 times between 19:33 and 03:47 the next morning (with `cam13`
      re-triggering 3 times nearby in time, plus single triggers on `cam12`/`cam07`) — a timing

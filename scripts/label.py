@@ -9,6 +9,11 @@ later by the real (longer) clip -- the camera waking up, nothing visible. --shor
 flags these; after --confirm-short-count of them get the same label in a row, you're asked
 once whether to bulk-apply that label to the rest without reviewing each one.
 
+Some triggers also send two alert messages for the same physical event -- e.g. an
+(Initial*) caption and a (Stopped*)/follow-up caption sharing one embedded camera
+timestamp. Once you label one, its still-unlabeled sibling shows a suggested label
+you can accept with Enter, or override by typing another letter/word as usual.
+
 Run:
     uv run python scripts/label.py [--camera CAM_ID] [--limit N] [--include-no-file]
         [--short-clip-seconds SECS] [--confirm-short-count N]
@@ -17,6 +22,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -43,6 +49,11 @@ PRIORITY_MESSAGE_IDS: dict[str, frozenset[int]] = {
     "cam05": frozenset({18269}),  # animal, 2026-01-06
 }
 
+# Captions like "(Initial*) ... @ 14-03-24 20:44:22" and "(Stopped*) ... @ 14-03-24
+# 20:44:22" are two separate alert messages for the same physical trigger, sharing
+# this embedded camera timestamp -- not independent events.
+_EVENT_TS_RE = re.compile(r"@\s*(\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+
 
 def _prioritize(rows: list[Mapping]) -> list[Mapping]:
     """Move PRIORITY_MESSAGE_IDS clips to the front, preserving timestamp order elsewhere."""
@@ -51,6 +62,33 @@ def _prioritize(rows: list[Mapping]) -> list[Mapping]:
         known_ids = PRIORITY_MESSAGE_IDS.get(row["camera_id"], frozenset())
         (priority if row["message_id"] in known_ids else rest).append(row)
     return priority + rest
+
+
+def _event_key(camera_id: str, caption: str | None) -> str | None:
+    """Group key for alert messages sharing one embedded camera timestamp (same
+    physical trigger), or None if the caption doesn't carry one."""
+    if not caption:
+        return None
+    match = _EVENT_TS_RE.search(caption)
+    return f"{camera_id}|{match.group(1)}" if match else None
+
+
+def _event_label_map(conn) -> dict[str, str]:
+    """event_key -> label for clips already labeled (this or a prior session), so a
+    still-unlabeled Initial/Stopped sibling can suggest the same label."""
+    rows = conn.execute(
+        """
+        SELECT clips.camera_id, clips.caption, labels.label
+        FROM clips JOIN labels
+            ON clips.channel_id = labels.channel_id AND clips.message_id = labels.message_id
+        """
+    )
+    mapping: dict[str, str] = {}
+    for row in rows:
+        key = _event_key(row["camera_id"], row["caption"])
+        if key is not None:
+            mapping[key] = row["label"]
+    return mapping
 
 
 # One line per src.db.VALID_LABELS entry, per docs/plan.md's Ground truth labels section.
@@ -113,10 +151,17 @@ def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
     for label in VALID_LABELS:
         print(f"    [{label[0]}] {label:<11} {LABEL_EXAMPLES[label]}")
 
+    suggested = clip.get("_suggested_label")
+    if suggested is not None:
+        print(f"  suggested: {suggested} (same event as a labeled clip -- Enter to accept)")
+
     while True:
         raw = input("label (letter or full word, q to quit): ").strip().lower()
         if raw == "q":
             return None
+        if raw == "" and suggested is not None:
+            notes = input("notes (optional): ").strip() or None
+            return suggested, notes
         resolved = _resolve_label(raw)
         if resolved is not None:
             notes = input("notes (optional): ").strip() or None
@@ -162,12 +207,14 @@ def run_labeling_session(
     last_short_label: str | None = None
     short_streak = 0
     bulk_label: str | None = None
+    event_labels = _event_label_map(conn)
 
     for row in rows:
         if limit is not None and labeled >= limit:
             break
         key = (row["channel_id"], row["message_id"])
         short = short_flags[key]
+        event_key = _event_key(row["camera_id"], row["caption"])
 
         if short and bulk_label is not None:
             db.upsert_label(
@@ -179,8 +226,11 @@ def run_labeling_session(
             )
             labeled += 1
             remaining_short -= 1
+            if event_key is not None:
+                event_labels[event_key] = bulk_label
             continue
 
+        row["_suggested_label"] = event_labels.get(event_key) if event_key is not None else None
         result = prompt_fn(row)
         if result is None:
             break
@@ -193,6 +243,8 @@ def run_labeling_session(
             notes=notes,
         )
         labeled += 1
+        if event_key is not None:
+            event_labels[event_key] = label
 
         if short:
             remaining_short -= 1

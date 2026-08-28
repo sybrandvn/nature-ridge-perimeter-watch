@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.label import _resolve_label, run_labeling_session
+from scripts.label import _event_key, _resolve_label, run_labeling_session
 from src import db
 from src.db import VALID_LABELS
 
@@ -22,6 +22,7 @@ def _seed(
     camera_id: str = "cam01",
     file_path: str | None = None,
     timestamp: str = "2026-01-01T20:00:00Z",
+    caption: str = "Motion detected",
 ) -> None:
     db.upsert_clip(
         conn,
@@ -29,7 +30,7 @@ def _seed(
         message_id=message_id,
         camera_id=camera_id,
         timestamp=timestamp,
-        caption="Motion detected",
+        caption=caption,
         file_path=file_path,
         source="backfill",
     )
@@ -238,4 +239,59 @@ def test_priority_clip_never_bulk_labeled_even_if_short(tmp_path: Path):
     )
 
     assert 21519 in prompted  # always prompted individually, never bulk-applied
+    conn.close()
+
+
+def test_event_key_groups_initial_and_stopped_captions():
+    initial = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    stopped = "Cam Alert*: (Stopped*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+
+    assert _event_key("cam10", initial) == _event_key("cam10", stopped)
+    assert _event_key("cam10", initial) != _event_key("cam06", initial)  # different camera
+
+
+def test_event_key_none_without_embedded_timestamp():
+    assert _event_key("cam01", "Motion detected") is None
+    assert _event_key("cam01", None) is None
+
+
+def test_run_labeling_session_suggests_label_for_paired_alert(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    initial = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    stopped = "Cam Alert*: (Stopped*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    _seed(conn, 1, caption=initial)
+    _seed(conn, 2, caption=stopped)
+
+    seen_suggestions: list[str | None] = []
+    responses = iter([("environment", None), ("environment", None)])
+
+    def prompt_fn(clip):
+        seen_suggestions.append(clip.get("_suggested_label"))
+        return next(responses)
+
+    labeled = run_labeling_session(conn, prompt_fn=prompt_fn)
+
+    assert labeled == 2
+    assert seen_suggestions == [None, "environment"]
+    conn.close()
+
+
+def test_event_suggestion_persists_across_sessions(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    initial = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    stopped = "Cam Alert*: (Stopped*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    _seed(conn, 1, caption=initial)
+    _seed(conn, 2, caption=stopped)
+
+    run_labeling_session(conn, prompt_fn=lambda _clip: ("guard", None), limit=1)
+
+    seen_suggestions: list[str | None] = []
+
+    def prompt_fn(clip):
+        seen_suggestions.append(clip.get("_suggested_label"))
+        return "guard", None
+
+    run_labeling_session(conn, prompt_fn=prompt_fn)
+
+    assert seen_suggestions == ["guard"]
     conn.close()

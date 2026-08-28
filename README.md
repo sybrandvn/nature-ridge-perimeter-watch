@@ -113,11 +113,22 @@ the pipeline gets built.
    (earlier ML, IR/brightness handling, multi-frame reference modelling) rather than pushing on
    to Phase 1.
 
-### 5. Backfill, label, and backtest (Phase 1+, after both gates pass)
+### 5. Manual alert test (Phase 4 stub, no gate dependency)
+
+`src/telegram_alert.py` and `src/ntfy_alert.py` are pure, injectable-transport functions (mocked
+in tests, never touch the network there). Verify your real credentials with one test message on
+each channel:
+```bash
+uv run python scripts/send_test_alert.py
+```
+Uses `TELEGRAM_BOT_TOKEN`/`ALERT_CHANNEL_ID` and `NTFY_BASE_URL`/`NTFY_TOPIC`/`NTFY_TOKEN` from
+`.env`; either pair is skipped (not failed) if unset.
+
+### 6. Backfill, label, and backtest (Phase 1+, after both gates pass)
 
 Not built this round — see `docs/plan.md` for the full Phase 1-5 plan (full video backfill,
-`src/motion.py`/`src/classify.py`, the backtester and threshold-iteration loop, manual alert
-tests, and the later trustee/security query bot).
+`src/motion.py`/`src/classify.py`, the backtester and threshold-iteration loop, and the later
+trustee/security query bot).
 
 ## Fail-safe classification policy
 

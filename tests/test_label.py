@@ -1,7 +1,8 @@
 from pathlib import Path
 
-from scripts.label import run_labeling_session
+from scripts.label import _hyperlink, _resolve_label, run_labeling_session
 from src import db
+from src.db import VALID_LABELS
 
 
 def _seed(
@@ -107,3 +108,26 @@ def test_run_labeling_session_surfaces_known_incident_clips_first(tmp_path: Path
 
     assert seen == [21520, 100, 200]
     conn.close()
+
+
+def test_resolve_label_accepts_full_word_and_shortcut_letter():
+    for label in VALID_LABELS:
+        assert _resolve_label(label) == label
+        assert _resolve_label(label[0]) == label
+        assert _resolve_label(label[0].upper()) == label
+
+
+def test_resolve_label_rejects_unknown_input():
+    assert _resolve_label("bogus") is None
+    assert _resolve_label("") is None
+
+
+def test_hyperlink_wraps_path_in_osc8_escape_with_file_uri(tmp_path: Path):
+    target = tmp_path / "clip.mp4"
+    target.write_bytes(b"")
+
+    link = _hyperlink(str(target))
+
+    assert link.startswith("\033]8;;file://")
+    assert str(target) in link
+    assert link.endswith("\033]8;;\033\\")

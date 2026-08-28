@@ -43,6 +43,31 @@ def _prioritize(rows: list[Mapping]) -> list[Mapping]:
     return priority + rest
 
 
+# One line per src.db.VALID_LABELS entry, per docs/plan.md's Ground truth labels section.
+LABEL_EXAMPLES: dict[str, str] = {
+    "guard": "guard on patrol, flashlight visible, usually near/interior side",
+    "animal": "an animal crossing -- not a person",
+    "incident": "a person: crawling, probing, or climbing, usually far/exterior side",
+    "environment": "IR-attracted insects, rain streaks, wind-blown vegetation, shadow artifacts",
+    "unknown": "can't tell / too ambiguous to call confidently",
+}
+
+
+def _hyperlink(path_str: str) -> str:
+    """OSC 8 terminal hyperlink so `path_str` is clickable in terminals that render it
+    (VS Code, iTerm2, GNOME Terminal, Windows Terminal); plain text otherwise."""
+    uri = Path(path_str).resolve().as_uri()
+    return f"\033]8;;{uri}\033\\{path_str}\033]8;;\033\\"
+
+
+def _resolve_label(raw: str) -> str | None:
+    """Accept a full label name or its single-letter shortcut (g/a/i/e/u); else None."""
+    raw = raw.strip().lower()
+    if raw in VALID_LABELS:
+        return raw
+    return next((label for label in VALID_LABELS if raw == label[0]), None)
+
+
 def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
     print(
         f"\n[{clip['channel_id']}#{clip['message_id']}] "
@@ -51,17 +76,22 @@ def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
     if clip["caption"]:
         print(f"  caption: {clip['caption']}")
     if clip["file_path"]:
-        print(f"  file: {clip['file_path']}")
+        print(f"  file: {_hyperlink(clip['file_path'])}")
     else:
         print("  (no local file yet -- metadata-only label)")
 
+    print("  labels:")
+    for label in VALID_LABELS:
+        print(f"    [{label[0]}] {label:<11} {LABEL_EXAMPLES[label]}")
+
     while True:
-        raw = input(f"label [{'/'.join(VALID_LABELS)}] (q to quit): ").strip().lower()
+        raw = input("label (letter or full word, q to quit): ").strip().lower()
         if raw == "q":
             return None
-        if raw in VALID_LABELS:
+        resolved = _resolve_label(raw)
+        if resolved is not None:
             notes = input("notes (optional): ").strip() or None
-            return raw, notes
+            return resolved, notes
         print(f"Not a valid label: {raw!r}")
 
 

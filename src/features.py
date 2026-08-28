@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from datetime import datetime, timedelta
 
 import cv2
 import numpy as np
@@ -109,3 +110,36 @@ def persistence(frames_detected: int, total_frames: int) -> float:
     if total_frames == 0:
         return 0.0
     return frames_detected / total_frames
+
+
+def _hhmm_to_minutes(value: str) -> int:
+    hours, minutes = value.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def time_of_day(
+    timestamp_utc: str,
+    *,
+    window_start: str = "18:00",
+    window_end: str = "06:00",
+    utc_offset_hours: float = 2.0,
+) -> str:
+    """"night" if the clip's local time falls inside the configured operating
+    window (which wraps midnight, e.g. 18:00-06:00), else "day".
+
+    Parsed straight from the clip's UTC timestamp -- a descriptive tag for
+    spike/report analysis, not a manually-entered label and not itself a
+    classification input (docs/plan.md keeps a single night-only threshold
+    profile; this just makes dusk/dawn-lit clips distinguishable from deep
+    night ones when eyeballing separability).
+    """
+    dt = datetime.fromisoformat(timestamp_utc.replace("Z", "+00:00"))
+    local = dt + timedelta(hours=utc_offset_hours)
+    local_minutes = local.hour * 60 + local.minute
+    start_minutes = _hhmm_to_minutes(window_start)
+    end_minutes = _hhmm_to_minutes(window_end)
+    if start_minutes <= end_minutes:
+        in_window = start_minutes <= local_minutes < end_minutes
+    else:
+        in_window = local_minutes >= start_minutes or local_minutes < end_minutes
+    return "night" if in_window else "day"

@@ -54,6 +54,7 @@ from src.features import (  # noqa: E402
     row_normalised_area,
     saturation_ratio,
     solidity,
+    time_of_day,
 )
 from src.zones import far_side_pixel_fraction  # noqa: E402
 
@@ -62,6 +63,7 @@ FEATURE_COLUMNS = (
     "message_id",
     "camera_id",
     "label",
+    "time_of_day",
     "far_side_pixel_fraction",
     "aspect_ratio",
     "solidity",
@@ -171,10 +173,18 @@ def iter_labelled_clips_with_files(conn, *, camera_id: str) -> Iterator[dict[str
             "camera_id": row["camera_id"],
             "file_path": row["file_path"],
             "label": label_row["label"],
+            "timestamp": row["timestamp"],
         }
 
 
-def run_spike(conn, cameras: CamerasConfig, *, camera_id: str) -> list[dict[str, Any]]:
+def run_spike(
+    conn,
+    cameras: CamerasConfig,
+    *,
+    camera_id: str,
+    operating_window_start: str = "18:00",
+    operating_window_end: str = "06:00",
+) -> list[dict[str, Any]]:
     camera = cameras.by_id(camera_id)
     if camera is None:
         raise ValueError(f"Unknown camera_id: {camera_id!r}")
@@ -190,6 +200,11 @@ def run_spike(conn, cameras: CamerasConfig, *, camera_id: str) -> list[dict[str,
                 "message_id": clip["message_id"],
                 "camera_id": clip["camera_id"],
                 "label": clip["label"],
+                "time_of_day": time_of_day(
+                    clip["timestamp"],
+                    window_start=operating_window_start,
+                    window_end=operating_window_end,
+                ),
                 **features,
             }
         )
@@ -215,7 +230,13 @@ def main() -> None:  # pragma: no cover - requires real labelled footage
     cameras_cfg = load_cameras_config("config/cameras.yaml")
     conn = db.connect(app_cfg.db_path)
 
-    rows = run_spike(conn, cameras_cfg, camera_id=args.camera)
+    rows = run_spike(
+        conn,
+        cameras_cfg,
+        camera_id=args.camera,
+        operating_window_start=app_cfg.operating_window_start,
+        operating_window_end=app_cfg.operating_window_end,
+    )
     conn.close()
 
     write_csv(rows, args.out)

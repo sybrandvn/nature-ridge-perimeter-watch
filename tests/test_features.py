@@ -11,6 +11,7 @@ from src.features import (
     row_normalised_area,
     saturation_ratio,
     solidity,
+    time_of_day,
 )
 
 
@@ -96,3 +97,29 @@ def test_persistence_fraction():
 
 def test_persistence_zero_total_frames_is_zero():
     assert persistence(0, 0) == 0.0
+
+
+def test_time_of_day_deep_night_utc_is_night():
+    # 22:00 UTC + 2h offset = 00:00 local, well inside 18:00-06:00.
+    assert time_of_day("2026-01-01T22:00:00Z") == "night"
+
+
+def test_time_of_day_midday_utc_is_day():
+    # 10:00 UTC + 2h offset = 12:00 local, well outside 18:00-06:00.
+    assert time_of_day("2026-01-01T10:00:00Z") == "day"
+
+
+def test_time_of_day_respects_custom_window():
+    assert (
+        time_of_day("2026-01-01T10:00:00Z", window_start="08:00", window_end="20:00") == "night"
+    )
+
+
+def test_time_of_day_at_window_start_boundary_is_night():
+    # 16:00 UTC + 2h offset = 18:00 local, exactly the window start (inclusive).
+    assert time_of_day("2026-01-01T16:00:00Z") == "night"
+
+
+def test_time_of_day_at_window_end_boundary_is_day():
+    # 04:00 UTC + 2h offset = 06:00 local, exactly the window end (exclusive).
+    assert time_of_day("2026-01-01T04:00:00Z") == "day"

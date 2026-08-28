@@ -35,23 +35,21 @@ cameras:
     aliases: ["MOTIONVIEWER 4"]
   - id: cam05
     aliases: ["MOTIONVIEWER 5"]
-    # Drawn from data/history/cam05/4800.mp4 (middle frame). Provisional --
-    # 2026-08-28 attempts to aim at picket tips over-corrected back toward a
-    # perpendicular guess; reverted to this earlier, closer approximation
-    # pending a user-hand-drawn reference (see docs/plan.md fence versioning
-    # note). Open ground is to the left of that line walking from the first
-    # point to the second.
-    fence: [[0.421875, 0.25], [0.3125, 0.979166]]
+    # Drawn from data/history/cam05/4800.mp4 (middle frame). User hand-traced
+    # the fence in red over the reference frame with Snipping Tool; these 3
+    # points are extracted from that red line (color-thresholded, sampled at
+    # top/mid/bottom). Open ground is to the left walking first point to last.
+    fence: [[0.4717, 0.2365], [0.3099, 0.6177], [0.1484, 0.999]]
     far_side: left
     depth_cutoff: 0.05
   - id: cam06
     aliases: ["MOTIONVIEWER 6"]
-    # Drawn from data/history/cam06/21520.mp4 (crawl incident clip). Provisional
-    # -- 2026-08-28 tip-aiming attempt regressed toward a perpendicular guess;
-    # reverted to this earlier, closer approximation pending a user-hand-drawn
-    # reference (see docs/plan.md fence versioning note). Open background is
-    # to the left of that line walking from the first point to the second.
-    fence: [[0.4375, 0.166666], [0.4, 0.958333]]
+    # Drawn from data/history/cam06/21520.mp4 (crawl incident clip). User
+    # hand-traced the fence in red over the reference frame with Snipping
+    # Tool; these 3 points are extracted from that red line (color-thresholded,
+    # sampled at top/mid/bottom). Open background is to the left walking
+    # first point to last.
+    fence: [[0.4532, 0.1427], [0.3171, 0.5688], [0.1809, 0.9948]]
     far_side: left
     depth_cutoff: 0.05
   - id: cam07

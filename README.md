@@ -116,17 +116,16 @@ the pipeline gets built.
      clips): no person in any of them, just fence/foliage scenes with a small bright green blob
      recurring near the lens on `cam12`/`cam13`/`cam07`, i.e. the IR-insect false-positive pattern
      the plan calls out (probably an insect-heavy night after rain), not an intruder.
-   - **Probe, 2024-03-14/15 (local) — data-confirmed pattern, visual confirmation inconclusive**:
-     `cam10` alone re-triggered 9 separate times over ~4 hours, 20:44 local to 00:44 local the
-     next morning (message ids `4030`/`4031`, `4034`-`4049`), with `cam12` overlapping only once
-     right at the start (`4032`/`4033`) — a much cleaner isolated single-camera dwelling pattern
-     than the retracted 2024-03-16 night. The scene is a floodlit pole/ladder-style fence
-     structure with dense foliage; there's an ambiguous grey shape at the bottom-left edge of
-     frame in several `cam10/4048.mp4`/`cam10/4049.mp4` frames that could be a partially-cropped
-     crouched figure, but the footage is too low-resolution/noisy at 320x240 to call it
-     definitively — could also be foliage/shadow texture. Worth a direct look at
-     `data/history/cam10/4048.mp4` and `4049.mp4` yourself; timing pattern alone puts this as the
-     leading probe candidate.
+   - **`cam10` 2024-03-14/15 re-trigger night — retracted, not a probe**: `cam10` alone
+     re-triggered 9 times over ~4 hours; visually it's a floodlit pole/ladder-style fence
+     structure with dense foliage, and the ambiguous shape near the bottom-left of
+     `4048.mp4`/`4049.mp4` is wind-agitated ground texture (storm/gusty night), not a person —
+     the pattern was a false positive despite looking clean in the timing data.
+   - **Probe, 2024-03-16 — visually confirmed on `cam08`**: identified from a WhatsApp forward a
+     trustee sent, received 2024-03-16 00:56 local, saying he'd "just picked up" someone putting
+     on a backpack. The closest matching trigger is **`data/history/cam08/4054.mp4`** (paired
+     with `4055.mp4`), 2024-03-16 00:47:30-00:50:18 local (msg ids `4054`/`4055`) — a few minutes
+     before the WhatsApp receipt, consistent with forwarding delay. Confirmed.
    - **Animal, 2026-01-06**: tree fell over the fence during the day (cameras don't run then); an
      animal was seen climbing it "while still light out". `cam05`'s very first alert of the night
      fired at 18:21 SAST, right at dusk startup — the earliest trigger of any camera that
@@ -136,11 +135,11 @@ the pipeline gets built.
    - **Animal, 2024-08-26**: `cam08`'s first alert of the night fired at 18:04 SAST, again right
      at dusk, "not as dark out" per recollection.
 
-   All 3 animal sightings and the crawl incident are visually confirmed against the downloaded
-   footage. The 2 probes from `docs/plan.md`'s site facts are still unlocated — timing patterns
-   alone aren't reliable enough; a visual check is required before trusting a candidate.
-   Recommended spike cameras: `cam01b` (incident), plus `cam08` or `cam05` (animal, dusk-lit so
-   easier to see).
+   All 3 animal sightings, the crawl incident, and 1 of the 2 probes are visually confirmed
+   against the downloaded footage. The second probe is still unlocated — timing patterns alone
+   aren't reliable enough on their own; a visual check is required before trusting a candidate.
+   Recommended spike cameras: `cam06` (incident), `cam08` (probe + animal), plus `cam05` (animal,
+   dusk-lit so easier to see).
 2. Download a small clip subset for those cameras and record `clips.file_path` automatically:
    ```bash
    uv run python scripts/download_clips.py --camera cam01b --camera cam07 --camera cam05 \

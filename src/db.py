@@ -182,6 +182,24 @@ def iter_clips(
         )
 
 
+def iter_unlabeled_clips(
+    conn: sqlite3.Connection, *, camera_id: str | None = None
+) -> Iterator[sqlite3.Row]:
+    """Clips with no row yet in `labels`, for driving a labeling CLI/session."""
+    query = """
+        SELECT clips.* FROM clips
+        LEFT JOIN labels
+            ON clips.channel_id = labels.channel_id AND clips.message_id = labels.message_id
+        WHERE labels.message_id IS NULL
+    """
+    params: tuple[Any, ...] = ()
+    if camera_id is not None:
+        query += " AND clips.camera_id = ?"
+        params = (camera_id,)
+    query += " ORDER BY clips.timestamp"
+    yield from conn.execute(query, params)
+
+
 # --------------------------------------------------------------------------
 # labels
 # --------------------------------------------------------------------------

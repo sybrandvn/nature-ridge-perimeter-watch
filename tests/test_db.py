@@ -122,6 +122,27 @@ def test_iter_clips_filters_by_camera(conn):
     assert [r["message_id"] for r in rows] == [1]
 
 
+def test_iter_unlabeled_clips_excludes_labeled_rows(conn):
+    for camera_id, message_id in (("cam01", 1), ("cam01", 2), ("cam02", 3)):
+        db.upsert_clip(
+            conn,
+            channel_id=CHANNEL,
+            message_id=message_id,
+            camera_id=camera_id,
+            timestamp="2026-01-01T20:00:00Z",
+            caption=None,
+            file_path=None,
+            source="backfill",
+        )
+    db.upsert_label(conn, channel_id=CHANNEL, message_id=1, label="guard")
+
+    rows = list(db.iter_unlabeled_clips(conn))
+    assert {r["message_id"] for r in rows} == {2, 3}
+
+    filtered = list(db.iter_unlabeled_clips(conn, camera_id="cam01"))
+    assert [r["message_id"] for r in filtered] == [2]
+
+
 # --------------------------------------------------------------------------
 # labels
 # --------------------------------------------------------------------------

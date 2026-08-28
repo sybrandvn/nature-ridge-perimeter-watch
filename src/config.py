@@ -1,0 +1,372 @@
+"""Environment and YAML configuration loading, with validation.
+
+Motion-extraction settings and classification thresholds are kept in separate
+top-level sections of thresholds.yaml so a threshold-only change never
+invalidates cached motion features (see ThresholdsConfig.motion_fingerprint,
+used later by src/motion.py's feature cache).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import yaml
+from dotenv import dotenv_values
+
+from src.errors import ConfigError
+
+Point = tuple[float, float]
+
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+# --------------------------------------------------------------------------
+# App / environment config
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    telegram_api_id: int | None
+    telegram_api_hash: str | None
+    telegram_session_path: Path
+    source_channel: str | None
+    telegram_bot_token: str | None
+    alert_channel_id: str | None
+    ntfy_base_url: str | None
+    ntfy_topic: str | None
+    ntfy_priority: str
+    ntfy_token: str | None
+    db_path: Path
+    operating_window_start: str
+    operating_window_end: str
+    bot_trustee_ids: tuple[int, ...]
+    bot_security_ids: tuple[int, ...]
+
+
+def load_app_config(env_path: str | Path = ".env", *, require_telegram: bool = True) -> AppConfig:
+    """Load AppConfig from a .env file overlaid with real process env vars."""
+    file_values = dotenv_values(env_path)
+    merged: dict[str, str] = {k: v for k, v in file_values.items() if v is not None}
+    import os
+
+    merged.update({k: v for k, v in os.environ.items() if k in _KNOWN_KEYS})
+    return load_app_config_from_mapping(merged, require_telegram=require_telegram)
+
+
+_KNOWN_KEYS = {
+    "TELEGRAM_API_ID",
+    "TELEGRAM_API_HASH",
+    "TELEGRAM_SESSION_PATH",
+    "SOURCE_CHANNEL",
+    "TELEGRAM_BOT_TOKEN",
+    "ALERT_CHANNEL_ID",
+    "NTFY_BASE_URL",
+    "NTFY_TOPIC",
+    "NTFY_PRIORITY",
+    "NTFY_TOKEN",
+    "DB_PATH",
+    "OPERATING_WINDOW_START",
+    "OPERATING_WINDOW_END",
+    "BOT_TRUSTEE_IDS",
+    "BOT_SECURITY_IDS",
+}
+
+
+def load_app_config_from_mapping(
+    env: Mapping[str, str], *, require_telegram: bool = True
+) -> AppConfig:
+    """Build AppConfig from an explicit mapping (used directly by tests)."""
+
+    def _get(key: str) -> str | None:
+        value = env.get(key, "")
+        return value.strip() or None
+
+    api_id_raw = _get("TELEGRAM_API_ID")
+    api_hash = _get("TELEGRAM_API_HASH")
+    source_channel = _get("SOURCE_CHANNEL")
+
+    if require_telegram:
+        missing = [
+            name
+            for name, value in (
+                ("TELEGRAM_API_ID", api_id_raw),
+                ("TELEGRAM_API_HASH", api_hash),
+                ("SOURCE_CHANNEL", source_channel),
+            )
+            if value is None
+        ]
+        if missing:
+            raise ConfigError(f"Missing required environment variable(s): {', '.join(missing)}")
+
+    api_id: int | None = None
+    if api_id_raw is not None:
+        try:
+            api_id = int(api_id_raw)
+        except ValueError as exc:
+            raise ConfigError(f"TELEGRAM_API_ID must be an integer, got {api_id_raw!r}") from exc
+
+    start = _get("OPERATING_WINDOW_START") or "18:00"
+    end = _get("OPERATING_WINDOW_END") or "06:00"
+    for label, value in (("OPERATING_WINDOW_START", start), ("OPERATING_WINDOW_END", end)):
+        if not _HHMM_RE.match(value):
+            raise ConfigError(f"{label} must be HH:MM (24h), got {value!r}")
+
+    return AppConfig(
+        telegram_api_id=api_id,
+        telegram_api_hash=api_hash,
+        telegram_session_path=Path(_get("TELEGRAM_SESSION_PATH") or "data/session.session"),
+        source_channel=source_channel,
+        telegram_bot_token=_get("TELEGRAM_BOT_TOKEN"),
+        alert_channel_id=_get("ALERT_CHANNEL_ID"),
+        ntfy_base_url=_get("NTFY_BASE_URL"),
+        ntfy_topic=_get("NTFY_TOPIC"),
+        ntfy_priority=_get("NTFY_PRIORITY") or "urgent",
+        ntfy_token=_get("NTFY_TOKEN"),
+        db_path=Path(_get("DB_PATH") or "data/perimeter_watch.db"),
+        operating_window_start=start,
+        operating_window_end=end,
+        bot_trustee_ids=_parse_id_list("BOT_TRUSTEE_IDS", _get("BOT_TRUSTEE_IDS")),
+        bot_security_ids=_parse_id_list("BOT_SECURITY_IDS", _get("BOT_SECURITY_IDS")),
+    )
+
+
+def _parse_id_list(field_name: str, raw: str | None) -> tuple[int, ...]:
+    if not raw:
+        return ()
+    ids = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            ids.append(int(chunk))
+        except ValueError as exc:
+            raise ConfigError(f"{field_name} entries must be integers, got {chunk!r}") from exc
+    return tuple(ids)
+
+
+# --------------------------------------------------------------------------
+# Camera / zone config (config/cameras.yaml)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CameraZone:
+    fence: tuple[Point, ...] | None
+    far_side: str | None  # "left" | "right"
+    depth_cutoff: float
+    ignore: tuple[tuple[Point, ...], ...]
+
+
+@dataclass(frozen=True)
+class Camera:
+    id: str
+    aliases: tuple[str, ...]
+    order: int | None
+    zone: CameraZone
+    threshold_overrides: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class CamerasConfig:
+    cameras: tuple[Camera, ...]
+    unknown_camera_id: str
+
+    def by_id(self, camera_id: str) -> Camera | None:
+        return next((c for c in self.cameras if c.id == camera_id), None)
+
+    def resolve_alias(self, text: str) -> Camera | None:
+        needle = text.strip().lower()
+        for camera in self.cameras:
+            if camera.id.lower() == needle:
+                return camera
+            if any(alias.lower() == needle for alias in camera.aliases):
+                return camera
+        return None
+
+    def ordered(self) -> list[Camera]:
+        return sorted((c for c in self.cameras if c.order is not None), key=lambda c: c.order)
+
+
+def load_cameras_config(path: str | Path) -> CamerasConfig:
+    path = Path(path)
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except FileNotFoundError as exc:
+        raise ConfigError(f"Cameras config not found: {path}") from exc
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"Cameras config is not valid YAML: {path}: {exc}") from exc
+
+    unknown_camera_id = raw.get("unknown_camera_id", "unknown")
+    entries = raw.get("cameras") or []
+    if not isinstance(entries, list):
+        raise ConfigError("cameras.yaml: 'cameras' must be a list")
+
+    cameras: list[Camera] = []
+    seen_ids: set[str] = set()
+    seen_aliases: dict[str, str] = {}
+    seen_orders: dict[int, str] = {}
+
+    for entry in entries:
+        if not isinstance(entry, dict) or "id" not in entry:
+            raise ConfigError(f"cameras.yaml: each camera entry needs an 'id': {entry!r}")
+        camera_id = str(entry["id"])
+        if camera_id in seen_ids:
+            raise ConfigError(f"cameras.yaml: duplicate camera id {camera_id!r}")
+        seen_ids.add(camera_id)
+
+        aliases = tuple(str(a) for a in entry.get("aliases") or [])
+        for alias in (camera_id, *aliases):
+            key = alias.lower()
+            if key in seen_aliases and seen_aliases[key] != camera_id:
+                raise ConfigError(
+                    f"cameras.yaml: alias {alias!r} claimed by both "
+                    f"{seen_aliases[key]!r} and {camera_id!r}"
+                )
+            seen_aliases[key] = camera_id
+
+        order = entry.get("order")
+        if order is not None:
+            order = int(order)
+            if order < 0:
+                raise ConfigError(f"cameras.yaml: {camera_id!r} order must be >= 0")
+            if order in seen_orders:
+                raise ConfigError(
+                    f"cameras.yaml: order {order} used by both "
+                    f"{seen_orders[order]!r} and {camera_id!r}"
+                )
+            seen_orders[order] = camera_id
+
+        zone = _parse_zone(camera_id, entry)
+
+        overrides = entry.get("threshold_overrides") or {}
+        if not isinstance(overrides, dict):
+            raise ConfigError(f"cameras.yaml: {camera_id!r} threshold_overrides must be a mapping")
+        _validate_numeric_tree(overrides, context=f"cameras.yaml:{camera_id}.threshold_overrides")
+
+        cameras.append(
+            Camera(
+                id=camera_id,
+                aliases=aliases,
+                order=order,
+                zone=zone,
+                threshold_overrides=overrides,
+            )
+        )
+
+    return CamerasConfig(cameras=tuple(cameras), unknown_camera_id=str(unknown_camera_id))
+
+
+def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
+    raw_fence = entry.get("fence")
+    fence: tuple[Point, ...] | None = None
+    if raw_fence is not None:
+        if not isinstance(raw_fence, list) or len(raw_fence) < 2:
+            raise ConfigError(f"cameras.yaml: {camera_id!r} fence needs >= 2 points")
+        fence = tuple(_parse_point(camera_id, "fence", p) for p in raw_fence)
+
+    far_side = entry.get("far_side")
+    if far_side is not None:
+        far_side = str(far_side).lower()
+        if far_side not in ("left", "right"):
+            raise ConfigError(
+                f"cameras.yaml: {camera_id!r} far_side must be 'left' or 'right', got {far_side!r}"
+            )
+    if fence is not None and far_side is None:
+        raise ConfigError(f"cameras.yaml: {camera_id!r} has a fence but no far_side")
+
+    depth_cutoff = entry.get("depth_cutoff", 0.0)
+    depth_cutoff = float(depth_cutoff)
+    if not 0.0 <= depth_cutoff <= 1.0:
+        raise ConfigError(f"cameras.yaml: {camera_id!r} depth_cutoff must be in [0, 1]")
+
+    raw_ignore = entry.get("ignore") or []
+    if not isinstance(raw_ignore, list):
+        raise ConfigError(f"cameras.yaml: {camera_id!r} ignore must be a list of polygons")
+    ignore = tuple(
+        tuple(_parse_point(camera_id, "ignore", p) for p in polygon)
+        for polygon in raw_ignore
+    )
+    for polygon in ignore:
+        if len(polygon) < 3:
+            raise ConfigError(f"cameras.yaml: {camera_id!r} ignore polygons need >= 3 points")
+
+    return CameraZone(fence=fence, far_side=far_side, depth_cutoff=depth_cutoff, ignore=ignore)
+
+
+def _parse_point(camera_id: str, field_name: str, point: Any) -> Point:
+    if not isinstance(point, (list, tuple)) or len(point) != 2:
+        raise ConfigError(
+            f"cameras.yaml: {camera_id!r} {field_name} point must be [x, y]: {point!r}"
+        )
+    x, y = float(point[0]), float(point[1])
+    if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+        raise ConfigError(
+            f"cameras.yaml: {camera_id!r} {field_name} point out of [0,1] range: {point!r}"
+        )
+    return (x, y)
+
+
+# --------------------------------------------------------------------------
+# Threshold config (config/thresholds.yaml)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ThresholdsConfig:
+    motion: Mapping[str, Any]
+    classification: Mapping[str, Any]
+
+    def motion_fingerprint(self) -> str:
+        """Stable hash of motion-extraction settings only.
+
+        Used to decide whether cached blob tracks can be reused: classifier-only
+        threshold edits must never change this value.
+        """
+        return _stable_hash(self.motion)
+
+
+def load_thresholds_config(path: str | Path) -> ThresholdsConfig:
+    path = Path(path)
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except FileNotFoundError as exc:
+        raise ConfigError(f"Thresholds config not found: {path}") from exc
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"Thresholds config is not valid YAML: {path}: {exc}") from exc
+
+    motion = raw.get("motion")
+    classification = raw.get("classification")
+    if not isinstance(motion, dict):
+        raise ConfigError("thresholds.yaml: top-level 'motion' section must be a mapping")
+    if not isinstance(classification, dict):
+        raise ConfigError("thresholds.yaml: top-level 'classification' section must be a mapping")
+
+    _validate_numeric_tree(motion, context="thresholds.yaml:motion")
+    _validate_numeric_tree(classification, context="thresholds.yaml:classification")
+
+    return ThresholdsConfig(motion=motion, classification=classification)
+
+
+def _validate_numeric_tree(data: Mapping[str, Any], *, context: str) -> None:
+    """Recursively require every leaf value to be int/float/bool, so a typo
+    (e.g. a string where a threshold number belongs) fails fast instead of
+    breaking arithmetic deep inside the classifier."""
+    for key, value in data.items():
+        path = f"{context}.{key}"
+        if isinstance(value, dict):
+            _validate_numeric_tree(value, context=path)
+        elif not isinstance(value, (int, float, bool)):
+            raise ConfigError(f"{path}: expected a number, got {value!r} ({type(value).__name__})")
+
+
+def _stable_hash(data: Any) -> str:
+    encoded = json.dumps(data, sort_keys=True, default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()[:16]

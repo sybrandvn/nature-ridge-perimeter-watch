@@ -1,0 +1,9 @@
+# Per-camera fence geometry and overrides.
+#
+# `order` (fence position), `fence`, `far_side`, `depth_cutoff`, and `ignore` are
+# discovered/filled in by scripts/infer_camera_order.py (Phase 0b) and the browser
+# zone editor (Phase 2) — an empty entry with just `id`/`aliases` is valid and means
+# "not yet configured", which classify.py treats as ambiguous rather than a crash.
+unknown_camera_id: "unknown"
+
+cameras: []

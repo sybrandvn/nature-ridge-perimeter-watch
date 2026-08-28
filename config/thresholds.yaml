@@ -1,0 +1,33 @@
+# Global defaults. classify.py never hardcodes a number — everything tunable lives here.
+# backtester.py sweeps/compares alternate copies of this file; never edit thresholds
+# in a way that also changes `motion` unless you intend to invalidate the feature cache.
+
+motion:
+  mog2:
+    history: 500
+    var_threshold: 16
+    detect_shadows: true
+  morphology:
+    open_kernel: 3
+    close_kernel: 5
+  blob:
+    min_area_fraction: 0.0005
+    row_scale_reference_row: 1.0
+  learning_rate: -1
+
+classification:
+  saturation:
+    max_ratio: 0.35
+  aspect_ratio:
+    upright_min: 1.6
+    crawl_max: 0.8
+  solidity:
+    min_coherent: 0.3
+  far_side_pixel_fraction:
+    alert_min: 0.5
+  dwell:
+    min_seconds: 1.5
+  jitter:
+    max_centroid_jitter: 0.15
+  priority:
+    escalate_score_min: 2

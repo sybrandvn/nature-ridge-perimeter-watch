@@ -27,6 +27,9 @@ cameras:
   # confirmed same spot as cam01/cam01a. Treat as a distinct position until checked.
   - id: cam01a
     aliases: ["MOTIONVIEWER 1A"]
+  # Confirmed by the user 2026-08-28: faces the OPPOSITE way to most perimeter
+  # cameras -- open ground in frame is the interior side, not exterior. Get
+  # far_side right (or double-check it) when a fence polyline is added here.
   - id: cam01b
     aliases: ["MOTIONVIEWER 1B"]
   - id: cam02
@@ -76,8 +79,17 @@ cameras:
     aliases: ["MOTIONVIEWER 13"]
   - id: cam14
     aliases: ["MOTIONVIEWER 14"]
+  # Orientation unresolved, and decided not worth resolving for now (2026-08-28):
+  # camera points down at a fence post/insulator, foliage both sides, no guard
+  # ever seen in ~1.5 years of sampled clips -- user says the spot likely isn't
+  # walkable anyway, and the camera itself is loose/moves in the wind. Leave
+  # fence/far_side unset; classify.py's existing "no fence -> ambiguous"
+  # fallback (src/zones.py) already makes this a monitor-for-humans-only
+  # camera without geometry. Revisit only if a person actually shows up on it.
   - id: cam15
     aliases: ["MOTIONVIEWER 15"]
+  # Confirmed by the user 2026-08-28: reversed, same as cam01b -- open ground
+  # in frame is the interior side, not exterior.
   - id: cam16
     aliases: ["MOTIONVIEWER 16"]
 

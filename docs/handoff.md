@@ -91,8 +91,16 @@ Once ~150 clips are labelled, the remaining Phase 0c steps are still blocked in 
 - **No migration framework.** Schema changes mean: export labels to JSONL, delete the DB,
   reimport. Once the user has hand-labelled 150 clips, that data is expensive — get the label
   export path working before any schema change touches the `labels` table.
-- **`cam01`/`cam01a`/`cam01b` face the opposite way** to the other perimeter cameras: the open
-  ground in frame is the interior, not outside. This caused a misidentified incident once.
+- **`cam01b`/`cam16` face the opposite way** to the other perimeter cameras: the open ground in
+  frame is the interior, not outside. (Corrected 2026-08-28: `cam01`/`cam01a` actually face the
+  *same* way as most cameras — the earlier note blaming the whole cam01 family was wrong.) This
+  caused a misidentified incident once.
+- **`cam15` is deliberately left without `fence`/`far_side`.** It's pointed down at a fence post
+  close-up, foliage both sides, camera reportedly loose/moving in the wind — no guard has ever
+  shown up in ~1.5 years of sampled clips and the spot likely isn't walkable. `src/zones.py`'s
+  existing no-fence-means-`ambiguous` fallback already makes it monitor-for-humans-only with no
+  geometry; that's fine as-is. Don't spend more time trying to resolve its orientation unless a
+  person actually appears on it.
 
 ## Known open items, not yet scheduled
 

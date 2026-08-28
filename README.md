@@ -109,16 +109,24 @@ the pipeline gets built.
      mistakenly cited `21491.mp4`, from the wrong night entirely, then mistakenly read the faint
      light in `21518.mp4` as the intruder — both corrected; the real incident clip is `cam06`'s
      `21520.mp4`.)
-   - **2024-03-16 `cam04`/`cam13` re-trigger night — NOT confirmed as a probe**: no volume spike,
-     but `cam04` re-triggered 7 times between 19:33 and 03:47 the next morning (with `cam13`
-     re-triggering 3 times nearby in time, plus single triggers on `cam12`/`cam07`) — a timing
-     pattern that looked like dwelling near one point on the fence rather than a patrol sweep.
-     **Visual review disagreed**: first/middle/last frames sampled across 4 different `cam04`
-     episodes that night show no person — just an empty fence/foliage scene with a small bright
-     green glow near the lens in the earliest frames, i.e. the IR-insect false-positive pattern
-     the plan calls out, not an intruder. Timing alone isn't sufficient evidence here; treat this
-     night as `environment`/`unknown` rather than a probe candidate. If you recall which camera or
-     date actually caught either of the 2 known probes, that would let us re-target this.
+   - **2024-03-16 `cam04`/`cam13`/`cam12`/`cam07` re-trigger night — retracted, not a probe**:
+     `cam04` re-triggered 7 times between 19:33 and 03:47 the next morning, with `cam13`
+     re-triggering 3 times, plus single triggers on `cam12`/`cam07` — looked like a probe timing
+     pattern. **Visual review disagreed** across all 4 cameras (8-16 sampled frames each, all 24
+     clips): no person in any of them, just fence/foliage scenes with a small bright green blob
+     recurring near the lens on `cam12`/`cam13`/`cam07`, i.e. the IR-insect false-positive pattern
+     the plan calls out (probably an insect-heavy night after rain), not an intruder.
+   - **Probe, 2024-03-14/15 (local) — data-confirmed pattern, visual confirmation inconclusive**:
+     `cam10` alone re-triggered 9 separate times over ~4 hours, 20:44 local to 00:44 local the
+     next morning (message ids `4030`/`4031`, `4034`-`4049`), with `cam12` overlapping only once
+     right at the start (`4032`/`4033`) — a much cleaner isolated single-camera dwelling pattern
+     than the retracted 2024-03-16 night. The scene is a floodlit pole/ladder-style fence
+     structure with dense foliage; there's an ambiguous grey shape at the bottom-left edge of
+     frame in several `cam10/4048.mp4`/`cam10/4049.mp4` frames that could be a partially-cropped
+     crouched figure, but the footage is too low-resolution/noisy at 320x240 to call it
+     definitively — could also be foliage/shadow texture. Worth a direct look at
+     `data/history/cam10/4048.mp4` and `4049.mp4` yourself; timing pattern alone puts this as the
+     leading probe candidate.
    - **Animal, 2026-01-06**: tree fell over the fence during the day (cameras don't run then); an
      animal was seen climbing it "while still light out". `cam05`'s very first alert of the night
      fired at 18:21 SAST, right at dusk startup — the earliest trigger of any camera that

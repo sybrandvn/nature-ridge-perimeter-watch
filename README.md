@@ -91,19 +91,24 @@ the pipeline gets built.
    recollections against clip timing patterns — an isolated single-camera trigger reads as a
    probe/animal, a dense multi-camera sweep in a tight window reads as a guard patrol:
 
-   - **Crawl incident, 2026-07-21 — visually confirmed**: nightly clip volume jumped from a
-     30-day average of 12.6 to 28.65 (2.3x, sustained) starting this night, unlike every other
-     spike day in the history which reverts the next night. `cam01b` alone triggered at
-     20:11-20:16 UTC (message ids `21517`/`21518`), then a dense multi-camera guard sweep
-     followed at 20:31-21:41 UTC across cam06, cam09, cam10, cam01b, cam05, cam04, cam07, cam03
-     (cam01b's own clips in that later window, `21525`/`21526` and `21539`/`21540`, are the guard
-     sweep passing back through, not the incident itself). **The incident clip is
-     `data/history/cam01b/21518.mp4`** (the "Timeout" continuation of the same alert as
-     `21517.mp4`) — a person is visible on the right edge of frame near the treeline, lit by a
-     blue light, around frame 4 of 25 (~0.8s in); they're gone from frame by frame 8. Easy to
-     miss on a quick scrub since it's brief and at the frame edge. (Earlier I pointed at
-     `21491.mp4` by mistake — that clip is actually from the night before, 2026-07-20, unrelated
-     baseline activity, not the incident.)
+   - **Crawl incident, 2026-07-21 — visually confirmed on `cam06`**: nightly clip volume jumped
+     from a 30-day average of 12.6 to 28.65 (2.3x, sustained) starting this night, unlike every
+     other spike day in the history which reverts the next night. **The incident is
+     `data/history/cam06/21520.mp4`** (paired with the "Initial" alert `21519.mp4`), 20:31-20:36
+     UTC — a low, crouched silhouette is visible at the base of the IR-lit diagonal fence rail,
+     clearest from around frame 10 onward. That sighting is what kicks off the wider response: a
+     dense multi-camera sweep follows across cam06, cam09, cam10, cam01b, cam05, cam04, cam07,
+     cam03 through 21:41 UTC as guards react. `cam01b`'s earlier isolated trigger at 20:11-20:16
+     UTC (message ids `21517`/`21518`) turned out to be unrelated ambient activity, not the
+     incident — see below. **Important orientation caveat**: unlike the other perimeter cameras,
+     `cam01`/`cam01a`/`cam01b` face the opposite way — the open grassy area in frame is the
+     complex/interior side, not outside the fence — which is what led to the initial
+     misidentification. Frame-by-frame review of `21517.mp4`/`21518.mp4` shows only the ambient
+     grass/fence scene, a faint distant light of unclear origin, and then a torch flooding the
+     frame from the guard/interior side — no intruder visible there. (Earlier passes here
+     mistakenly cited `21491.mp4`, from the wrong night entirely, then mistakenly read the faint
+     light in `21518.mp4` as the intruder — both corrected; the real incident clip is `cam06`'s
+     `21520.mp4`.)
    - **2024-03-16 `cam04`/`cam13` re-trigger night — NOT confirmed as a probe**: no volume spike,
      but `cam04` re-triggered 7 times between 19:33 and 03:47 the next morning (with `cam13`
      re-triggering 3 times nearby in time, plus single triggers on `cam12`/`cam07`) — a timing

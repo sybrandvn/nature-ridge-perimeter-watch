@@ -52,7 +52,8 @@ def _resolve_camera(caption: str, cameras: CamerasConfig) -> str:
     lowered = caption.lower()
     for camera in cameras.cameras:
         for alias in (camera.id, *camera.aliases):
-            if re.search(re.escape(alias.lower()), lowered):
+            # Word boundaries prevent e.g. alias "camera 1" matching inside "camera 10".
+            if re.search(rf"\b{re.escape(alias.lower())}\b", lowered):
                 return camera.id
     return cameras.unknown_camera_id
 

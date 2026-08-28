@@ -42,6 +42,16 @@ def test_clip_with_no_caption_is_unknown():
     assert parsed.camera_id == "unknown"
 
 
+def test_clip_alias_does_not_match_longer_numeric_suffix():
+    cameras = _cameras(("cam01", ("MOTIONVIEWER 1",)), ("cam10", ("MOTIONVIEWER 10",)))
+    parsed = parse_message(
+        text="Cam Alert: NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 20-11-23 18:05:42",
+        has_media=True,
+        cameras=cameras,
+    )
+    assert parsed.camera_id == "cam10"
+
+
 def test_battery_dead_keyword_detected():
     cameras = _cameras(("cam_north", ("North Gate",)))
     parsed = parse_message(

@@ -9,6 +9,11 @@ tested, manually-invokable functions only.
 - This round: camera-order discovery, CV spike, backtester, stub alert modules. No `main.py`
   service loop, no Dockerfile/compose, no delivery outbox.
 - Two gates: camera-order inference, then CV feasibility. Either failing changes the plan.
+- **Gate 1 resolved without inference (2026-08-28):** the user decided camera order is just
+  numerical/alphabetical by id (cam01, cam01a, cam01b, cam02, ... cam16) — no reason to expect the
+  physical fence order differs. `config/cameras.yaml` `order` field set directly from that sort.
+  `scripts/infer_camera_order.py` (steps 3-9 below) is no longer on the critical path; kept for
+  optional later validation, not required before Phase 1.
 - Labeling target: stratified ~300-500 clips, oversampling animal/incident.
 - Zone editor: browser UI (no reliable WSL GUI assumed).
 - Cameras record night only, ~18:00-06:00 (configurable). All footage is IR/greyscale.
@@ -36,9 +41,9 @@ an ambiguous sighting, so it's kept out of `unknown` too.
 ## Crawl / shape policy
 Bounding-box h/w for a crawling person (~0.4-0.7) overlaps large animals (~0.5-1.2). Classical CV
 cannot separate them, and a 3-second clip is too short for gait periodicity. Therefore:
-- Far-side motion alerts on its own merit.
-- Shape and trajectory may only escalate to `far_side_priority`. Nothing about blob shape may
-  downgrade or suppress a far-side alert.
+- Outside motion alerts on its own merit.
+- Shape and trajectory may only escalate to `outside_priority`. Nothing about blob shape may
+  downgrade or suppress an outside alert.
 - Escalation triggers: upright aspect, low-and-slow deliberate movement, dwell/lingering,
   fence-line crossing, repeated re-triggers on one camera.
 - Accepted cost: some animal sightings page as priority. At ~3 animal events per year, preferable
@@ -47,7 +52,7 @@ cannot separate them, and a 3-second clip is too short for gait periodicity. The
 ## Sequence work (downgraded)
 Probe-sequence detection is retrospective analysis only, not a live escalation trigger — the
 evidence for multi-camera probe signatures is thin (n=2, and only events that were noticed). Its
-real value is discovering far-side clusters in history that nobody flagged at the time. Patrol
+real value is discovering outside clusters in history that nobody flagged at the time. Patrol
 sequences remain load-bearing, because they drive camera ordering and patrol analytics.
 
 ## Night-only consequences
@@ -62,15 +67,15 @@ sequences remain load-bearing, because they drive camera ordering and patrol ana
 - Silence outside the operating window is normal and never a camera fault.
 
 ## Geometry model
-Per camera: `fence` (ordered normalised polyline), `far_side` (`left`/`right`), `depth_cutoff`
+Per camera: `fence` (ordered normalised polyline), `outside` (`left`/`right`), `depth_cutoff`
 (row beyond which sides are unresolvable → forced `ambiguous`), `ignore` (optional polygons for
 chronic false triggers). One polyline cannot leave gaps or overlaps the way two hand-drawn
 polygons can, and halves the drawing work. Side assignment uses the fraction of blob foreground
 pixels past the line, so straddling blobs degrade gracefully.
 
 Camera mounts can shift over time (knocked, re-aimed, re-mounted), which moves the fence line in
-frame. A single fixed polyline per camera can't survive that, so `fence`/`far_side`/`depth_cutoff`
-need to become a dated history (e.g. a list of `{effective_from, fence, far_side, depth_cutoff}`
+frame. A single fixed polyline per camera can't survive that, so `fence`/`outside`/`depth_cutoff`
+need to become a dated history (e.g. a list of `{effective_from, fence, outside, depth_cutoff}`
 entries per camera) rather than one static value, with lookups picking the entry whose
 `effective_from` is the latest one at or before a clip's timestamp. Not needed for the Phase 0c
 spike (hand-picked, single snapshot in time), but required before Phase 2's zone editor and
@@ -81,7 +86,7 @@ live classification are trusted long-term.
 - Blob area is depth-dependent — a noise floor scaling with image row, never an absolute
   person/animal cutoff.
 - Confidence degrades toward the vanishing point; `depth_cutoff` makes that explicit.
-- A flashlight beam aimed down or across the fence lands on the far side easily. Saturation, low
+- A flashlight beam aimed down or across the fence lands outside the fence easily. Saturation, low
   solidity, and centroid jitter are the discriminators, and the spike must try to falsify this.
 
 ## What the backtester actually optimises
@@ -102,7 +107,12 @@ ship with raw support counts and are indicative only.
    first/last seen, and nightly hour distribution. Flags caption shapes the parser did not
    recognise.
 
-**0b — Camera order inference (gate 1)**
+**0b — Camera order inference (gate 1) — [resolved without inference, see Scope decisions]**
+
+Steps 3-9 below describe the originally-planned inference approach. Superseded 2026-08-28: the
+user set `order` directly as the numerical/alphabetical sort of camera ids, so none of this ran.
+Left in place only in case the assumption ever needs checking against real transition data.
+
 3. Segment clips into patrol passes: consecutive clips with inter-clip gaps under a threshold,
    keeping passes touching ≥3 distinct cameras. No classification needed — a burst across several
    cameras is structurally a patrol.
@@ -148,11 +158,11 @@ ship with raw support counts and are indicative only.
     frames — three separate attempts tracked a bright diagonal cable rather than the fence. What
     worked: hand the user a clean upscaled reference frame, have them trace the fence in red in
     any paint tool, then colour-threshold the red pixels back out to recover the polyline
-    exactly. `far_side` must be recomputed with `src.zones.side_name` every time the points
+    exactly. `outside` must be recomputed with `src.zones.side_name` every time the points
     change, since it is relative to the polyline's direction, not to absolute screen position.
 12. [done] Hand-label ~150 clips. 165 labelled across all 18 cameras (target was
     ~150): guard 111, environment 22, startup 11, unknown 9, incident 8, animal 4.
-13. [done] Extract candidate features to a flat CSV: far-side pixel fraction, aspect ratio, solidity,
+13. [done] Extract candidate features to a flat CSV: outside pixel fraction, aspect ratio, solidity,
     saturation, green-light ratio (site-specific: the guard's flashlight reads as a
     distinct green — added beyond the original feature list), green-light flicker (std
     deviation of the whole-frame green ratio across the clip -- the guard sweeps the beam
@@ -164,7 +174,7 @@ ship with raw support counts and are indicative only.
     produce in the first ~2 seconds and hid a porcupine entirely on cam15/15454.
 14. [done, pending user sign-off] Decision gate — does any threshold combination separate guard and
     environment from animal/incident at usable precision? Explicitly count flashlight and IR-insect
-    clips landing on the far side. Written finding: `docs/gate2_separability_finding.md`.
+    clips landing outside the fence. Written finding: `docs/gate2_separability_finding.md`.
     Headline: the strongest result is `green_light_ratio` combined with `green_light_flicker`
     (temporal variance, catching a swept beam a single frame would miss) as a guard
     identifier — fires on 61% of guard clips, 2% of non-guard, and 0/12 animal+incident.
@@ -172,9 +182,9 @@ ship with raw support counts and are indicative only.
     low-crawling subjects from upright ones in the right direction (animal/incident aspect ~0.75 vs
     guard/environment ~1.07), and excluding green-lit clips cuts the false-positive rate from 40% to
     24% at unchanged recall. Absolute precision is still only 0.22 at 0.75 recall against an 8.3%
-    base rate, on just 12 positive clips — usable as an escalation signal on top of far-side
+    base rate, on just 12 positive clips — usable as an escalation signal on top of outside
     geometry (the design this plan specifies), not as a standalone classifier. Both predicted
-    failure modes confirmed: 58% of guard clips on fenced cameras land far-side (64% of those
+    failure modes confirmed: 58% of guard clips on fenced cameras land outside (64% of those
     carrying a light signal), and 55% of environment clips match the IR-insect signature. If
     separation fails, stop and revisit scope (earlier ML, IR/brightness handling, multi-frame
     reference modelling) rather than proceeding — flagged for the user to confirm the
@@ -212,7 +222,7 @@ ship with raw support counts and are indicative only.
     side, drag the depth cutoff, add ignore polygons, write `cameras.yaml` atomically. Saves a new
     dated fence version rather than overwriting, so a re-aimed camera keeps its old geometry valid
     for clips predating the change (see Geometry model).
-25. `classify.py` rule engine producing `guard_side`, `far_side_alert`, `far_side_priority`,
+25. `classify.py` rule engine producing `guard_side`, `outside_alert`, `outside_priority`,
     `ambiguous`, each with reason codes and contributing thresholds. Implements fail-safe
     escalation. Unknown camera, missing fence line, above depth cutoff, or undecodable video
     resolve to `ambiguous`. Typed interface for a future ML resolver, unimplemented.
@@ -220,14 +230,14 @@ ship with raw support counts and are indicative only.
 ### Phase 3: Labels, backtester, retrospective sequences
 26. `scripts/label.py`: resumable, prints the clip path by default, optional configured player,
     single-key labelling, skip and correction support.
-27. `src/sequence.py` extended for analysis: patrol detection (near-side progression along the
+27. `src/sequence.py` extended for analysis: patrol detection (inside progression along the
     confirmed order, cadence, coverage gaps) as a supported feature, plus a retrospective probe
-    report listing far-side clusters across adjacent cameras in history for manual review. The
+    report listing outside clusters across adjacent cameras in history for manual review. The
     latter is exploratory output, not a live trigger.
 28. `src/backtester.py`: immutable runs recording timestamp, config snapshot/hash, and Git
     revision when available. Reuses cached blob tracks, re-derives geometry and classification,
     never contacts Telegram.
-29. Reports to `data/reports/{run_id}/` as console text plus JSON: cross-tab; far-side alert
+29. Reports to `data/reports/{run_id}/` as console text plus JSON: cross-tab; outside alert
     precision/recall/F1 (animal+incident positive, guard+environment negative); priority metrics;
     projected false pages per night as the headline number; ambiguous/review-workload rate;
     per-camera breakdown; misclassified IDs with paths, reasons, and full feature vectors.
@@ -264,18 +274,18 @@ subjects (POPIA applies in South Africa). Worth a brief word with trustees on re
 access before the bot ships.
 
 ## Candidate refinements (not yet built, revisit with evidence)
-- **Dual fence lines (near/far band, not just one side-assignment line)**: on some cameras the
+- **Dual fence lines (inside/outside band, not just one side-assignment line)**: on some cameras the
   guard passes close beside/under the fence, close enough that a single polyline's side test could
-  misclassify that proximity as far-side. Idea (2026-08-28, user): draw two polylines bounding the
-  fence structure itself (its near and far edge) instead of one, so a blob has to be genuinely
-  beyond the far line — not just past the single line — to score as a crossing. Deliberately not
+  misclassify that proximity as outside. Idea (2026-08-28, user): draw two polylines bounding the
+  fence structure itself (its inside and outside edge) instead of one, so a blob has to be genuinely
+  beyond the outside line — not just past the single line — to score as a crossing. Deliberately not
   building this now: doubles the per-camera drawing/config work for a problem we haven't observed
   yet. Revisit only if backtesting turns up false positives that trace back to near-fence guard
   proximity rather than an actual crossing.
 - **Per-camera normal-footprint model as a classification input**: idea (2026-08-28, user) —
   build a per-camera positional heatmap from historical `guard`-labelled clips (where the blob
   centroid/track usually falls), then flag detections that fall well outside that usual footprint
-  as an anomaly signal, even on the near side. Distinct from the `activity heatmap` already listed
+  as an anomaly signal, even on the inside. Distinct from the `activity heatmap` already listed
   under Explicitly deferred (Phase 5), which is a trustee-bot analytics *display* feature — this
   one would feed `classify.py`/escalation directly, as a spatial prior rather than a dashboard.
   Caveats the user flagged: flashlight glare/lighting changes could look like positional shift
@@ -303,7 +313,7 @@ threshold sets, YOLO/ONNX, activity heatmap, trend analytics, probe-sequence liv
   `src/backfill.py`, `src/sequence.py`, `src/backtester.py`
 - `src/telegram_alert.py`, `src/ntfy_alert.py` — functions only this round
 - `src/bot.py` — Phase 5
-- `config/cameras.yaml` (dated fence polyline history, far side, depth cutoff, ignore regions,
+- `config/cameras.yaml` (dated fence polyline history, outside side, depth cutoff, ignore regions,
   confirmed order, operating window), `config/thresholds.yaml`
 - `tests/`, `README.md`, `pyproject.toml`, `uv.lock`
 
@@ -319,8 +329,8 @@ threshold sets, YOLO/ONNX, activity heatmap, trend analytics, probe-sequence liv
 5. Unit tests: polyline side assignment with straddling blobs, depth cutoff, ignore regions,
    config rejection, caption and health-notification fixtures, classifier boundaries,
    zero-denominator metrics.
-6. Fail-safe test: a synthetic wide, low, slow far-side blob must never classify as `guard_side`
-   or drop below `far_side_alert`.
+6. Fail-safe test: a synthetic wide, low, slow outside blob must never classify as `guard_side`
+   or drop below `outside_alert`.
 7. Synthetic-video test — blob tracks byte-identical across runs.
 8. Cache test — polyline or threshold edits trigger zero OpenCV extractions; MOG2 or
    `EXTRACTOR_VERSION` changes invalidate.

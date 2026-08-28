@@ -1,29 +1,44 @@
 # Per-camera fence geometry and overrides.
 #
-# `order` (fence position), `fence`, `far_side`, `depth_cutoff`, and `ignore` are
-# discovered/filled in by scripts/infer_camera_order.py (Phase 0b) and the browser
-# zone editor (Phase 2) — an empty entry with just `id`/`aliases` is valid and means
-# "not yet configured", which classify.py treats as ambiguous rather than a crash.
+# `order` (fence position): 2026-08-28, user decided against running gate 1's
+# inference (`scripts/infer_camera_order.py`) -- no reason to expect the physical
+# fence order differs from the numerical/alphabetical camera-id order, so `order`
+# is just that sort (cam01=0, cam01a=1, cam01b=2, cam02=3, ... cam16=17). Gate 1
+# is therefore resolved without inference; `infer_camera_order.py` is kept for
+# reference/validation but is no longer on the critical path.
 #
-# `far_side` (`left`/`right`) is always relative to the directed polyline (first
+# `fence`, `outside`, `depth_cutoff`, and `ignore` are hand-drawn (Phase 0c) and
+# will later be revised by the browser zone editor (Phase 2) — an empty entry with
+# just `id`/`aliases`/`order` is valid and means "not yet configured", which
+# classify.py treats as ambiguous rather than a crash.
+#
+# `outside` (`left`/`right`) is always relative to the directed polyline (first
 # point -> second point) in that camera's own frame, not a compass direction, since
 # each camera's mounting angle differs. Per the user, the exterior side of the
-# fence (what `far_side` picks out) is compass south for this property.
+# fence (what `outside` picks out) is compass south for this property.
+#
+# 2026-08-28: flipped left<->right for every camera except cam08 (whose points
+# are ordered bottom-to-top, opposite of everyone else, and was independently
+# hand-confirmed: "vegetation/outside is to the right"). Open ground/cleared
+# area in frame is the INTERIOR (patrolled) side, not the exterior -- the
+# earlier assumption had it backwards for the majority.
 unknown_camera_id: "unknown"
 
 # Discovered from real backfilled captions (format: "Cam Alert*: ... NATURE RIDGE
-# COMPLEX, MOTIONVIEWER <n> @ <date> <time>"). `order`/`fence`/`far_side`/
-# `depth_cutoff`/`ignore` are still unset — filled in by scripts/infer_camera_order.py
-# (Phase 0b) and the browser zone editor (Phase 2).
+# COMPLEX, MOTIONVIEWER <n> @ <date> <time>"). `order` is numerical/alphabetical
+# by id (see note above); `fence`/`outside`/`depth_cutoff`/`ignore` are still
+# unset for cameras with no spike/label geometry yet, filled in by the browser
+# zone editor (Phase 2).
 cameras:
   - id: cam01
     aliases: ["MOTIONVIEWER 1"]
+    order: 0
     # User hand-traced the fence in red over an extracted reference frame;
     # points extracted by color-thresholding the red pixels back out (5
     # y-bands, top to bottom). Open ground is to the left walking first
     # point to last, same orientation as cam05/cam06.
     fence: [[0.4111, 0.1656], [0.3436, 0.374], [0.2748, 0.5823], [0.2059, 0.7906], [0.1381, 0.999]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   # cam01a: confirmed by the user to be mounted at the exact same physical spot as
   # cam01 -- a straight replacement, not a second camera. Matches the data: cam01's
@@ -34,136 +49,158 @@ cameras:
   # confirmed same spot as cam01/cam01a. Treat as a distinct position until checked.
   - id: cam01a
     aliases: ["MOTIONVIEWER 1A"]
+    order: 1
     # Same red-trace/color-threshold method as cam01 (same physical mount).
     fence: [[0.3975, 0.1823], [0.3285, 0.3844], [0.2582, 0.5865], [0.188, 0.7885], [0.1191, 0.9906]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   # Confirmed by the user 2026-08-28: faces the OPPOSITE way to most perimeter
   # cameras -- open ground in frame is the interior side, not exterior.
   - id: cam01b
     aliases: ["MOTIONVIEWER 1B"]
+    order: 2
     # Red-trace/color-threshold method. Reversed mount (see comment above): the
     # polyline runs the opposite diagonal (x increases with y), so open ground
-    # -- the interior side here -- comes out as far_side: right, not left.
+    # -- the interior side here -- comes out as outside: left, not right.
     # Usually illuminated at night by a yard spotlight, same as cam16.
     fence: [[0.2479, 0.1385], [0.3038, 0.3536], [0.3609, 0.5688], [0.4181, 0.7839], [0.4744, 0.999]]
-    far_side: right
+    outside: left
     depth_cutoff: 0.05
   - id: cam02
     aliases: ["MOTIONVIEWER 2"]
+    order: 3
     # Red-trace/color-threshold method. Open ground to the left, first point to last.
     fence: [[0.4701, 0.1469], [0.3906, 0.3599], [0.3095, 0.5729], [0.2285, 0.7859], [0.1488, 0.999]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam03
     aliases: ["MOTIONVIEWER 3"]
+    order: 4
     # Red-trace/color-threshold method, on a CLAHE-brightened frame (original
     # was too dark to trace confidently). Open ground to the left.
     fence: [[0.4908, 0.1354], [0.3841, 0.3505], [0.2755, 0.5656], [0.167, 0.7807], [0.0606, 0.9958]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam04
     aliases: ["MOTIONVIEWER 4"]
+    order: 5
     # Red-trace/color-threshold method. Open ground to the left, first point to last.
     fence: [[0.4878, 0.0823], [0.3927, 0.3115], [0.2961, 0.5406], [0.1993, 0.7698], [0.1034, 0.999]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam05
     aliases: ["MOTIONVIEWER 5"]
+    order: 6
     # Drawn from data/history/cam05/4800.mp4 (middle frame). User hand-traced
     # the fence in red over the reference frame with Snipping Tool; these 3
     # points are extracted from that red line (color-thresholded, sampled at
     # top/mid/bottom). Open ground is to the left walking first point to last.
     fence: [[0.4717, 0.2365], [0.3099, 0.6177], [0.1484, 0.999]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam06
     aliases: ["MOTIONVIEWER 6"]
+    order: 7
     # Drawn from data/history/cam06/21520.mp4 (crawl incident clip). User
     # hand-traced the fence in red over the reference frame with Snipping
     # Tool; these 3 points are extracted from that red line (color-thresholded,
     # sampled at top/mid/bottom). Open background is to the left walking
     # first point to last.
     fence: [[0.4532, 0.1427], [0.3171, 0.5688], [0.1809, 0.9948]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam07
     aliases: ["MOTIONVIEWER 7"]
+    order: 8
     # Red-trace/color-threshold method. Open ground to the left, first point to last.
     fence: [[0.4502, 0.1698], [0.3626, 0.3763], [0.2736, 0.5828], [0.1846, 0.7893], [0.0973, 0.9958]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam08
     aliases: ["MOTIONVIEWER 8"]
+    order: 9
     # Worked example (see README.md "How to draw a fence polyline"): fence runs
     # diagonally bottom-left to top-middle in frame; vegetation/outside is to
-    # the right of that line walking from the first point to the second.
+    # the right of that line walking from the first point to the second. Points
+    # are ordered bottom-to-top here, opposite of every other camera's
+    # top-to-bottom order, so it's excluded from the 2026-08-28 left/right flip.
     fence: [[0.03, 0.96], [0.47, 0.06]]
-    far_side: right
+    outside: right
     depth_cutoff: 0.05
   - id: cam09
     aliases: ["MOTIONVIEWER 9"]
+    order: 10
     # Drawn from data/history/cam09/11680.mp4, a fresh daylight clip fetched
     # because the original triggers were all at local dusk. Real wire-mesh
     # fence overgrown with vine (both present, not either/or). Open ground
     # to the left, first point to last.
     fence: [[0.4451, 0.0417], [0.3843, 0.2802], [0.3225, 0.5188], [0.2605, 0.7573], [0.1997, 0.9958]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam10
     aliases: ["MOTIONVIEWER 10"]
+    order: 11
     # Red-trace/color-threshold method. Open ground to the left, first point to last.
     fence: [[0.4495, 0.1979], [0.3666, 0.3974], [0.2821, 0.5969], [0.1977, 0.7964], [0.115, 0.9958]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam11
     aliases: ["MOTIONVIEWER 11"]
+    order: 12
     # Red-trace/color-threshold method, on a CLAHE-brightened frame (original
     # was too dark to trace confidently). Open ground to the left.
     fence: [[0.5254, 0.2156], [0.4629, 0.4107], [0.3993, 0.6057], [0.3357, 0.8008], [0.2731, 0.9958]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam12
     aliases: ["MOTIONVIEWER 12"]
+    order: 13
     # Red-trace/color-threshold method. Open ground to the left, first point to last.
     fence: [[0.4646, 0.276], [0.3669, 0.456], [0.2664, 0.6359], [0.1659, 0.8159], [0.0678, 0.9958]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam13
     aliases: ["MOTIONVIEWER 13"]
+    order: 14
     # Red-trace/color-threshold method. Open ground to the left, first point to last.
     fence: [[0.4558, 0.1573], [0.357, 0.3669], [0.2566, 0.5766], [0.1561, 0.7862], [0.0574, 0.9958]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   - id: cam14
     aliases: ["MOTIONVIEWER 14"]
+    order: 15
     # Red-trace/color-threshold method, on a CLAHE-brightened frame (original
     # was too dark to trace confidently). Open ground to the left.
     fence: [[0.477, 0.2344], [0.4114, 0.4255], [0.3444, 0.6167], [0.2774, 0.8078], [0.2115, 0.999]]
-    far_side: left
+    outside: right
     depth_cutoff: 0.05
   # 2026-08-28: user corrected the earlier "orientation unresolved, not worth
   # resolving" call below -- cam15 does have a traceable fence after all (a
   # clean single line on data/history/cam15/15453.mp4, frame index 5; an
   # earlier frame from the same clip looked like an ambiguous corner/end-post
-  # with converging wires, but this one wasn't). Open ground to the left.
+  # with converging wires, but this one wasn't). Also reversed, same as
+  # cam01b/cam16 -- open ground in frame is the interior side, not exterior.
+  # Low-risk to have gotten wrong initially: no cam15 clip has ever shown a
+  # person.
   - id: cam15
     aliases: ["MOTIONVIEWER 15"]
+    order: 16
     fence: [[0.3616, 0.0], [0.4024, 0.2497], [0.4437, 0.4995], [0.485, 0.7492], [0.5257, 0.999]]
-    far_side: left
+    outside: left
     depth_cutoff: 0.05
   # Confirmed by the user 2026-08-28: reversed, same as cam01b -- open ground
   # in frame is the interior side, not exterior. Usually illuminated at night
   # by a yard spotlight, same as cam01b.
   - id: cam16
     aliases: ["MOTIONVIEWER 16"]
+    order: 17
     # Drawn from data/history/cam16/3907.mp4 (an earlier, very short/low-frame
     # clip produced a blocky nearest-neighbour upscale that was too rough to
     # trace; this longer clip upscaled with cubic interpolation instead).
     # Reversed mount: polyline runs the opposite diagonal (x increases with
     # y), so open ground -- the interior side here -- comes out as
-    # far_side: right, not left.
+    # outside: left, not right.
     fence: [[0.5007, 0.1385], [0.5589, 0.3536], [0.618, 0.5688], [0.6771, 0.7839], [0.7355, 0.999]]
-    far_side: right
+    outside: left
     depth_cutoff: 0.05
 

@@ -8,14 +8,16 @@ authoritative; this is the short version of where things actually stand and what
 Everything is on branch `feat/phase0-foundations`. Working tree clean, 147 tests passing
 (`uv run ruff check . && uv run pytest -q`).
 
-Phase 0 gates all downstream work, and neither gate has been decided yet:
+Phase 0 gates all downstream work. Gate 1 is resolved (see below); gate 2 has a written finding
+pending user sign-off.
 
 - **Phase 0a (metadata backfill) — done.** 16,887 clips in `data/perimeter_watch.db` with camera,
   timestamp, caption. Camera roster (`cam01`-`cam16`, plus `cam01a`/`cam01b`) is populated in
   `config/cameras.yaml` from real captions.
-- **Phase 0b / gate 1 (camera-order inference) — not run, deferred by the user.**
-  `scripts/infer_camera_order.py` exists but no camera has an `order` field set. Do not start
-  this unless asked; the user explicitly parked it.
+- **Phase 0b / gate 1 (camera-order inference) — resolved without inference (2026-08-28).**
+  User decided fence order is just numerical/alphabetical by camera id; `order` is set directly
+  in `config/cameras.yaml` (cam01=0 ... cam16=17). `scripts/infer_camera_order.py` still exists
+  for optional later validation but is off the critical path.
 - **Phase 0c / gate 2 (CV feasibility spike) — in progress, steps 1-3 of 6 done.**
 
 ## Phase 0c status
@@ -24,7 +26,7 @@ Phase 0 gates all downstream work, and neither gate has been decided yet:
 | --- | --- |
 | 1. Pick spike cameras | done — `cam06` (crawl incident), `cam08` (probe + dusk animal), `cam05` (dusk animal) |
 | 2. Download clips | done — 142 clips on disk (`cam05` 50, `cam06` 46, `cam08` 46), spanning 2023-2026 |
-| 3. Fence polylines | done — all three cameras have `fence`/`far_side`/`depth_cutoff` in `config/cameras.yaml` |
+| 3. Fence polylines | done — all three cameras have `fence`/`outside`/`depth_cutoff` in `config/cameras.yaml` |
 | 4. Hand-label ~150 clips | **tooling ready, 0 rows labelled — waiting on the user to run it** |
 | 5. Run `scripts/spike.py` | blocked on step 4 |
 | 6. Read the CSV, decide gate 2 | blocked on step 5 |
@@ -80,7 +82,7 @@ Once ~150 clips are labelled, the remaining Phase 0c steps are still blocked in 
   upscaled frame, they trace the fence in red in a paint tool, then colour-threshold the red
   pixels back out. Full recipe is in `README.md` section 4 step 3. Reuse it for any further
   cameras.
-- **`far_side` is direction-relative.** It depends on which way the polyline runs, not on absolute
+- **`outside` is direction-relative.** It depends on which way the polyline runs, not on absolute
   screen position, so reversing the point order flips `left`/`right`. Recompute with
   `src.zones.side_name` against a known-exterior point every single time the points change. It
   has silently flipped twice already.
@@ -95,23 +97,23 @@ Once ~150 clips are labelled, the remaining Phase 0c steps are still blocked in 
   frame is the interior, not outside. (Corrected 2026-08-28: `cam01`/`cam01a` actually face the
   *same* way as most cameras — the earlier note blaming the whole cam01 family was wrong.) This
   caused a misidentified incident once.
-- **`cam15` is deliberately left without `fence`/`far_side`.** It's pointed down at a fence post
-  close-up, foliage both sides, camera reportedly loose/moving in the wind — no guard has ever
-  shown up in ~1.5 years of sampled clips and the spot likely isn't walkable. `src/zones.py`'s
-  existing no-fence-means-`ambiguous` fallback already makes it monitor-for-humans-only with no
-  geometry; that's fine as-is. Don't spend more time trying to resolve its orientation unless a
-  person actually appears on it.
+- **STALE (superseded 2026-08-28): `cam15` is deliberately left without `fence`/`outside`.** This
+  is no longer true — cam15 now has real fence geometry (see
+  `/memories/repo/nature-ridge-conventions.md`). The original reasoning below is kept for
+  history only: it's pointed down at a fence post close-up, foliage both sides, camera
+  reportedly loose/moving in the wind — no guard has ever shown up in ~1.5 years of sampled
+  clips and the spot likely isn't walkable.
 
 ## Known open items, not yet scheduled
 
 - **Fence polyline versioning.** Cameras can shift on their mounts, which moves the fence line in
-  frame. `docs/plan.md` (Geometry model, and step 24) documents that `fence`/`far_side`/
+  frame. `docs/plan.md` (Geometry model, and step 24) documents that `fence`/`outside`/
   `depth_cutoff` need to become a dated per-camera history keyed off clip timestamp. Not needed
   for the spike; required before Phase 2's zone editor and live classification are trustworthy.
-- **Compass orientation.** The exterior/far side of the fence is compass south property-wide,
+- **Compass orientation.** The exterior/outside of the fence is compass south property-wide,
   noted at the top of `config/cameras.yaml`. Captured as documentation only — the per-camera
   `left`/`right` values still do the actual geometry work.
-- **Gate 1 (camera order)** remains parked, not abandoned.
+- **Gate 1 (camera order)** resolved 2026-08-28 — numerical/alphabetical by id, no inference run.
 
 ## Conventions
 

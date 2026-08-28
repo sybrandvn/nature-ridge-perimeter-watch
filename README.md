@@ -91,16 +91,22 @@ the pipeline gets built.
    recollections against clip timing patterns — an isolated single-camera trigger reads as a
    probe/animal, a dense multi-camera sweep in a tight window reads as a guard patrol:
 
-   - **Crawl incident, 2026-07-21**: nightly clip volume jumped from a 30-day average of 12.6 to
-     28.65 (2.3x, sustained) starting this night, unlike every other spike day in the history
-     which reverts the next night. `cam01b` alone triggered at 20:11-20:16, then a dense
-     multi-camera guard sweep followed at 20:31-21:41 across cam06, cam09, cam10, cam01b, cam05,
-     cam04, cam07, cam03.
-   - **Security probe, 2024-03-16**: no volume spike, but `cam04` re-triggered 7 separate times
-     between 19:33 and 03:47 the next morning — a lingering, repeated re-trigger pattern on one
-     camera, not a sweep — with `cam13` re-triggering 3 times nearby in time, and single triggers
-     on `cam12` and `cam07`. Matches the plan's probe signature (no multi-camera sequence, just
-     dwelling near one point on the fence).
+   - **Crawl incident, 2026-07-21 — visually confirmed**: nightly clip volume jumped from a
+     30-day average of 12.6 to 28.65 (2.3x, sustained) starting this night, unlike every other
+     spike day in the history which reverts the next night. `cam01b` alone triggered at
+     20:11-20:16, then a dense multi-camera guard sweep followed at 20:31-21:41 across cam06,
+     cam09, cam10, cam01b, cam05, cam04, cam07, cam03. `data/history/cam01b/21491.mp4` shows a
+     person in frame near the fence, IR-lit.
+   - **2024-03-16 `cam04`/`cam13` re-trigger night — NOT confirmed as a probe**: no volume spike,
+     but `cam04` re-triggered 7 times between 19:33 and 03:47 the next morning (with `cam13`
+     re-triggering 3 times nearby in time, plus single triggers on `cam12`/`cam07`) — a timing
+     pattern that looked like dwelling near one point on the fence rather than a patrol sweep.
+     **Visual review disagreed**: first/middle/last frames sampled across 4 different `cam04`
+     episodes that night show no person — just an empty fence/foliage scene with a small bright
+     green glow near the lens in the earliest frames, i.e. the IR-insect false-positive pattern
+     the plan calls out, not an intruder. Timing alone isn't sufficient evidence here; treat this
+     night as `environment`/`unknown` rather than a probe candidate. If you recall which camera or
+     date actually caught either of the 2 known probes, that would let us re-target this.
    - **Animal, 2026-01-06**: tree fell over the fence during the day (cameras don't run then); an
      animal was seen climbing it "while still light out". `cam05`'s very first alert of the night
      fired at 18:21 SAST, right at dusk startup — the earliest trigger of any camera that
@@ -110,10 +116,11 @@ the pipeline gets built.
    - **Animal, 2024-08-26**: `cam08`'s first alert of the night fired at 18:04 SAST, again right
      at dusk, "not as dark out" per recollection.
 
-   That's 1 crawl + 2 probe-pattern cameras (cam04, cam13) + 3 animal sightings (cam05, cam15,
-   cam08) — matching the site facts in `docs/plan.md` exactly. Recommended spike cameras:
-   `cam01b` (incident), `cam04` (probe), plus `cam08` or `cam05` (animal, dusk-lit so easier to
-   see). Confirm against your own memory before committing labelling effort.
+   All 3 animal sightings and the crawl incident are visually confirmed against the downloaded
+   footage. The 2 probes from `docs/plan.md`'s site facts are still unlocated — timing patterns
+   alone aren't reliable enough; a visual check is required before trusting a candidate.
+   Recommended spike cameras: `cam01b` (incident), plus `cam08` or `cam05` (animal, dusk-lit so
+   easier to see).
 2. Download a small clip subset for those cameras and record `clips.file_path` automatically:
    ```bash
    uv run python scripts/download_clips.py --camera cam01b --camera cam07 --camera cam05 \

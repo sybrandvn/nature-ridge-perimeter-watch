@@ -13,3 +13,8 @@ class DbError(RuntimeError):
 
 class SequenceError(ValueError):
     """Raised when patrol-pass data is insufficient to infer a camera order."""
+
+
+class AlertError(RuntimeError):
+    """Raised when sending a Telegram or ntfy alert fails."""
+

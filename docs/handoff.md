@@ -1,15 +1,16 @@
-# Handoff: Phase 0c labelling and the gate-2 decision
+# Handoff: gate-2 pass/fail is the open decision
 
-Written 2026-08-28 for an agent picking this up fresh. `docs/plan.md` is the full plan and stays
-authoritative; this is the short version of where things actually stand and what to do next.
+Written 2026-08-28, updated 2026-08-29 for an agent picking this up fresh. `docs/plan.md` is the
+full plan and stays authoritative; this is the short version of where things actually stand and
+what to do next.
 
 ## Where the project is
 
-Everything is on branch `feat/phase0-foundations`. Working tree clean, 147 tests passing
+Everything is on branch `feat/phase0-foundations`. Working tree clean, 175 tests passing
 (`uv run ruff check . && uv run pytest -q`).
 
-Phase 0 gates all downstream work. Gate 1 is resolved (see below); gate 2 has a written finding
-pending user sign-off.
+Phase 0 gates all downstream work. Both gates now have a resolution or a written finding — gate 2
+is the one open decision blocking Phase 1.
 
 - **Phase 0a (metadata backfill) — done.** 16,887 clips in `data/perimeter_watch.db` with camera,
   timestamp, caption. Camera roster (`cam01`-`cam16`, plus `cam01a`/`cam01b`) is populated in
@@ -18,61 +19,43 @@ pending user sign-off.
   User decided fence order is just numerical/alphabetical by camera id; `order` is set directly
   in `config/cameras.yaml` (cam01=0 ... cam16=17). `scripts/infer_camera_order.py` still exists
   for optional later validation but is off the critical path.
-- **Phase 0c / gate 2 (CV feasibility spike) — in progress, steps 1-3 of 6 done.**
+- **Phase 0c / gate 2 (CV feasibility spike) — all 6 steps done, gate decision pending user
+  sign-off.** Fence geometry was extended from the original 3 spike cameras to all 18 labelled
+  cameras (2026-08-28), and the spike was rerun on that wider geometry plus a corrected
+  background-subtraction detector (see "Things that will bite you" below). 165 clips labelled
+  across all 18 cameras, not just the original 3.
 
 ## Phase 0c status
 
 | Step | State |
 | --- | --- |
 | 1. Pick spike cameras | done — `cam06` (crawl incident), `cam08` (probe + dusk animal), `cam05` (dusk animal) |
-| 2. Download clips | done — 142 clips on disk (`cam05` 50, `cam06` 46, `cam08` 46), spanning 2023-2026 |
-| 3. Fence polylines | done — all three cameras have `fence`/`outside`/`depth_cutoff` in `config/cameras.yaml` |
-| 4. Hand-label ~150 clips | **tooling ready, 0 rows labelled — waiting on the user to run it** |
-| 5. Run `scripts/spike.py` | blocked on step 4 |
-| 6. Read the CSV, decide gate 2 | blocked on step 5 |
+| 2. Download clips | done — 142+ clips on disk across the spike cameras, later downloads extended to more cameras |
+| 3. Fence polylines | done — extended from 3 to all 18 labelled cameras (2026-08-28) |
+| 4. Hand-label ~150 clips | done — 165 labelled: guard 111, environment 22, startup 11, unknown 9, incident 8, animal 4 |
+| 5. Run `scripts/spike.py` | done — rerun multiple times as the detector and feature set improved, latest run is current |
+| 6. Read the CSV, decide gate 2 | **written finding done (`docs/gate2_separability_finding.md`), pass/fail call is the user's, not yet made** |
 
-## The next task, and the blocker that was in front of it
+## The next task: gate 2 pass/fail
 
-Step 4 is hand-labelling. The user does this, not the agent — it is ground truth about their own
-property. The agent's job is to make it painless.
+`docs/gate2_separability_finding.md` has the full writeup. Summary of what it found:
 
-**Blocker fixed (2026-08-28):** `src.db.iter_unlabeled_clips` now takes `with_file_only: bool =
-False`. `scripts/label.py` defaults its CLI to `with_file_only=True` (pass `--include-no-file` to
-get the old metadata-only behaviour walking all 16,887 rows). It also surfaces the known rare-class
-clips from `README.md` section 4 first (`PRIORITY_MESSAGE_IDS` in `scripts/label.py`: cam06
-21519/21520, cam08 4054/4055/7360, cam05 18269) so the crawl incident, probe, and animal sightings
-come up early in the session instead of possibly not at all if the user stops partway through.
-Priority clips are still labelled by the user, not pre-filled — this only changes order.
+- **Green flashlight is a strong guard identifier:** `green_light_ratio > 0.05 OR
+  green_light_flicker > 0.02` catches 61% of guard clips, 2% of non-guard, 0/12 animal+incident.
+- **Both predicted failure modes are confirmed and quantified:** 53% of guard clips have an
+  outside-majority pixel fraction from geometry alone (flashlight beam crossing the fence line);
+  55% of `environment` clips match the IR-insect signature.
+- **Shape/motion separates animal/incident from guard/environment in the right direction**
+  (aspect ratio, jitter, path length) but only 12 positive (`animal`+`incident`) clips exist
+  against 132 negatives — too few to certify precision/recall. Best rule found: 75% recall / 22%
+  precision (~2.7x the 8.3% base rate).
+- **Recommendation in the doc:** usable as an escalation signal layered on outside geometry (the
+  design `docs/plan.md` already specifies), not usable as a standalone classifier. Whether that
+  clears the bar for "gate 2 passes" is an explicit call the finding leaves to the user.
 
-The user confirmed: no configured video player integration needed, printing the path is enough
-(and it's clickable via OSC 8 terminal hyperlinks in most terminals -- confirmed working). Each
-prompt also shows single-letter shortcuts (`g`/`a`/`i`/`e`/`u`) and a one-line example per label,
-since typing the full word every clip was slow.
-
-**Short/blank clip handling (2026-08-28):** many triggers send a very short (<2s, empirically
-0.2-1.8s in the downloaded set) near-blank clip immediately, followed ~3-5 minutes later by the
-real clip -- the camera waking up, usually nothing visible. `--short-clip-seconds` (default 2.0)
-flags these via `_clip_duration_seconds` (cv2 frame_count/fps); `default_prompt` shows the
-duration and a note. After `--confirm-short-count` (default 3) of them get labelled the same in a
-row, the user is asked once whether to bulk-apply that label to the rest of the session's short
-clips without reviewing each one. Priority clips (see above) are never eligible for this bulk
-path even if short -- cam06's `21519` ("Initial" alert) is itself a short clip but is a known real
-event, not blank.
-
-**Ready for the user to run:**
-```bash
-uv run python scripts/label.py --camera cam06
-uv run python scripts/label.py --camera cam08
-uv run python scripts/label.py --camera cam05
-```
-or omit `--camera` to go through all three spike cameras' downloaded clips (142 total) in one
-session, priority clips first per camera. Labels are one of
-`guard`/`animal`/`incident`/`environment`/`unknown`/`startup` (`src.db.VALID_LABELS`). `startup`
-(added 2026-08-28, schema_version 2) is for the short (<2s) near-blank clip many triggers send
-before the real clip a few minutes later -- `scripts/label.py` flags these by duration and can
-bulk-confirm a run of them.
-
-Once ~150 clips are labelled, the remaining Phase 0c steps are still blocked in sequence:
+Next step for whoever picks this up: get the user's pass/fail call on gate 2. If it passes (as an
+escalation signal, per the recommendation), Phase 1 work can start. If not, the plan needs
+revisiting before any further implementation.
 
 ## Things that will bite you
 

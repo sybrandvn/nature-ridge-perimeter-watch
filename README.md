@@ -197,9 +197,9 @@ the pipeline gets built.
       print(side_name((0.78, 0.42), fence))  # a point you know is outside the fence
       "
       ```
-      Whatever it prints (`left` or `right`) is your `outside` value. **Recompute this every
-      time the points change** — it is relative to the direction the polyline runs, not to
-      absolute screen position, so reversing the point order flips it.
+      Whatever it prints (`left` or `right`) is your `outside` value: plain screen position --
+      point x compared to the fence's x at that same row. Point order doesn't matter (reversing
+      it gives the same answer), but re-run this check after any edit to the points anyway.
    5. Set `depth_cutoff` to the row (as a `y` fraction) beyond which perspective makes the fence
       line too thin/distant to reliably judge a side — 0.0-0.1 is typical for a camera looking
       down a long fence run.

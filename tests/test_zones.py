@@ -10,8 +10,9 @@ from src.zones import (
     signed_side,
 )
 
-# Horizontal fence, walked left-to-right along the bottom-middle of frame.
-_HORIZONTAL_FENCE = ((0.0, 0.5), (1.0, 0.5))
+# Vertical fence at x=0.5, spanning the frame top to bottom -- the typical shape
+# for these cameras (looking down the fence line).
+_VERTICAL_FENCE = ((0.5, 0.0), (0.5, 1.0))
 
 
 def test_signed_side_requires_at_least_two_points():
@@ -19,24 +20,43 @@ def test_signed_side_requires_at_least_two_points():
         signed_side((0.5, 0.5), [(0.0, 0.0)])
 
 
-def test_side_name_right_below_horizontal_fence():
-    # Facing east (left-to-right) with y-down image coords, "below" (larger y) is right.
-    assert side_name((0.5, 0.9), _HORIZONTAL_FENCE) == "right"
+def test_side_name_right_of_vertical_fence():
+    assert side_name((0.7, 0.5), _VERTICAL_FENCE) == "right"
 
 
-def test_side_name_left_above_horizontal_fence():
-    assert side_name((0.5, 0.1), _HORIZONTAL_FENCE) == "left"
+def test_side_name_left_of_vertical_fence():
+    assert side_name((0.3, 0.5), _VERTICAL_FENCE) == "left"
 
 
 def test_side_name_on_line():
-    assert side_name((0.5, 0.5), _HORIZONTAL_FENCE) == "on_line"
+    assert side_name((0.5, 0.5), _VERTICAL_FENCE) == "on_line"
 
 
-def test_signed_side_uses_nearest_segment_for_bent_polyline():
-    bent_fence = ((0.0, 0.0), (0.5, 0.0), (0.5, 1.0))
-    # Point near the vertical second segment, clearly to its right (larger x).
-    assert side_name((0.6, 0.5), bent_fence) == "left"
-    assert side_name((0.4, 0.5), bent_fence) == "right"
+def test_side_name_ignores_point_order():
+    # Plain screen position, not direction-of-travel -- reversing the polyline's
+    # point order must not change which side a point falls on.
+    reversed_fence = tuple(reversed(_VERTICAL_FENCE))
+    assert side_name((0.7, 0.5), reversed_fence) == "right"
+    assert side_name((0.3, 0.5), reversed_fence) == "left"
+
+
+def test_side_name_picks_segment_by_row_for_bent_polyline():
+    bent_fence = ((0.2, 0.0), (0.5, 0.5), (0.2, 1.0))
+    # Row 0.25 sits in the first segment (fence x interpolates to ~0.35).
+    assert side_name((0.5, 0.25), bent_fence) == "right"
+    assert side_name((0.2, 0.25), bent_fence) == "left"
+    # Row 0.75 sits in the second segment (fence x interpolates to ~0.35).
+    assert side_name((0.5, 0.75), bent_fence) == "right"
+    assert side_name((0.2, 0.75), bent_fence) == "left"
+
+
+def test_side_name_extrapolates_beyond_fence_row_range():
+    # y=-0.1 is above the fence's first point -- extrapolate along the nearest
+    # (first) segment rather than erroring.
+    fence = ((0.4, 0.1), (0.4, 0.9))
+    assert side_name((0.6, -0.1), fence) == "right"
+    assert side_name((0.2, 1.2), fence) == "left"
+
 
 
 def test_is_beyond_depth_cutoff():
@@ -53,24 +73,24 @@ def test_in_ignore_region_detects_containment():
 
 
 def test_classify_zone_priorities_ignore_over_outside():
-    polygon = ((0.0, 0.6), (1.0, 0.6), (1.0, 1.0), (0.0, 1.0))
+    polygon = ((0.6, 0.0), (1.0, 0.0), (1.0, 1.0), (0.6, 1.0))
     zone = CameraZone(
-        fence=_HORIZONTAL_FENCE, outside="right", depth_cutoff=0.0, ignore=(polygon,)
+        fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=(polygon,)
     )
-    # (0.5, 0.9) is outside (right of horizontal fence) but inside the ignore polygon.
-    assert classify_zone((0.5, 0.9), zone) == "ignored"
+    # (0.9, 0.5) is outside (right of the vertical fence) but inside the ignore polygon.
+    assert classify_zone((0.9, 0.5), zone) == "ignored"
 
 
 def test_classify_zone_priorities_depth_cutoff_over_outside():
-    zone = CameraZone(fence=_HORIZONTAL_FENCE, outside="left", depth_cutoff=0.3, ignore=())
-    # (0.5, 0.1) is outside (left/above the fence) but also beyond depth cutoff.
-    assert classify_zone((0.5, 0.1), zone) == "ambiguous"
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.3, ignore=())
+    # (0.3, 0.1) is outside (left of the fence) but also beyond depth cutoff.
+    assert classify_zone((0.3, 0.1), zone) == "ambiguous"
 
 
 def test_classify_zone_outside_and_inside():
-    zone = CameraZone(fence=_HORIZONTAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
-    assert classify_zone((0.5, 0.1), zone) == "outside"
-    assert classify_zone((0.5, 0.9), zone) == "inside"
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    assert classify_zone((0.3, 0.5), zone) == "outside"
+    assert classify_zone((0.7, 0.5), zone) == "inside"
 
 
 def test_classify_zone_ambiguous_without_fence_config():
@@ -79,20 +99,20 @@ def test_classify_zone_ambiguous_without_fence_config():
 
 
 def test_outside_pixel_fraction_mixed_points():
-    zone = CameraZone(fence=_HORIZONTAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
-    points = [(0.5, 0.1), (0.5, 0.2), (0.5, 0.9)]  # 2 outside, 1 inside
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    points = [(0.3, 0.5), (0.35, 0.5), (0.7, 0.5)]  # 2 outside, 1 inside
     assert outside_pixel_fraction(points, zone) == pytest.approx(2 / 3)
 
 
 def test_outside_pixel_fraction_excludes_ignored_and_ambiguous():
-    polygon = ((0.0, 0.6), (1.0, 0.6), (1.0, 1.0), (0.0, 1.0))
+    polygon = ((0.6, 0.0), (1.0, 0.0), (1.0, 1.0), (0.6, 1.0))
     zone = CameraZone(
-        fence=_HORIZONTAL_FENCE, outside="left", depth_cutoff=0.3, ignore=(polygon,)
+        fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.3, ignore=(polygon,)
     )
     points = [
-        (0.5, 0.1),  # beyond depth cutoff -> ambiguous, excluded
-        (0.5, 0.9),  # inside ignore polygon -> ignored, excluded
-        (0.5, 0.55),  # inside (right, below the fence line), classifiable
+        (0.3, 0.1),  # beyond depth cutoff -> ambiguous, excluded
+        (0.9, 0.5),  # inside ignore polygon -> ignored, excluded
+        (0.55, 0.5),  # inside (right of the fence line), classifiable
     ]
     assert outside_pixel_fraction(points, zone) == 0.0
 

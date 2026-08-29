@@ -5,11 +5,11 @@ Pure geometry, no video required: this operates on normalized (x, y) points in
 Used by the (future) motion/classification pipeline and by scripts/spike.py's
 feature extraction once real contours exist.
 
-Side convention: fences are drawn as an ordered polyline from one point to the
-next. Walking along that direction in image coordinates (x right, y down),
-"right" and "left" match normal compass-facing intuition (facing the direction
-of travel, your right hand points to larger-cross-product side). This must
-match config/cameras.yaml's `outside: left|right` field.
+Side convention: plain screen position, nothing direction-relative. For a query
+point, find the fence's x at that same y (interpolating along the polyline) and
+compare -- point x larger than the fence's x there is "right", smaller is
+"left". Point order in the polyline doesn't matter (reversing it gives the same
+answer). This must match config/cameras.yaml's `outside: left|right` field.
 """
 
 from __future__ import annotations
@@ -24,33 +24,36 @@ from src.config import CameraZone, Point
 ZoneClassification = str  # "outside" | "inside" | "ambiguous" | "ignored"
 
 
-def signed_side(point: Point, fence: Sequence[Point]) -> float:
-    """Cross-product sign relative to the nearest fence segment.
+def _fence_x_at_y(y: float, fence: Sequence[Point]) -> float:
+    """The fence polyline's x at row `y`, interpolating within its y-range and
+    extrapolating along the nearest end segment outside it (only reachable via
+    a point above/below every fence point, e.g. above the top of a fence that
+    doesn't start at y=0 -- depth_cutoff excludes most of that band already).
+    """
+    segments = list(zip(fence, fence[1:], strict=False))
+    for (ax, ay), (bx, by) in segments:
+        if ay == by:
+            continue
+        t = (y - ay) / (by - ay)
+        if 0.0 <= t <= 1.0:
+            return ax + t * (bx - ax)
+    (ax, ay), (bx, by) = min(segments, key=lambda seg: min(abs(seg[0][1] - y), abs(seg[1][1] - y)))
+    if ay == by:
+        return ax
+    t = (y - ay) / (by - ay)
+    return ax + t * (bx - ax)
 
-    Positive => right of the polyline's point order, negative => left, zero =>
-    exactly on the line. Uses the *nearest* segment so bends in the polyline
-    are handled correctly rather than assuming a single straight line.
+
+def signed_side(point: Point, fence: Sequence[Point]) -> float:
+    """Signed horizontal distance from the fence: point's x minus the fence's
+    x at the same row. Positive => point is to the right (larger x) of the
+    fence there, negative => left, zero => exactly on the line.
     """
     if len(fence) < 2:
         raise ValueError("fence needs >= 2 points")
 
     px, py = point
-    best_dist_sq = float("inf")
-    best_cross = 0.0
-    for a, b in zip(fence, fence[1:], strict=False):
-        ax, ay = a
-        bx, by = b
-        dx, dy = bx - ax, by - ay
-        seg_len_sq = dx * dx + dy * dy
-        if seg_len_sq == 0.0:
-            continue
-        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg_len_sq))
-        proj_x, proj_y = ax + t * dx, ay + t * dy
-        dist_sq = (px - proj_x) ** 2 + (py - proj_y) ** 2
-        if dist_sq < best_dist_sq:
-            best_dist_sq = dist_sq
-            best_cross = dx * (py - ay) - dy * (px - ax)
-    return best_cross
+    return px - _fence_x_at_y(py, fence)
 
 
 def side_name(point: Point, fence: Sequence[Point]) -> str:

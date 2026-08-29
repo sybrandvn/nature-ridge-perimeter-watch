@@ -65,10 +65,19 @@ revisiting before any further implementation.
   upscaled frame, they trace the fence in red in a paint tool, then colour-threshold the red
   pixels back out. Full recipe is in `README.md` section 4 step 3. Reuse it for any further
   cameras.
-- **`outside` is direction-relative.** It depends on which way the polyline runs, not on absolute
-  screen position, so reversing the point order flips `left`/`right`. Recompute with
-  `src.zones.side_name` against a known-exterior point every single time the points change. It
-  has silently flipped twice already.
+- **`outside` is plain screen position (fixed 2026-08-30).** `src.zones.side_name` used to be
+  direction-of-travel-relative (depended on which way the polyline ran, flipping `left`/`right`
+  if point order reversed) -- confusing enough that it was mistaken for a config bug once. It's
+  now a plain point-x vs. fence-x-at-that-row comparison; point order no longer matters. Verified
+  against real footage that this alone fixed cam06/cam09/cam10's known crawling intruders reading
+  as "inside" with zero `cameras.yaml` edits. Still recompute with `src.zones.side_name` against
+  a known-exterior point after any edit to the fence points, as a sanity check.
+- **Guard/environment clips on cam06/cam09/cam10, and cam01b's 6 resident clips, still read
+  `outside_pixel_fraction` inconsistently even after the above fix** -- same clip label, same
+  camera, split between reading "inside" and "outside". That's a separate, still-open issue, most
+  likely the fence line traced too high (top rail vs. base) rather than anything left/right --
+  see the crawl incident's own description below (crouched silhouette at the base of the rail,
+  not the rail itself).
 - **Timing patterns alone do not identify incidents.** Every purely timing-based incident
   candidate in this repo's history turned out to be a false positive on visual review (see the
   retractions in `README.md` section 4). Always confirm visually or against independent ground

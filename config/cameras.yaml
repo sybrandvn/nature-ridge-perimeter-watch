@@ -12,10 +12,13 @@
 # just `id`/`aliases`/`order` is valid and means "not yet configured", which
 # classify.py treats as ambiguous rather than a crash.
 #
-# `outside` (`left`/`right`) is always relative to the directed polyline (first
-# point -> second point) in that camera's own frame, not a compass direction, since
-# each camera's mounting angle differs. Per the user, the exterior side of the
-# fence (what `outside` picks out) is compass south for this property.
+# `outside` (`left`/`right`) is plain screen position: for a query point, compare its
+# x to the fence's x at that same row (interpolated along the polyline) -- larger x is
+# `right`, smaller is `left`. Point order in the polyline doesn't matter (2026-08-30:
+# replaced an earlier direction-of-travel/"which hand" convention that inverted this
+# for any top-to-bottom-traced fence -- see docs/plan.md Phase 0c step 11 and
+# src/zones.py). Per the user, the exterior side of the fence (what `outside` picks
+# out) is compass south for this property.
 #
 # 2026-08-28: flipped left<->right for every camera except cam08 (whose points
 # are ordered bottom-to-top, opposite of everyone else, and was independently

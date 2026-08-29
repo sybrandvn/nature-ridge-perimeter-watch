@@ -177,8 +177,19 @@ Left in place only in case the assumption ever needs checking against real trans
     frames — three separate attempts tracked a bright diagonal cable rather than the fence. What
     worked: hand the user a clean upscaled reference frame, have them trace the fence in red in
     any paint tool, then colour-threshold the red pixels back out to recover the polyline
-    exactly. `outside` must be recomputed with `src.zones.side_name` every time the points
-    change, since it is relative to the polyline's direction, not to absolute screen position.
+    exactly. `outside` is plain screen position (point x vs. the fence's x at the same row) --
+    point order doesn't matter, but still verify with `src.zones.side_name` against a
+    known-exterior point after any edit as a sanity check.
+
+    2026-08-30 correction: `side_name` originally used a direction-of-travel ("which hand")
+    convention, which inverts left/right for any fence traced top-to-bottom relative to naive
+    screen reading -- confusing enough that a real config bug was suspected where there wasn't
+    one. Replaced with a plain point-x vs. fence-x-at-that-row comparison; verified against real
+    footage that this alone (no `cameras.yaml` edits) fixes cam06/cam09/cam10's known crawling
+    intruders reading as "inside" while leaving the cam08 control correct. Guard/environment
+    clips on those same cameras, and cam01b's residents, still split inconsistently under the
+    corrected math -- that's a separate, still-open issue (fence line traced too high, most
+    likely -- see docs/handoff.md).
 12. [done] Hand-label ~150 clips. 165 labelled across all 18 cameras (target was
     ~150): guard 111, environment 22, startup 11, unknown 9, incident 8, animal 4.
 13. [done] Extract candidate features to a flat CSV: outside pixel fraction, aspect ratio, solidity,

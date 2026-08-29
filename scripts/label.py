@@ -212,7 +212,13 @@ def _apply_startup_prefix_duplicates(
     to a curated review list instead of walking every unlabeled clip in the db."""
     event_clips = _event_clips_map(conn)
     applied = 0
-    for row in db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=True):
+    # Materialized upfront, not streamed: upsert_label below writes on this same
+    # connection, and leaving this SELECT's cursor open across those writes conflicts
+    # with its own read snapshot the moment a concurrent writer (e.g.
+    # scripts/download_clips.py) commits in between -- raising "database is locked"
+    # regardless of busy_timeout, since it's a snapshot conflict, not lock contention.
+    candidates = list(db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=True))
+    for row in candidates:
         if message_ids is not None and row["message_id"] not in message_ids:
             continue
         if row["message_id"] in PRIORITY_MESSAGE_IDS.get(row["camera_id"], frozenset()):

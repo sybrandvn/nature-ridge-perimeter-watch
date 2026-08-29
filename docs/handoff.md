@@ -6,7 +6,7 @@ what to do next.
 
 ## Where the project is
 
-Everything is on branch `feat/phase0-foundations`. Working tree clean, 175 tests passing
+Everything is on branch `feat/phase0-foundations`. Working tree clean, 200 tests passing
 (`uv run ruff check . && uv run pytest -q`).
 
 Phase 0 gates all downstream work. Both gates now have a resolution or a written finding — gate 2
@@ -22,8 +22,8 @@ is the one open decision blocking Phase 1.
 - **Phase 0c / gate 2 (CV feasibility spike) — all 6 steps done, gate decision pending user
   sign-off.** Fence geometry was extended from the original 3 spike cameras to all 18 labelled
   cameras (2026-08-28), and the spike was rerun on that wider geometry plus a corrected
-  background-subtraction detector (see "Things that will bite you" below). 165 clips labelled
-  across all 18 cameras, not just the original 3.
+  background-subtraction detector (see "Things that will bite you" below). 281 labels rows as of
+  2026-08-29 across all 18 cameras, not just the original 3 (see Phase 0c status table).
 
 ## Phase 0c status
 
@@ -32,7 +32,7 @@ is the one open decision blocking Phase 1.
 | 1. Pick spike cameras | done — `cam06` (crawl incident), `cam08` (probe + dusk animal), `cam05` (dusk animal) |
 | 2. Download clips | done — 142+ clips on disk across the spike cameras, later downloads extended to more cameras |
 | 3. Fence polylines | done — extended from 3 to all 18 labelled cameras (2026-08-28) |
-| 4. Hand-label ~150 clips | done — 165 labelled: guard 111, environment 22, startup 11, unknown 9, incident 8, animal 4 |
+| 4. Hand-label ~150 clips | done, and ongoing past the original milestone — 281 labels rows as of 2026-08-29: 174 with a known event class (guard 126, environment 22, unknown 11, incident 10, animal 5), 121 with only a `startup_state` so far (event class pending its partner clip's review — see schema v5 note below) |
 | 5. Run `scripts/spike.py` | done — rerun multiple times as the detector and feature set improved, latest run is current |
 | 6. Read the CSV, decide gate 2 | **written finding done (`docs/gate2_separability_finding.md`), pass/fail call is the user's, not yet made** |
 
@@ -73,9 +73,15 @@ revisiting before any further implementation.
   candidate in this repo's history turned out to be a false positive on visual review (see the
   retractions in `README.md` section 4). Always confirm visually or against independent ground
   truth.
-- **No migration framework.** Schema changes mean: export labels to JSONL, delete the DB,
-  reimport. Once the user has hand-labelled 150 clips, that data is expensive — get the label
-  export path working before any schema change touches the `labels` table.
+- **No migration framework by default.** The documented fallback is: export labels to JSONL,
+  delete the DB, reimport. In practice, once `clips` holds real backfilled volume (16,887 rows),
+  that's disproportionate for a change scoped to one table -- `scripts/migrate_schema_v5.py` did
+  an in-place rebuild instead (rename, recreate from the current schema, copy+transform, bump
+  `schema_version`, keep the old table rather than dropping it), run via a raw `sqlite3`
+  connection since `db.connect()` enforces an exact version match. Still export JSONL and
+  file-copy the live `.db` first regardless, and stop every writer (background downloader AND
+  any idle interactive `label.py` session sitting at a prompt) before migrating -- an idle
+  session still holds an open db connection.
 - **`cam01b`/`cam16` face the opposite way** to the other perimeter cameras: the open ground in
   frame is the interior, not outside. (Corrected 2026-08-28: `cam01`/`cam01a` actually face the
   *same* way as most cameras — the earlier note blaming the whole cam01 family was wrong.) This
@@ -84,6 +90,28 @@ revisiting before any further implementation.
   ground in frame is the interior side, not exterior (`config/cameras.yaml` is correct on this —
   `outside: left`). Rough terrain, confirmed animal sighting (2025-07-15, see
   `/memories/repo/incident-findings.md`), no human ever seen there in the sampled history.
+
+## Schema v5 (2026-08-29): labels split into class + startup_state
+
+`labels.label` used to conflate two different things: what the event was, and whether a
+short/early pre-alert clip's own content was visible on its own. That collided for real — a
+short clip auto-labeled `startup` (or hand-labeled `startup_clear`/`startup_blank`) silently
+discarded the event's actual class whenever the paired, decisive clip hadn't been reviewed yet.
+Found via a live-db audit: 123 startup-family rows, 107 with their partner still unlabeled.
+
+Now `label` (nullable, 5 real classes) and `startup_state` (`clear`/`blank`/`duplicate`) are
+separate columns. Labeling any clip in an event propagates its class to every sibling sharing
+the same embedded alert timestamp that doesn't have one yet. `docs/plan.md`'s Ground truth
+labels section has the full column semantics; `scripts/migrate_schema_v5.py` is the migration
+that ran on the live db (158 rows unchanged, 16 startup-family rows inherited an already-known
+partner class, 107 left `label=NULL` pending — those events' partner clips still need review,
+which is the bulk of what's left in the current `--message-ids-file` shortlist session).
+
+The frame-match rule for auto-detecting `startup_state=duplicate` was also tightened the same
+day: the last decoded frame of a short/early clip is frequently a torn/truncated write from the
+recording being cut off (not real content difference) — tolerated now, but only when every
+earlier frame is a tight match, checked against a confirmed real incident (cam02#8699) that
+fails the same way but with looser earlier-frame differences (moving subject, not a torn frame).
 
 ## Known open items, not yet scheduled
 
@@ -95,6 +123,14 @@ revisiting before any further implementation.
   noted at the top of `config/cameras.yaml`. Captured as documentation only — the per-camera
   `left`/`right` values still do the actual geometry work.
 - **Gate 1 (camera order)** resolved 2026-08-28 — numerical/alphabetical by id, no inference run.
+- **121 labels rows have only a `startup_state`, no event class yet** (schema v5 migration, see
+  above) — their partner clip needs review. `scripts/label.py --message-ids-file` now pulls a
+  shortlisted clip's partner into the queue automatically when this applies.
+- **Real-time pairing logic is designed but not built.** For the live pipeline (not this Phase 0
+  spike): pair a new clip with the last one for the same camera when their embedded alert
+  timestamps match exactly (not a fuzzy time guess — the timestamp string is the real key), with
+  a ~15min gap as a sanity bound only. Real pair gaps in the db: min 5s, median 3.2min, p95
+  4.75min, max 8.6min across 8,274 pairs.
 
 ## Conventions
 

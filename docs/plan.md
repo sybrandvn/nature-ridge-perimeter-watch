@@ -31,21 +31,26 @@ tested, manually-invokable functions only.
 - Probes and animals were not observed as multi-camera sequences; only patrols were.
 
 ## Ground truth labels
-`guard`, `animal`, `incident`, `environment`, `unknown`, `startup`, `startup_clear`, `startup_blank`.
+Schema v5 (2026-08-29) splits this into two independent columns instead of one:
+- `label`: what the event WAS -- `guard`, `animal`, `incident`, `environment`, or `unknown`.
+  Nullable: a clip can have no class yet if only its `startup_state` is known so far. Shared
+  across every clip in the same physical trigger (same embedded alert timestamp) -- labeling
+  any one clip in an event fills in `label` for every still-unclassed sibling automatically
+  (never overwrites an existing human call on a specific clip).
+- `startup_state`: whether *this one clip's own content*, viewed alone (no future clip to
+  compare against, matching what a live system would actually have), was usable --
+  `clear` (subject visible), `blank` (nothing visible), or `duplicate` (frame-identical prefix
+  of the paired later clip's start, confirmed automatically via pixel diff, never hand-picked).
+  Says nothing about what the event was.
 `environment` covers IR-attracted insects, rain streaks, wind-blown vegetation, and shadow
 artifacts. Naming it separately makes false-page burden directly measurable instead of hiding it
-inside `unknown`. `startup` (added 2026-08-28) covers the short (<2s) near-blank clip many
-triggers send immediately, before the real clip a few minutes later -- the camera waking up, not
-an ambiguous sighting, so it's kept out of `unknown` too. Since 2026-08-29 it's auto-applied only
-when the clip's frames are a literal duplicate of the paired later clip's start (frame-content
-comparison, confirmed via direct pixel diff) -- confirming that only retroactively, once the
-later clip exists. `startup_clear`/`startup_blank` (added 2026-08-29) capture a separate,
-real-time-relevant fact about the same kind of short/early clip: whether *its own content alone*
-(no future clip to compare against yet, matching what a live system would actually see) is clear
-enough to make out the subject (`startup_clear`) or genuinely blank (`startup_blank`). Existing
-`startup` rows are re-triaged into one of these two by hand via
-`uv run python scripts/label.py --relabel-label startup`, not derived automatically -- "clear
-enough to process" is a visual judgment call.
+inside `unknown`.
+
+Why split: v4 had a single `label` column, and a short pre-alert clip auto-labeled `startup` (or
+hand-labeled `startup_clear`/`startup_blank`) silently discarded the event's real class whenever
+the paired, decisive clip hadn't been reviewed yet -- found via a live-db audit: 123 startup-family
+rows, 107 with their partner still unlabeled, contributing nothing to ground truth. See
+`docs/handoff.md` for the migration record.
 
 ## Crawl / shape policy
 Bounding-box h/w for a crawling person (~0.4-0.7) overlaps large animals (~0.5-1.2). Classical CV
@@ -206,7 +211,12 @@ Left in place only in case the assumption ever needs checking against real trans
 16. Validated config loading for env, `config/thresholds.yaml`, `config/cameras.yaml`; normalised
     coordinates; motion-extraction settings split from classification thresholds. `cameras.yaml`
     carries the confirmed fence order and the operating window.
-17. SQLite via `CREATE TABLE IF NOT EXISTS` plus a `schema_version` — no migration framework.
+17. SQLite via `CREATE TABLE IF NOT EXISTS` plus a `schema_version` — no migration framework by
+    default (export labels to JSONL, delete db, reimport, is the documented fallback). In
+    practice, once `clips` holds real backfilled volume, a targeted in-place table rebuild
+    (`scripts/migrate_schema_v5.py`: rename, recreate from the current schema, copy+transform,
+    bump `schema_version`, keep the old table rather than dropping it) is the proportionate
+    approach for a change scoped to one table — done for the v4->v5 label split, 2026-08-29.
     Tables: `clips`, `labels`, `blob_tracks` (feature cache), `system_events`, `backtest_runs`,
     `backtest_results`. WAL, busy timeout, foreign keys, narrow repository functions. Index
     `(timestamp)` and `(camera_id, timestamp)`.

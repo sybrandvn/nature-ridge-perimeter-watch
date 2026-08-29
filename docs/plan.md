@@ -31,12 +31,21 @@ tested, manually-invokable functions only.
 - Probes and animals were not observed as multi-camera sequences; only patrols were.
 
 ## Ground truth labels
-`guard`, `animal`, `incident`, `environment`, `unknown`, `startup`.
+`guard`, `animal`, `incident`, `environment`, `unknown`, `startup`, `startup_clear`, `startup_blank`.
 `environment` covers IR-attracted insects, rain streaks, wind-blown vegetation, and shadow
 artifacts. Naming it separately makes false-page burden directly measurable instead of hiding it
 inside `unknown`. `startup` (added 2026-08-28) covers the short (<2s) near-blank clip many
 triggers send immediately, before the real clip a few minutes later -- the camera waking up, not
-an ambiguous sighting, so it's kept out of `unknown` too.
+an ambiguous sighting, so it's kept out of `unknown` too. Since 2026-08-29 it's auto-applied only
+when the clip's frames are a literal duplicate of the paired later clip's start (frame-content
+comparison, confirmed via direct pixel diff) -- confirming that only retroactively, once the
+later clip exists. `startup_clear`/`startup_blank` (added 2026-08-29) capture a separate,
+real-time-relevant fact about the same kind of short/early clip: whether *its own content alone*
+(no future clip to compare against yet, matching what a live system would actually see) is clear
+enough to make out the subject (`startup_clear`) or genuinely blank (`startup_blank`). Existing
+`startup` rows are re-triaged into one of these two by hand via
+`uv run python scripts/label.py --relabel-label startup`, not derived automatically -- "clear
+enough to process" is a visual judgment call.
 
 ## Crawl / shape policy
 Bounding-box h/w for a crawling person (~0.4-0.7) overlaps large animals (~0.5-1.2). Classical CV

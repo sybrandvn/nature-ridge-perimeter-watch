@@ -16,9 +16,18 @@ from typing import Any
 
 from src.errors import DbError
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
-VALID_LABELS = ("guard", "animal", "incident", "environment", "unknown", "startup")
+VALID_LABELS = (
+    "guard",
+    "animal",
+    "incident",
+    "environment",
+    "unknown",
+    "startup",
+    "startup_clear",
+    "startup_blank",
+)
 VALID_SOURCES = ("live", "backfill")
 VALID_PREDICTIONS = ("guard_side", "outside_alert", "outside_priority", "ambiguous")
 
@@ -46,7 +55,10 @@ CREATE TABLE IF NOT EXISTS labels (
     channel_id TEXT NOT NULL,
     message_id INTEGER NOT NULL,
     label TEXT NOT NULL CHECK (
-        label IN ('guard', 'animal', 'incident', 'environment', 'unknown', 'startup')
+        label IN (
+            'guard', 'animal', 'incident', 'environment', 'unknown', 'startup',
+            'startup_clear', 'startup_blank'
+        )
     ),
     notes TEXT,
     labeled_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -211,6 +223,32 @@ def iter_unlabeled_clips(
         WHERE labels.message_id IS NULL
     """
     params: tuple[Any, ...] = ()
+    if camera_id is not None:
+        query += " AND clips.camera_id = ?"
+        params = (*params, camera_id)
+    if with_file_only:
+        query += " AND clips.file_path IS NOT NULL"
+    query += " ORDER BY clips.timestamp"
+    yield from conn.execute(query, params)
+
+
+def iter_clips_with_label(
+    conn: sqlite3.Connection,
+    label: str,
+    *,
+    camera_id: str | None = None,
+    with_file_only: bool = False,
+) -> Iterator[sqlite3.Row]:
+    """Clips already carrying `label` in `labels`, for re-triaging a prior label into
+    a finer-grained one (e.g. re-reviewing `startup` rows to split into
+    `startup_clear`/`startup_blank`)."""
+    query = """
+        SELECT clips.* FROM clips
+        JOIN labels
+            ON clips.channel_id = labels.channel_id AND clips.message_id = labels.message_id
+        WHERE labels.label = ?
+    """
+    params: tuple[Any, ...] = (label,)
     if camera_id is not None:
         query += " AND clips.camera_id = ?"
         params = (*params, camera_id)

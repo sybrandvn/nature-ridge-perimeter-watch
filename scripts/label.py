@@ -22,6 +22,14 @@ every frame) is auto-labeled `startup` and never prompted for. Known rare-event 
 (PRIORITY_MESSAGE_IDS) are never auto-labeled this way even if they happen to match.
 Pass --no-startup-overlap-check to disable and review these by hand instead.
 
+`startup` only says a clip is a redundant early duplicate -- it says nothing about
+whether the clip's own content would be usable if that's all a real-time system had
+(no future clip to compare against yet). `startup_clear` and `startup_blank` capture
+that: some short/early clips are actually clear enough to make out the subject on
+their own, some are genuinely blank. Use --relabel-label startup to re-walk clips
+already labeled `startup` (or any other label) and re-triage each by hand into
+whichever label actually fits, without touching the rest of the unlabeled queue.
+
 Omitting --camera walks every camera's remaining clips shuffled and interleaved
 round-robin across cameras, so a session gets a spread instead of exhausting one
 camera's queue before moving to the next. Priority clips (known rare events) still
@@ -30,6 +38,7 @@ come first, unshuffled.
 Run:
     uv run python scripts/label.py [--camera CAM_ID] [--limit N] [--include-no-file]
         [--short-clip-seconds SECS] [--confirm-short-count N] [--no-startup-overlap-check]
+        [--relabel-label LABEL]
 """
 
 from __future__ import annotations
@@ -232,16 +241,31 @@ LABEL_EXAMPLES: dict[str, str] = {
     "incident": "a person: crawling, probing, or climbing, usually far/exterior side",
     "environment": "IR-attracted insects, rain streaks, wind-blown vegetation, shadow artifacts",
     "unknown": "can't tell / too ambiguous to call confidently",
-    "startup": "short blank clip, camera waking up -- not ambiguous, just empty",
+    "startup": "exact frame-duplicate of a later clip's start (auto-detected, rarely hand-picked)",
+    "startup_clear": "short/early pre-alert clip, but clear enough to make out the subject",
+    "startup_blank": "short/early pre-alert clip, genuinely nothing visible",
+}
+
+# Distinct single-letter shortcut per label -- can't derive from label[0] since startup,
+# startup_clear, and startup_blank all start with 's'.
+LABEL_SHORTCUTS: dict[str, str] = {
+    "guard": "g",
+    "animal": "a",
+    "incident": "i",
+    "environment": "e",
+    "unknown": "u",
+    "startup": "s",
+    "startup_clear": "c",
+    "startup_blank": "b",
 }
 
 
 def _resolve_label(raw: str) -> str | None:
-    """Accept a full label name or its single-letter shortcut (g/a/i/e/u); else None."""
+    """Accept a full label name or its LABEL_SHORTCUTS letter; else None."""
     raw = raw.strip().lower()
     if raw in VALID_LABELS:
         return raw
-    return next((label for label in VALID_LABELS if raw == label[0]), None)
+    return next((label for label, letter in LABEL_SHORTCUTS.items() if raw == letter), None)
 
 
 def _clip_duration_seconds(path: str) -> float | None:
@@ -276,14 +300,18 @@ def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
         print(f"  file: {clip['file_path']}")
         duration = _clip_duration_seconds(clip["file_path"])
         if duration is not None:
-            note = "  <- often 'startup': camera waking up, usually blank" if duration < 2.0 else ""
+            note = (
+                "  <- often startup_clear/startup_blank: camera waking up"
+                if duration < 2.0
+                else ""
+            )
             print(f"  duration: {duration:.1f}s{note}")
     else:
         print("  (no local file yet -- metadata-only label)")
 
     print("  labels:")
     for label in VALID_LABELS:
-        print(f"    [{label[0]}] {label:<11} {LABEL_EXAMPLES[label]}")
+        print(f"    [{LABEL_SHORTCUTS[label]}] {label:<14} {LABEL_EXAMPLES[label]}")
 
     suggested = clip.get("_suggested_label")
     if suggested is not None:
@@ -316,15 +344,26 @@ def run_labeling_session(
     duration_fn: DurationFn = _clip_duration_seconds,
     detect_prefix_duplicates: bool = False,
     frame_match_fn: FrameMatchFn = _frames_prefix_match,
+    relabel_label: str | None = None,
     rng: random.Random | None = None,
 ) -> int:
+    """`relabel_label`, if set, re-walks clips that ALREADY carry that label (e.g.
+    `startup`) instead of unlabeled clips -- for re-triaging a prior label into a
+    finer-grained one (e.g. splitting `startup` into `startup_clear`/`startup_blank`).
+    Disables `detect_prefix_duplicates` (auto-labeling only applies to unlabeled clips).
+    """
     labeled = 0
     auto_labeled = 0
-    if detect_prefix_duplicates:
+    if detect_prefix_duplicates and relabel_label is None:
         auto_labeled = _apply_startup_prefix_duplicates(
             conn, camera_id=camera_id, frame_match_fn=frame_match_fn
         )
-    rows = db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=with_file_only)
+    if relabel_label is not None:
+        rows = db.iter_clips_with_label(
+            conn, relabel_label, camera_id=camera_id, with_file_only=with_file_only
+        )
+    else:
+        rows = db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=with_file_only)
     priority, rest = _prioritize([dict(row) for row in rows])
     rest = _spread_by_camera(rest, rng or random.Random())
     rows = priority + rest
@@ -433,6 +472,16 @@ def main() -> None:  # pragma: no cover - interactive I/O
             "'startup' when its frames are a literal duplicate of the paired clip's start"
         ),
     )
+    parser.add_argument(
+        "--relabel-label",
+        default=None,
+        choices=VALID_LABELS,
+        help=(
+            "Re-walk clips that already carry this label instead of unlabeled clips, "
+            "e.g. --relabel-label startup to split prior 'startup' rows into "
+            "startup_clear/startup_blank"
+        ),
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
@@ -446,6 +495,7 @@ def main() -> None:  # pragma: no cover - interactive I/O
         short_clip_seconds=args.short_clip_seconds or None,
         confirm_short_count=args.confirm_short_count,
         detect_prefix_duplicates=not args.no_startup_overlap_check,
+        relabel_label=args.relabel_label,
     )
     conn.close()
     print(f"\nLabeled {labeled} clip(s).")

@@ -360,10 +360,13 @@ def run_labeling_session(
     `message_ids`, if set, restricts the queue to exactly those clips (any camera),
     in the order given -- e.g. a curated screening shortlist -- instead of the usual
     timestamp/round-robin ordering. Already-labeled clips in the list are skipped.
+    Disables `detect_prefix_duplicates` too (the full-corpus auto-scan is irrelevant
+    to a small curated list, and pointlessly widens the window for a concurrent
+    writer -- e.g. scripts/download_clips.py -- to collide on the db).
     """
     labeled = 0
     auto_labeled = 0
-    if detect_prefix_duplicates and relabel_label is None:
+    if detect_prefix_duplicates and relabel_label is None and message_ids is None:
         auto_labeled = _apply_startup_prefix_duplicates(
             conn, camera_id=camera_id, frame_match_fn=frame_match_fn
         )

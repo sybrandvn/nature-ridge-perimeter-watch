@@ -80,12 +80,10 @@ revisiting before any further implementation.
   frame is the interior, not outside. (Corrected 2026-08-28: `cam01`/`cam01a` actually face the
   *same* way as most cameras — the earlier note blaming the whole cam01 family was wrong.) This
   caused a misidentified incident once.
-- **STALE (superseded 2026-08-28): `cam15` is deliberately left without `fence`/`outside`.** This
-  is no longer true — cam15 now has real fence geometry (see
-  `/memories/repo/nature-ridge-conventions.md`). The original reasoning below is kept for
-  history only: it's pointed down at a fence post close-up, foliage both sides, camera
-  reportedly loose/moving in the wind — no guard has ever shown up in ~1.5 years of sampled
-  clips and the spot likely isn't walkable.
+- **`cam15` has real fence geometry and is reversed-mount**, same as `cam01b`/`cam16`: open
+  ground in frame is the interior side, not exterior (`config/cameras.yaml` is correct on this —
+  `outside: left`). Rough terrain, confirmed animal sighting (2025-07-15, see
+  `/memories/repo/incident-findings.md`), no human ever seen there in the sampled history.
 
 ## Known open items, not yet scheduled
 

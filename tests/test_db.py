@@ -201,20 +201,45 @@ def test_upsert_label_rejects_invalid_value(conn):
         db.upsert_label(conn, channel_id=CHANNEL, message_id=1, label="bogus")
 
 
+def test_upsert_label_rejects_invalid_startup_state(conn):
+    with pytest.raises(DbError, match="startup_state"):
+        db.upsert_label(conn, channel_id=CHANNEL, message_id=1, startup_state="bogus")
+
+
+def test_upsert_label_requires_label_or_startup_state(conn):
+    with pytest.raises(DbError, match="label or startup_state"):
+        db.upsert_label(conn, channel_id=CHANNEL, message_id=1)
+
+
+def test_upsert_label_with_only_startup_state(conn):
+    """A clip can be marked startup_state (e.g. auto-detected duplicate) before its
+    event's class is known -- label stays NULL until a sibling clip resolves it."""
+    db.upsert_label(conn, channel_id=CHANNEL, message_id=1, startup_state="duplicate")
+    row = db.get_label(conn, CHANNEL, 1)
+    assert row["label"] is None
+    assert row["startup_state"] == "duplicate"
+
+
 def test_label_round_trip_and_export_import(conn, tmp_path):
     db.upsert_label(conn, channel_id=CHANNEL, message_id=1, label="guard")
-    db.upsert_label(conn, channel_id=CHANNEL, message_id=2, label="incident", notes="crawler")
+    db.upsert_label(
+        conn, channel_id=CHANNEL, message_id=2, label="incident", notes="crawler"
+    )
+    db.upsert_label(conn, channel_id=CHANNEL, message_id=3, startup_state="blank")
 
     export_path = tmp_path / "labels.jsonl"
     count = db.export_labels_jsonl(conn, export_path)
-    assert count == 2
+    assert count == 3
 
     fresh = db.connect(tmp_path / "rebuilt.db")
     imported = db.import_labels_jsonl(fresh, export_path)
-    assert imported == 2
+    assert imported == 3
     row = db.get_label(fresh, CHANNEL, 2)
     assert row["label"] == "incident"
     assert row["notes"] == "crawler"
+    row3 = db.get_label(fresh, CHANNEL, 3)
+    assert row3["label"] is None
+    assert row3["startup_state"] == "blank"
     fresh.close()
 
 

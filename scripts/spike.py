@@ -220,8 +220,8 @@ def iter_labelled_clips_with_files(conn, *, camera_id: str) -> Iterator[dict[str
         if not row["file_path"]:
             continue
         label_row = db.get_label(conn, row["channel_id"], row["message_id"])
-        if label_row is None:
-            continue
+        if label_row is None or label_row["label"] is None:
+            continue  # event's class not known yet (may only carry a startup_state)
         yield {
             "channel_id": row["channel_id"],
             "message_id": row["message_id"],

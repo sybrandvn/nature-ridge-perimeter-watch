@@ -1,9 +1,14 @@
 import random
 from pathlib import Path
 
-from scripts.label import LABEL_SHORTCUTS, _event_key, _resolve_label, run_labeling_session
+from scripts.label import (
+    LABEL_SHORTCUTS,
+    PROMPT_LABELS,
+    _event_key,
+    _resolve_label,
+    run_labeling_session,
+)
 from src import db
-from src.db import VALID_LABELS
 
 SHORT_DURATIONS = {
     "data/history/cam01/short1.mp4": 0.8,
@@ -124,7 +129,7 @@ def test_run_labeling_session_surfaces_known_incident_clips_first(tmp_path: Path
 
 
 def test_resolve_label_accepts_full_word_and_shortcut_letter():
-    for label in VALID_LABELS:
+    for label in PROMPT_LABELS:
         assert _resolve_label(label) == label
         letter = LABEL_SHORTCUTS[label]
         assert _resolve_label(letter) == label
@@ -255,7 +260,9 @@ def test_run_labeling_session_message_ids_scopes_prefix_duplicate_scan(tmp_path:
 
     assert labeled == 2  # 1 auto-labeled + 1 prompted
     assert seen_ids == [2]  # clip 1 auto-labeled, never reaches the prompt
-    assert db.get_label(conn, "chan1", 1)["label"] == "startup"
+    clip1 = db.get_label(conn, "chan1", 1)
+    assert clip1["startup_state"] == "duplicate"
+    assert clip1["label"] == "guard"  # inherited from clip 2 once it was classed
     # clip 3 would match too, but it's outside message_ids so the scan skips it
     assert db.get_label(conn, "chan1", 3) is None
     conn.close()
@@ -402,7 +409,7 @@ def test_run_labeling_session_suggests_label_for_paired_alert(tmp_path: Path):
     conn.close()
 
 
-def test_event_suggestion_persists_across_sessions(tmp_path: Path):
+def test_event_class_propagates_to_sibling_across_sessions(tmp_path: Path):
     conn = db.connect(tmp_path / "t.db")
     initial = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
     stopped = "Cam Alert*: (Stopped*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
@@ -411,15 +418,18 @@ def test_event_suggestion_persists_across_sessions(tmp_path: Path):
 
     run_labeling_session(conn, prompt_fn=lambda _clip: ("guard", None), limit=1)
 
-    seen_suggestions: list[str | None] = []
+    # clip 2's class is inherited immediately -- no second session needed to see it.
+    assert db.get_label(conn, "chan1", 2)["label"] == "guard"
+
+    seen_ids: list[int] = []
 
     def prompt_fn(clip):
-        seen_suggestions.append(clip.get("_suggested_label"))
+        seen_ids.append(clip["message_id"])
         return "guard", None
 
     run_labeling_session(conn, prompt_fn=prompt_fn)
 
-    assert seen_suggestions == ["guard"]
+    assert seen_ids == []  # nothing left -- both clips already classed
     conn.close()
 
 
@@ -523,7 +533,8 @@ def test_startup_prefix_duplicate_auto_labeled_without_prompting(tmp_path: Path)
     assert labeled == 2
     assert seen_ids == [2]  # clip 1 auto-labeled, never reaches the prompt
     label1 = db.get_label(conn, "chan1", 1)
-    assert label1["label"] == "startup"
+    assert label1["startup_state"] == "duplicate"
+    assert label1["label"] == "guard"  # inherited once clip 2 was classed
     assert "auto:" in label1["notes"]
     assert db.get_label(conn, "chan1", 2)["label"] == "guard"
     conn.close()
@@ -617,20 +628,20 @@ def test_relabel_label_walks_already_labeled_clips(tmp_path: Path):
     conn = db.connect(tmp_path / "t.db")
     _seed(conn, 1, file_path="data/history/cam01/1.mp4")
     _seed(conn, 2, file_path="data/history/cam01/2.mp4")
-    db.upsert_label(conn, channel_id="chan1", message_id=1, label="startup")
+    db.upsert_label(conn, channel_id="chan1", message_id=1, label="unknown")
     db.upsert_label(conn, channel_id="chan1", message_id=2, label="guard")
 
     seen_ids: list[int] = []
 
     def prompt_fn(clip):
         seen_ids.append(clip["message_id"])
-        return "startup_clear", None
+        return "incident", None
 
-    labeled = run_labeling_session(conn, prompt_fn=prompt_fn, relabel_label="startup")
+    labeled = run_labeling_session(conn, prompt_fn=prompt_fn, relabel_label="unknown")
 
     assert labeled == 1
-    assert seen_ids == [1]  # only the 'startup' clip is walked, not the 'guard' one
-    assert db.get_label(conn, "chan1", 1)["label"] == "startup_clear"
+    assert seen_ids == [1]  # only the 'unknown' clip is walked, not the 'guard' one
+    assert db.get_label(conn, "chan1", 1)["label"] == "incident"
     assert db.get_label(conn, "chan1", 2)["label"] == "guard"  # untouched
     conn.close()
 
@@ -638,18 +649,18 @@ def test_relabel_label_walks_already_labeled_clips(tmp_path: Path):
 def test_relabel_label_disables_prefix_duplicate_auto_labeling(tmp_path: Path):
     conn = db.connect(tmp_path / "t.db")
     _seed(conn, 1, file_path="data/history/cam01/1.mp4")
-    db.upsert_label(conn, channel_id="chan1", message_id=1, label="startup")
+    db.upsert_label(conn, channel_id="chan1", message_id=1, label="unknown")
 
     seen_ids: list[int] = []
 
     def prompt_fn(clip):
         seen_ids.append(clip["message_id"])
-        return "startup_blank", None
+        return "guard", None
 
     labeled = run_labeling_session(
         conn,
         prompt_fn=prompt_fn,
-        relabel_label="startup",
+        relabel_label="unknown",
         detect_prefix_duplicates=True,
         frame_match_fn=lambda short_path, long_path: True,
     )

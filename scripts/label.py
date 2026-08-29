@@ -4,31 +4,35 @@ Defaults to clips that already have a downloaded video (`file_path` set), since 
 backfilled rows don't and walking them produces nothing to watch. Pass --include-no-file
 to fall back to the old metadata-only behaviour (label off caption/camera/timestamp alone).
 
+Each labeled clip records two independent things (schema v5):
+  - `label`: what the event WAS (guard/animal/incident/environment/unknown) -- shared
+    by every clip that's part of the same physical trigger.
+  - `startup_state`: whether THIS clip's own content was usable on its own, for a
+    short/early clip that precedes the real one (clear/blank/duplicate) -- says
+    nothing about what the event was.
+A clip can carry either, both, or (temporarily) just startup_state while its event's
+class is still unknown. Labeling any one clip in an event fills in `label` for every
+other clip sharing it that doesn't have a class yet -- a human call on one clip is
+never silently overwritten, only a still-empty one is filled in.
+
 Many triggers send a very short (<2s) near-blank clip immediately, followed a few minutes
 later by the real (longer) clip -- the camera waking up, nothing visible. --short-clip-seconds
-flags these; after --confirm-short-count of them get the same label in a row, you're asked
-once whether to bulk-apply that label to the rest without reviewing each one.
+flags these; after --confirm-short-count of them get the same answer in a row, you're
+asked once whether to bulk-apply it to the rest without reviewing each one.
 
 Some triggers also send two alert messages for the same physical event -- e.g. an
 (Initial*) caption and a (Stopped*)/follow-up caption sharing one embedded camera
-timestamp. Once you label one, its still-unlabeled sibling shows a suggested label
-you can accept with Enter, or override by typing another letter/word as usual.
+timestamp. Once one clip in the pair gets a class, its still-unclassed sibling shows
+a suggested label you can accept with Enter, or override by typing another letter/word.
 
-The earlier half of such a pair is often not an independent blank clip at all --
-it's a literal frame-for-frame prefix of the later clip (same recording, sent early
-as a preview). Before an interactive session starts, any unlabeled earlier-half clip
-whose frames match the paired clip's start (mean pixel difference near zero across
-every frame) is auto-labeled `startup` and never prompted for. Known rare-event clips
-(PRIORITY_MESSAGE_IDS) are never auto-labeled this way even if they happen to match.
-Pass --no-startup-overlap-check to disable and review these by hand instead.
-
-`startup` only says a clip is a redundant early duplicate -- it says nothing about
-whether the clip's own content would be usable if that's all a real-time system had
-(no future clip to compare against yet). `startup_clear` and `startup_blank` capture
-that: some short/early clips are actually clear enough to make out the subject on
-their own, some are genuinely blank. Use --relabel-label startup to re-walk clips
-already labeled `startup` (or any other label) and re-triage each by hand into
-whichever label actually fits, without touching the rest of the unlabeled queue.
+The earlier half of such a pair is often not independent footage at all -- it's a
+literal frame-for-frame prefix of the later clip (same recording, sent early as a
+preview), possibly with a torn/truncated final frame from the cutoff. Before an
+interactive session starts, any earlier-half clip that matches is set
+`startup_state=duplicate` and never prompted for, inheriting the partner's class if
+the partner already has one. Known rare-event clips (PRIORITY_MESSAGE_IDS) are never
+auto-tagged this way even if they happen to match. Pass --no-startup-overlap-check to
+disable and review these by hand instead.
 
 Omitting --camera walks every camera's remaining clips shuffled and interleaved
 round-robin across cameras, so a session gets a spread instead of exhausting one
@@ -37,7 +41,10 @@ come first, unshuffled.
 
 Pass --message-ids-file to review a curated shortlist instead (e.g. candidates from
 scripts/backtest.py) -- one message_id per line, reviewed in the order given rather
-than timestamp/round-robin order. Already-labeled ids in the file are skipped.
+than timestamp/round-robin order. Already-classed ids in the file are skipped; an id
+that's only been auto-tagged startup_state (event's class still unknown) pulls its
+partner clip into the queue right after it, since that's the one that can actually
+answer what the event was.
 
 Run:
     uv run python scripts/label.py [--camera CAM_ID] [--limit N] [--include-no-file]
@@ -124,13 +131,15 @@ def _event_key(camera_id: str, caption: str | None) -> str | None:
 
 
 def _event_label_map(conn) -> dict[str, str]:
-    """event_key -> label for clips already labeled (this or a prior session), so a
-    still-unlabeled Initial/Stopped sibling can suggest the same label."""
+    """event_key -> label for events with a known class (this or a prior session), so
+    a still-unclassed sibling can suggest the same label. Rows that only carry a
+    startup_state (no class yet) don't contribute -- they have nothing to suggest."""
     rows = conn.execute(
         """
         SELECT clips.camera_id, clips.caption, labels.label
         FROM clips JOIN labels
             ON clips.channel_id = labels.channel_id AND clips.message_id = labels.message_id
+        WHERE labels.label IS NOT NULL
         """
     )
     mapping: dict[str, str] = {}
@@ -177,22 +186,31 @@ def _frame_mad(a: np.ndarray, b: np.ndarray) -> float:
 def _frames_prefix_match(
     short_path: str, long_path: str, *, mad_threshold: float = 4.0, max_frames: int = 10
 ) -> bool:
-    """True if every frame of `short_path` matches (low pixel difference) the
-    same-index frame of `long_path` -- i.e. the shorter clip is a literal
-    recording-start duplicate of the longer one, not independent footage.
+    """True if `short_path` is a literal recording-start duplicate of `long_path` --
+    i.e. the same physical clip, cut short -- not independent footage that happens to
+    share an embedded event timestamp.
 
-    Confirmed empirically 2026-08-29 on cam06/cam08/cam15 Initial/Stopped pairs:
-    mean absolute pixel difference stays under 3 across every frame of the shorter
-    clip when it's a genuine duplicate start, versus jumping past 15 by frame 2-3
-    on a pair that just happens to share an embedded timestamp but isn't (one
-    cam01b pair had corrupt fps metadata and diverged immediately)."""
+    Confirmed empirically 2026-08-28/29 on cam01b/cam02/cam06/cam08/cam15 Initial/
+    Stopped pairs: a genuine duplicate's frames match almost exactly (MAD well under
+    2) for every frame except sometimes the very last one, which is frequently a torn
+    or truncated write from the recording being cut off (MAD jumping to 4-15) -- so a
+    single trailing mismatch is tolerated, PROVIDED every earlier frame is a tight
+    match. That tightness matters: a person slowly moving through frame also fails a
+    per-frame `< mad_threshold` test at its *last* frame, but at a visibly looser MAD
+    even on its *earlier* frames (~1.5-1.9 on a confirmed real incident, cam02#8699)
+    than a genuinely static duplicate (~0-1.2 on every confirmed match) -- so this
+    doesn't relax into treating a real, still-unfolding event as a duplicate."""
     short_frames = _read_frames(short_path, max_frames)
-    if not short_frames:
+    if len(short_frames) < 2:
         return False
     long_frames = _read_frames(long_path, len(short_frames))
     if len(long_frames) < len(short_frames):
         return False
-    return all(_frame_mad(s, long_frames[i]) < mad_threshold for i, s in enumerate(short_frames))
+    mads = [_frame_mad(s, long_frames[i]) for i, s in enumerate(short_frames)]
+    if all(m < mad_threshold for m in mads):
+        return True
+    leading, trailing = mads[:-1], mads[-1]
+    return trailing >= mad_threshold and all(m < 1.5 for m in leading)
 
 
 def _apply_startup_prefix_duplicates(
@@ -202,11 +220,13 @@ def _apply_startup_prefix_duplicates(
     frame_match_fn: FrameMatchFn = _frames_prefix_match,
     message_ids: set[int] | None = None,
 ) -> int:
-    """Auto-label the earlier half of an Initial/Stopped pair as `startup` when its
-    frames are a literal duplicate of the paired clip's start, so it never needs a
-    human to watch it. Skips clips already labeled (handled by iter_unlabeled_clips),
-    clips with no downloaded file, and known rare-event clips (PRIORITY_MESSAGE_IDS)
-    even if they'd otherwise match -- a known real event is never auto-labeled.
+    """Mark the earlier half of an Initial/Stopped pair `startup_state='duplicate'`
+    when its frames are a literal duplicate of the paired clip's start, so it never
+    needs a human to watch it -- and inherit the partner's class (`label`) if the
+    partner already has one. Skips clips already labeled (handled by
+    iter_unlabeled_clips), clips with no downloaded file, and known rare-event clips
+    (PRIORITY_MESSAGE_IDS) even if they'd otherwise match -- a known real event is
+    never auto-labeled.
 
     `message_ids`, if set, restricts candidates to that set -- e.g. scoping the scan
     to a curated review list instead of walking every unlabeled clip in the db."""
@@ -239,18 +259,25 @@ def _apply_startup_prefix_duplicates(
             continue
         if not frame_match_fn(row["file_path"], partner["file_path"]):
             continue
+        partner_label = db.get_label(conn, partner["channel_id"], partner["message_id"])
         db.upsert_label(
             conn,
             channel_id=row["channel_id"],
             message_id=row["message_id"],
-            label="startup",
+            # The event's class (if the partner already has one) travels with it --
+            # `startup_state` only records that THIS clip is a frame-identical prefix,
+            # it says nothing about what the event was.
+            label=partner_label["label"] if partner_label is not None else None,
+            startup_state="duplicate",
             notes=f"auto: frame-identical prefix of {partner['camera_id']}#{partner['message_id']}",
         )
         applied += 1
     return applied
 
 
-# One line per src.db.VALID_LABELS entry, per docs/plan.md's Ground truth labels section.
+# Prompt vocabulary: the 5 real event classes (src.db.VALID_LABELS) plus 3 answers
+# about THIS clip's own visibility, independent of the event's class -- see
+# _label_fields below for how an answer maps to (label, startup_state) columns.
 LABEL_EXAMPLES: dict[str, str] = {
     "guard": "guard on patrol, flashlight visible, usually near/interior side",
     "animal": "an animal crossing -- not a person",
@@ -261,6 +288,7 @@ LABEL_EXAMPLES: dict[str, str] = {
     "startup_clear": "short/early pre-alert clip, but clear enough to make out the subject",
     "startup_blank": "short/early pre-alert clip, genuinely nothing visible",
 }
+PROMPT_LABELS: tuple[str, ...] = tuple(LABEL_EXAMPLES)
 
 # Distinct single-letter shortcut per label -- can't derive from label[0] since startup,
 # startup_clear, and startup_blank all start with 's'.
@@ -275,11 +303,55 @@ LABEL_SHORTCUTS: dict[str, str] = {
     "startup_blank": "b",
 }
 
+# The 3 startup-family prompt answers describe this clip's own visibility only, not
+# the event's class -- see _label_fields.
+_STARTUP_STATE_BY_PROMPT_LABEL: dict[str, str] = {
+    "startup": "duplicate",
+    "startup_clear": "clear",
+    "startup_blank": "blank",
+}
+
+
+def _label_fields(prompt_label: str) -> tuple[str | None, str | None]:
+    """Split a resolved prompt answer into (label, startup_state) for db.upsert_label.
+    The 5 real classes go straight to `label`, unchanged. The 3 startup-family answers
+    carry no class of their own -- the event's class, if already known from a sibling
+    clip, is inherited separately (see _propagate_class_to_siblings / event_labels)."""
+    startup_state = _STARTUP_STATE_BY_PROMPT_LABEL.get(prompt_label)
+    if startup_state is not None:
+        return None, startup_state
+    return prompt_label, None
+
+
+def _propagate_class_to_siblings(
+    conn, event_clips: dict[str, list[Mapping]], event_key: str | None, label: str
+) -> None:
+    """Once an event's class is known from any one of its clips, fill it into every
+    other clip sharing the same embedded event timestamp that doesn't have a class
+    yet. Each sibling's own startup_state/notes (if any) are preserved -- only
+    `label` is filled in, and never overwritten if a sibling already has one (a
+    human judgment on a specific clip is never silently replaced by inheritance)."""
+    if event_key is None:
+        return
+    for sib in event_clips.get(event_key, []):
+        existing = db.get_label(conn, sib["channel_id"], sib["message_id"])
+        if existing is not None and existing["label"] is not None:
+            continue
+        db.upsert_label(
+            conn,
+            channel_id=sib["channel_id"],
+            message_id=sib["message_id"],
+            label=label,
+            startup_state=existing["startup_state"] if existing is not None else None,
+            notes=(existing["notes"] if existing is not None else None)
+            or "auto: inherited from event sibling",
+        )
+
 
 def _resolve_label(raw: str) -> str | None:
     """Accept a full label name or its LABEL_SHORTCUTS letter; else None."""
     raw = raw.strip().lower()
-    if raw in VALID_LABELS:
+    if raw in PROMPT_LABELS:
         return raw
     return next((label for label, letter in LABEL_SHORTCUTS.items() if raw == letter), None)
 
@@ -326,7 +398,7 @@ def default_prompt(clip: Mapping) -> tuple[str, str | None] | None:
         print("  (no local file yet -- metadata-only label)")
 
     print("  labels:")
-    for label in VALID_LABELS:
+    for label in PROMPT_LABELS:
         print(f"    [{LABEL_SHORTCUTS[label]}] {label:<14} {LABEL_EXAMPLES[label]}")
 
     suggested = clip.get("_suggested_label")
@@ -364,14 +436,16 @@ def run_labeling_session(
     message_ids: list[int] | None = None,
     rng: random.Random | None = None,
 ) -> int:
-    """`relabel_label`, if set, re-walks clips that ALREADY carry that label (e.g.
-    `startup`) instead of unlabeled clips -- for re-triaging a prior label into a
-    finer-grained one (e.g. splitting `startup` into `startup_clear`/`startup_blank`).
+    """`relabel_label`, if set, re-walks clips that ALREADY carry that class instead of
+    unclassed clips -- for re-triaging, e.g. re-reviewing every `unknown` clip.
     Disables `detect_prefix_duplicates` (auto-labeling only applies to unlabeled clips).
 
     `message_ids`, if set, restricts the queue to exactly those clips (any camera),
     in the order given -- e.g. a curated screening shortlist -- instead of the usual
-    timestamp/round-robin ordering. Already-labeled clips in the list are skipped.
+    timestamp/round-robin ordering. Already-classed clips in the list are skipped; a
+    clip that's only been auto-tagged `startup_state` (no class yet) instead pulls its
+    event partner into the queue right after it, since that's the clip that can
+    actually answer what the event was.
     `detect_prefix_duplicates`, if also set, scopes the startup auto-scan to just
     these ids rather than the whole db -- catches genuine startup duplicates inside
     the curated list without the full-corpus scan's write-contention risk against a
@@ -386,18 +460,43 @@ def run_labeling_session(
             frame_match_fn=frame_match_fn,
             message_ids=set(message_ids) if message_ids is not None else None,
         )
+    event_clips = _event_clips_map(conn)
     if message_ids is not None:
         by_id = {row["message_id"]: dict(row) for row in db.iter_clips(conn)}
         rows = []
+        seen_ids: set[int] = set()
+
+        def _add(row: Mapping) -> None:
+            if row["message_id"] in seen_ids:
+                return
+            seen_ids.add(row["message_id"])
+            rows.append(row)
+
         for mid in message_ids:
             row = by_id.get(mid)
             if row is None:
                 continue
             if with_file_only and not row["file_path"]:
                 continue
-            if db.get_label(conn, row["channel_id"], row["message_id"]) is not None:
+            existing = db.get_label(conn, row["channel_id"], row["message_id"])
+            if existing is None:
+                _add(row)
                 continue
-            rows.append(row)
+            if existing["label"] is not None:
+                continue  # event's class already known -- nothing left to review
+            # Only startup_state is set so far (e.g. auto-tagged duplicate): this
+            # clip itself needs no more review, but the event's class is still
+            # unknown, so pull in its partner to actually answer that.
+            key = _event_key(row["camera_id"], row["caption"])
+            for sib in event_clips.get(key, []) if key is not None else []:
+                if sib["message_id"] == row["message_id"]:
+                    continue  # that's this clip itself, not a partner
+                if with_file_only and not sib["file_path"]:
+                    continue
+                sib_label = db.get_label(conn, sib["channel_id"], sib["message_id"])
+                if sib_label is not None and sib_label["label"] is not None:
+                    continue
+                _add(dict(sib))
     else:
         if relabel_label is not None:
             rows = db.iter_clips_with_label(
@@ -443,46 +542,58 @@ def run_labeling_session(
         event_key = _event_key(row["camera_id"], row["caption"])
 
         if short and bulk_label is not None:
+            label, startup_state = _label_fields(bulk_label)
+            if label is None and event_key is not None:
+                label = event_labels.get(event_key)
             db.upsert_label(
                 conn,
                 channel_id=row["channel_id"],
                 message_id=row["message_id"],
-                label=bulk_label,
+                label=label,
+                startup_state=startup_state,
                 notes="bulk: matches short blank-clip pattern",
             )
             labeled += 1
             remaining_short -= 1
-            if event_key is not None:
-                event_labels[event_key] = bulk_label
+            if label is not None:
+                if event_key is not None:
+                    event_labels[event_key] = label
+                _propagate_class_to_siblings(conn, event_clips, event_key, label)
             continue
 
         row["_suggested_label"] = event_labels.get(event_key) if event_key is not None else None
         result = prompt_fn(row)
         if result is None:
             break
-        label, notes = result
+        prompt_label, notes = result
+        label, startup_state = _label_fields(prompt_label)
+        if label is None and event_key is not None:
+            label = event_labels.get(event_key)
         db.upsert_label(
             conn,
             channel_id=row["channel_id"],
             message_id=row["message_id"],
             label=label,
+            startup_state=startup_state,
             notes=notes,
         )
         labeled += 1
-        if event_key is not None:
-            event_labels[event_key] = label
+        if label is not None:
+            if event_key is not None:
+                event_labels[event_key] = label
+            _propagate_class_to_siblings(conn, event_clips, event_key, label)
 
         if short:
             remaining_short -= 1
-            short_streak = short_streak + 1 if label == last_short_label else 1
-            last_short_label = label
+            short_streak = short_streak + 1 if prompt_label == last_short_label else 1
+            last_short_label = prompt_label
             if (
                 bulk_label is None
                 and short_streak == confirm_short_count
                 and remaining_short > 0
-                and confirm(label, remaining_short)
+                and confirm(prompt_label, remaining_short)
             ):
-                bulk_label = label
+                bulk_label = prompt_label
     return labeled + auto_labeled
 
 
@@ -511,8 +622,9 @@ def main() -> None:  # pragma: no cover - interactive I/O
         "--no-startup-overlap-check",
         action="store_true",
         help=(
-            "Disable auto-labeling the earlier half of an Initial/Stopped pair as "
-            "'startup' when its frames are a literal duplicate of the paired clip's start"
+            "Disable auto-tagging the earlier half of an Initial/Stopped pair "
+            "startup_state=duplicate when its frames are a literal duplicate of the "
+            "paired clip's start"
         ),
     )
     parser.add_argument(
@@ -520,9 +632,8 @@ def main() -> None:  # pragma: no cover - interactive I/O
         default=None,
         choices=VALID_LABELS,
         help=(
-            "Re-walk clips that already carry this label instead of unlabeled clips, "
-            "e.g. --relabel-label startup to split prior 'startup' rows into "
-            "startup_clear/startup_blank"
+            "Re-walk clips whose event already carries this class instead of unclassed "
+            "clips, e.g. --relabel-label unknown to re-review every 'unknown' event"
         ),
     )
     parser.add_argument(

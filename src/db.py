@@ -16,18 +16,23 @@ from typing import Any
 
 from src.errors import DbError
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
+# What the event was. Shared by every clip in an event (see labels.label below) --
+# a startup/prefix clip that's part of an `incident` event is still `incident`, just
+# with startup_state='blank' or 'clear' recording what that one clip showed on its own.
 VALID_LABELS = (
     "guard",
     "animal",
     "incident",
     "environment",
     "unknown",
-    "startup",
-    "startup_clear",
-    "startup_blank",
 )
+# Whether THIS clip's own content (not its event) was usable on its own -- relevant to
+# the short pre-alert clip that often precedes the substantive one for the same event.
+# `duplicate`: frame-identical prefix of the paired clip's start, confirmed automatically.
+# `clear`/`blank`: short clip judged by eye, subject visible or not, independent of a pair.
+VALID_STARTUP_STATES = ("clear", "blank", "duplicate")
 VALID_SOURCES = ("live", "backfill")
 VALID_PREDICTIONS = ("guard_side", "outside_alert", "outside_priority", "ambiguous")
 
@@ -54,15 +59,16 @@ CREATE INDEX IF NOT EXISTS idx_clips_camera_timestamp ON clips (camera_id, times
 CREATE TABLE IF NOT EXISTS labels (
     channel_id TEXT NOT NULL,
     message_id INTEGER NOT NULL,
-    label TEXT NOT NULL CHECK (
-        label IN (
-            'guard', 'animal', 'incident', 'environment', 'unknown', 'startup',
-            'startup_clear', 'startup_blank'
-        )
+    label TEXT CHECK (
+        label IS NULL OR label IN ('guard', 'animal', 'incident', 'environment', 'unknown')
+    ),
+    startup_state TEXT CHECK (
+        startup_state IS NULL OR startup_state IN ('clear', 'blank', 'duplicate')
     ),
     notes TEXT,
     labeled_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    PRIMARY KEY (channel_id, message_id)
+    PRIMARY KEY (channel_id, message_id),
+    CHECK (label IS NOT NULL OR startup_state IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS system_events (
@@ -268,21 +274,34 @@ def upsert_label(
     *,
     channel_id: str,
     message_id: int,
-    label: str,
+    label: str | None = None,
+    startup_state: str | None = None,
     notes: str | None = None,
 ) -> None:
-    if label not in VALID_LABELS:
+    """`label` is the event's class (shared by every clip in the event); `startup_state`
+    is this one clip's own visibility (`clear`/`blank`/`duplicate`), independent of the
+    event's class. At least one of the two must be given -- a labels row always records
+    something, even if the event's class isn't known yet (e.g. an auto-detected prefix
+    duplicate whose paired clip hasn't been reviewed)."""
+    if label is not None and label not in VALID_LABELS:
         raise DbError(f"label must be one of {VALID_LABELS}, got {label!r}")
+    if startup_state is not None and startup_state not in VALID_STARTUP_STATES:
+        raise DbError(
+            f"startup_state must be one of {VALID_STARTUP_STATES}, got {startup_state!r}"
+        )
+    if label is None and startup_state is None:
+        raise DbError("upsert_label needs at least one of label or startup_state")
     conn.execute(
         """
-        INSERT INTO labels (channel_id, message_id, label, notes)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO labels (channel_id, message_id, label, startup_state, notes)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (channel_id, message_id) DO UPDATE SET
             label = excluded.label,
+            startup_state = excluded.startup_state,
             notes = excluded.notes,
             labeled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         """,
-        (channel_id, message_id, label, notes),
+        (channel_id, message_id, label, startup_state, notes),
     )
 
 
@@ -320,7 +339,8 @@ def import_labels_jsonl(conn: sqlite3.Connection, path: str | Path) -> int:
                 conn,
                 channel_id=record["channel_id"],
                 message_id=record["message_id"],
-                label=record["label"],
+                label=record.get("label"),
+                startup_state=record.get("startup_state"),
                 notes=record.get("notes"),
             )
             count += 1

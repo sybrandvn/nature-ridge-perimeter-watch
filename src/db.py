@@ -16,11 +16,11 @@ from typing import Any
 
 from src.errors import DbError
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 VALID_LABELS = ("guard", "animal", "incident", "environment", "unknown", "startup")
 VALID_SOURCES = ("live", "backfill")
-VALID_PREDICTIONS = ("guard_side", "far_side_alert", "far_side_priority", "ambiguous")
+VALID_PREDICTIONS = ("guard_side", "outside_alert", "outside_priority", "ambiguous")
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS backtest_results (
     message_id INTEGER NOT NULL,
     camera_id TEXT NOT NULL,
     predicted_class TEXT NOT NULL CHECK (
-        predicted_class IN ('guard_side', 'far_side_alert', 'far_side_priority', 'ambiguous')
+        predicted_class IN ('guard_side', 'outside_alert', 'outside_priority', 'ambiguous')
     ),
     reason_codes_json TEXT NOT NULL,
     features_json TEXT NOT NULL,

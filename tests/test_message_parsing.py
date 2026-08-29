@@ -1,7 +1,7 @@
 from src.config import Camera, CamerasConfig, CameraZone
 from src.message_parsing import parse_message
 
-_ZONE = CameraZone(fence=None, far_side=None, depth_cutoff=1.0, ignore=())
+_ZONE = CameraZone(fence=None, outside=None, depth_cutoff=1.0, ignore=())
 
 
 def _cameras(*specs: tuple[str, tuple[str, ...]]) -> CamerasConfig:

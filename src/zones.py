@@ -9,7 +9,7 @@ Side convention: fences are drawn as an ordered polyline from one point to the
 next. Walking along that direction in image coordinates (x right, y down),
 "right" and "left" match normal compass-facing intuition (facing the direction
 of travel, your right hand points to larger-cross-product side). This must
-match config/cameras.yaml's `far_side: left|right` field.
+match config/cameras.yaml's `outside: left|right` field.
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ from collections.abc import Sequence
 from src.config import CameraZone, Point
 
 # Zone classification outcomes. "ignored" and "ambiguous" take priority over
-# "far_side"/"near_side" because they represent "cannot reliably classify here",
+# "outside"/"inside" because they represent "cannot reliably classify here",
 # not a side judgement -- see the fail-safe policy in docs/plan.md.
-ZoneClassification = str  # "far_side" | "near_side" | "ambiguous" | "ignored"
+ZoneClassification = str  # "outside" | "inside" | "ambiguous" | "ignored"
 
 
 def signed_side(point: Point, fence: Sequence[Point]) -> float:
@@ -96,28 +96,28 @@ def classify_zone(point: Point, zone: CameraZone) -> ZoneClassification:
 
     Ignore regions and depth cutoff are checked first: they mean "we cannot
     reliably classify here", which must never be conflated with a genuine
-    near/far side judgement.
+    inside/outside judgement.
     """
     if in_ignore_region(point, zone):
         return "ignored"
     if is_beyond_depth_cutoff(point, zone):
         return "ambiguous"
-    if zone.fence is None or zone.far_side is None:
+    if zone.fence is None or zone.outside is None:
         return "ambiguous"
-    return "far_side" if side_name(point, zone.fence) == zone.far_side else "near_side"
+    return "outside" if side_name(point, zone.fence) == zone.outside else "inside"
 
 
-def far_side_pixel_fraction(points: Sequence[Point], zone: CameraZone) -> float:
+def outside_pixel_fraction(points: Sequence[Point], zone: CameraZone) -> float:
     """Fraction of `points` (e.g. contour vertices or a sampled blob mask) that
-    fall on the far side, among points that are actually classifiable.
+    fall outside the fence, among points that are actually classifiable.
 
     Ignored/ambiguous points are excluded from both numerator and denominator
     so depth cutoff or ignore regions can't silently dilute the ratio toward
-    "not far side" -- a blob that's mostly in an ignore region should have an
+    "not outside" -- a blob that's mostly in an ignore region should have an
     ill-defined fraction (0.0, on an empty set), not a falsely low one.
     """
     classifications = [classify_zone(p, zone) for p in points]
-    relevant = [c for c in classifications if c in ("far_side", "near_side")]
+    relevant = [c for c in classifications if c in ("outside", "inside")]
     if not relevant:
         return 0.0
-    return sum(1 for c in relevant if c == "far_side") / len(relevant)
+    return sum(1 for c in relevant if c == "outside") / len(relevant)

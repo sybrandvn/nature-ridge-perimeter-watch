@@ -58,7 +58,7 @@ from src.features import (  # noqa: E402
     solidity,
     time_of_day,
 )
-from src.zones import far_side_pixel_fraction  # noqa: E402
+from src.zones import outside_pixel_fraction  # noqa: E402
 
 FEATURE_COLUMNS = (
     "channel_id",
@@ -66,7 +66,7 @@ FEATURE_COLUMNS = (
     "camera_id",
     "label",
     "time_of_day",
-    "far_side_pixel_fraction",
+    "outside_pixel_fraction",
     "aspect_ratio",
     "solidity",
     "saturation_ratio",
@@ -200,7 +200,7 @@ def extract_clip_features(
     points = normalized_contour_points(best_contour, frame_width, frame_height)
 
     return {
-        "far_side_pixel_fraction": far_side_pixel_fraction(points, zone),
+        "outside_pixel_fraction": outside_pixel_fraction(points, zone),
         "aspect_ratio": aspect_ratio(best_contour),
         "solidity": solidity(best_contour),
         "saturation_ratio": saturation_ratio(best_frame, best_contour),

@@ -8,7 +8,7 @@ from scripts import spike
 from src import db
 from src.config import Camera, CamerasConfig, CameraZone
 
-_ZONE = CameraZone(fence=((0.0, 0.5), (1.0, 0.5)), far_side="left", depth_cutoff=0.0, ignore=())
+_ZONE = CameraZone(fence=((0.0, 0.5), (1.0, 0.5)), outside="left", depth_cutoff=0.0, ignore=())
 
 
 def _blank_frame(size: int = 60, value: int = 0) -> np.ndarray:
@@ -98,7 +98,7 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
 
     assert result is not None
     for key in (
-        "far_side_pixel_fraction",
+        "outside_pixel_fraction",
         "aspect_ratio",
         "solidity",
         "saturation_ratio",
@@ -240,7 +240,7 @@ def test_run_spike_assembles_rows_and_skips_undetected(monkeypatch, tmp_path: Pa
 
     def fake_extract(file_path, zone, *, reference_row=None):
         if file_path == "clip1.mp4":
-            return {"far_side_pixel_fraction": 0.9}
+            return {"outside_pixel_fraction": 0.9}
         return None  # simulate no motion detected in clip2
 
     monkeypatch.setattr(spike, "extract_clip_features", fake_extract)
@@ -250,7 +250,7 @@ def test_run_spike_assembles_rows_and_skips_undetected(monkeypatch, tmp_path: Pa
     assert len(rows) == 1
     assert rows[0]["message_id"] == 1
     assert rows[0]["label"] == "guard"
-    assert rows[0]["far_side_pixel_fraction"] == 0.9
+    assert rows[0]["outside_pixel_fraction"] == 0.9
     conn.close()
 
 
@@ -261,7 +261,7 @@ def test_write_csv_round_trip(tmp_path: Path):
             "message_id": 1,
             "camera_id": "cam01",
             "label": "guard",
-            "far_side_pixel_fraction": 0.1,
+            "outside_pixel_fraction": 0.1,
             "aspect_ratio": 1.5,
             "solidity": 0.9,
             "saturation_ratio": 0.0,
@@ -277,5 +277,5 @@ def test_write_csv_round_trip(tmp_path: Path):
     spike.write_csv(rows, str(out_path))
 
     content = out_path.read_text()
-    assert "far_side_pixel_fraction" in content
+    assert "outside_pixel_fraction" in content
     assert "guard" in content

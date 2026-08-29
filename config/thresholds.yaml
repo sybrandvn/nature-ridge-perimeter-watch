@@ -23,7 +23,7 @@ classification:
     crawl_max: 0.8
   solidity:
     min_coherent: 0.3
-  far_side_pixel_fraction:
+  outside_pixel_fraction:
     alert_min: 0.5
   dwell:
     min_seconds: 1.5

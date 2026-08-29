@@ -121,7 +121,7 @@ def test_load_cameras_config_valid_with_zone(tmp_path):
             aliases: ["Camera 1", "CAM-01"]
             order: 0
             fence: [[0.1, 0.9], [0.6, 0.2]]
-            far_side: right
+            outside: right
             depth_cutoff: 0.15
             ignore:
               - [[0.0, 0.0], [0.05, 0.0], [0.05, 0.05]]
@@ -131,7 +131,7 @@ def test_load_cameras_config_valid_with_zone(tmp_path):
     assert len(cfg.cameras) == 1
     cam = cfg.cameras[0]
     assert cam.order == 0
-    assert cam.zone.far_side == "right"
+    assert cam.zone.outside == "right"
     assert cam.zone.depth_cutoff == 0.15
     assert len(cam.zone.ignore) == 1
     assert cfg.resolve_alias("camera 1") is cam
@@ -172,30 +172,30 @@ def test_duplicate_order_raises(tmp_path):
         load_cameras_config(path)
 
 
-def test_fence_without_far_side_raises(tmp_path):
+def test_fence_without_outside_raises(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",
         "cameras:\n  - id: cam01\n    fence: [[0.1, 0.1], [0.2, 0.2]]\n",
     )
-    with pytest.raises(ConfigError, match="far_side"):
+    with pytest.raises(ConfigError, match="outside"):
         load_cameras_config(path)
 
 
 def test_fence_point_out_of_range_raises(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",
-        "cameras:\n  - id: cam01\n    far_side: left\n    fence: [[1.5, 0.1], [0.2, 0.2]]\n",
+        "cameras:\n  - id: cam01\n    outside: left\n    fence: [[1.5, 0.1], [0.2, 0.2]]\n",
     )
     with pytest.raises(ConfigError, match="out of \\[0,1\\]"):
         load_cameras_config(path)
 
 
-def test_invalid_far_side_value_raises(tmp_path):
+def test_invalid_outside_value_raises(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",
-        "cameras:\n  - id: cam01\n    far_side: up\n    fence: [[0.1, 0.1], [0.2, 0.2]]\n",
+        "cameras:\n  - id: cam01\n    outside: up\n    fence: [[0.1, 0.1], [0.2, 0.2]]\n",
     )
-    with pytest.raises(ConfigError, match="far_side"):
+    with pytest.raises(ConfigError, match="outside"):
         load_cameras_config(path)
 
 

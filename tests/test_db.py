@@ -314,8 +314,8 @@ def test_backtest_run_lifecycle_and_isolation(conn):
         channel_id=CHANNEL,
         message_id=1,
         camera_id="cam01",
-        predicted_class="far_side_alert",
-        reason_codes=["far_side_pixel_fraction"],
+        predicted_class="outside_alert",
+        reason_codes=["outside_pixel_fraction"],
         features={"aspect_ratio": 2.0},
     )
     db.finish_run(conn, "run-1", status="completed")
@@ -335,7 +335,7 @@ def test_backtest_run_lifecycle_and_isolation(conn):
         message_id=1,
         camera_id="cam01",
         predicted_class="guard_side",
-        reason_codes=["near_side"],
+        reason_codes=["inside"],
         features={"aspect_ratio": 2.0},
     )
 
@@ -343,7 +343,7 @@ def test_backtest_run_lifecycle_and_isolation(conn):
     run2_results = list(db.iter_backtest_results(conn, "run-2"))
     assert len(run1_results) == 1
     assert len(run2_results) == 1
-    assert run1_results[0]["predicted_class"] == "far_side_alert"
+    assert run1_results[0]["predicted_class"] == "outside_alert"
     assert run2_results[0]["predicted_class"] == "guard_side"
 
     runs = {r["run_id"]: r["status"] for r in db.iter_backtest_runs(conn)}

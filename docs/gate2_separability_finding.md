@@ -6,7 +6,7 @@ produce no detectable motion at all and are dropped, which is correct
 behaviour for genuinely blank frames.
 
 Per-camera fence geometry originally existed only for cam05/cam06/cam08; other
-cameras got `far_side_pixel_fraction=0.0` (ambiguous by design, see
+cameras got `outside_pixel_fraction=0.0` (ambiguous by design, see
 `src/zones.py::classify_zone`). **Updated 2026-08-28: all 18 labelled cameras
 now have real fence geometry** (see `config/cameras.yaml` and the "Does wider
 geometry bias the result?" section below) — the spike was rerun and every
@@ -89,7 +89,7 @@ single-frame ratio threshold, so flicker genuinely catches guard clips the
 single-frame reading misses, at no added false-positive cost on this sample.
 
 Note this is a *confirmation* signal, not a suppression one. `docs/plan.md`'s
-fail-safe rule stands: nothing here may downgrade a far-side alert.
+fail-safe rule stands: nothing here may downgrade an outside alert.
 
 ## Shape and motion separation
 
@@ -115,21 +115,21 @@ at no cost to recall — the flashlight feature is doing real work.
 
 Precision stays low in absolute terms (0.22 at 75% recall, ~2.7x the 8.3% base
 rate). As a standalone classifier that is not usable. As an escalation signal
-layered on far-side geometry — which is what `docs/plan.md` actually specifies —
+layered on outside geometry — which is what `docs/plan.md` actually specifies —
 it is.
 
 ## Flashlight false positives (plan.md requires this count)
 
 Across all 18 cameras (110 labelled `guard` clips):
 
-- **58/110 (53%)** have a far-side-majority pixel fraction — more than half the
+- **58/110 (53%)** have an outside-majority pixel fraction — more than half the
   blob lands outside the fence line purely from geometry, despite being a guard
-  patrol on the near side.
+  patrol on the inside.
 - **38/58 (66%)** of those carry a light signal (`green_light_ratio > 0.05` or
   `saturation_ratio > 0.15`).
 
 This confirms the plan's predicted failure mode ("a flashlight beam aimed down
-or across the fence lands on the far side easily") as real and frequent. The
+or across the fence lands outside the fence easily") as real and frequent. The
 green-light feature is what makes those recoverable rather than pure noise.
 
 ## Does wider geometry bias the result?
@@ -139,19 +139,19 @@ this question (2026-08-28) rather than assumed either way:
 
 | metric | 3-camera geometry | 18-camera geometry |
 |---|---|---|
-| guard far-side-majority rate | 58% (36/62) | 53% (58/110) |
+| guard outside-majority rate | 58% (36/62) | 53% (58/110) |
 | ...recoverable via light signal | 64% (23/36) | 66% (38/58) |
 | environment insect-signature rate | 55% (12/22) | 55% (12/22, unchanged — doesn't use geometry) |
 | green-light guard identifier (recall / false-fire / animal+incident leak) | 61% / 2% / 0 | 61% / 2% / 0 (unchanged) |
 
 No meaningful bias: the headline rates hold within a few points across 3x more
-geometry and roughly double the guard sample. `far_side_pixel_fraction` alone
+geometry and roughly double the guard sample. `outside_pixel_fraction` alone
 is still not a clean separator on its own — on the 15 newly-geometried cameras,
-`environment` clips average a *higher* far-side fraction (0.85) than `guard`
+`environment` clips average a *higher* outside fraction (0.85) than `guard`
 clips do (0.51), which is the opposite of naive intuition (insects near the
 lens can sit anywhere relative to the fence line, including past it, without
 ever crossing anything). This is consistent with, not a change to, the
-existing recommendation: far-side geometry is an escalation input combined
+existing recommendation: outside geometry is an escalation input combined
 with the green-light/shape signals, never a standalone classifier.
 
 ## IR-insect false positives (plan.md requires this count)
@@ -172,11 +172,11 @@ Materially stronger than the first pass, but still one open decision:
    guard identifier, with zero leakage into animal/incident. Worth keeping
    regardless of what happens at this gate.
 2. Both predicted failure modes are confirmed and quantified (58% flashlight
-   far-side rate; 55% of environment clips insect-like).
+   outside rate; 55% of environment clips insect-like).
 3. Shape/motion features separate low-crawling subjects from upright ones in the
    right direction and with sensible magnitudes, but 12 positive clips cannot
    support a precision claim. More `animal`/`incident` labels would change
    confidence here more than any further feature work.
 4. Whether this passes depends on the bar: usable as an **escalation** signal on
-   top of far-side geometry (the design in `docs/plan.md`), not usable as a
+   top of outside geometry (the design in `docs/plan.md`), not usable as a
    standalone classifier. Confirming that reading is the remaining call.

@@ -154,7 +154,7 @@ the pipeline gets built.
    `clips.file_path`. Drop `--since`/`--until` to widen the window (e.g. to also pull ordinary
    guard/animal nights for contrast, not just the incident window) — `--limit-per-camera` still
    caps it to a spike-sized sample, not a full backfill.
-3. Hand-enter fence polylines for those cameras in `config/cameras.yaml` (`fence`, `far_side`,
+3. Hand-enter fence polylines for those cameras in `config/cameras.yaml` (`fence`, `outside`,
    `depth_cutoff`; 2-4 points is enough to start).
 
    **How to draw one** (no editor yet — see Phase 2 step 24 in `docs/plan.md`):
@@ -188,7 +188,7 @@ the pipeline gets built.
       "
       ```
       Three points captures the slight curve of a hand-drawn line; use more if the fence bends.
-   4. Work out `far_side`: pick any point you know is outside the fence (vegetation, sky) and
+   4. Work out `outside`: pick any point you know is outside the fence (vegetation, sky) and
       check which side it falls on:
       ```bash
       uv run python -c "
@@ -197,7 +197,7 @@ the pipeline gets built.
       print(side_name((0.78, 0.42), fence))  # a point you know is outside the fence
       "
       ```
-      Whatever it prints (`left` or `right`) is your `far_side` value. **Recompute this every
+      Whatever it prints (`left` or `right`) is your `outside` value. **Recompute this every
       time the points change** — it is relative to the direction the polyline runs, not to
       absolute screen position, so reversing the point order flips it.
    5. Set `depth_cutoff` to the row (as a `y` fraction) beyond which perspective makes the fence
@@ -223,7 +223,7 @@ the pipeline gets built.
    ```
 6. Inspect the CSV by hand (or a notebook). Does any threshold combination separate
    guard/environment from animal/incident at usable precision? Explicitly count flashlight and
-   IR-insect clips landing on the far side. **If separation fails, stop and revisit scope**
+   IR-insect clips landing outside the fence. **If separation fails, stop and revisit scope**
    (earlier ML, IR/brightness handling, multi-frame reference modelling) rather than pushing on
    to Phase 1.
 
@@ -247,9 +247,9 @@ trustee/security query bot).
 ## Fail-safe classification policy
 
 Bounding-box aspect ratio for a crawling person overlaps large animals — classical CV cannot
-reliably tell them apart from a short clip. So: shape/trajectory evidence may only **escalate** a
-far-side alert to `far_side_priority`. Nothing about blob shape is ever allowed to downgrade or
-suppress a far-side alert. This must be preserved in `classify.py` when it's built.
+reliably tell them apart from a short clip. So: shape/trajectory evidence may only **escalate** an
+outside alert to `outside_priority`. Nothing about blob shape is ever allowed to downgrade or
+suppress an outside alert. This must be preserved in `classify.py` when it's built.
 
 ## Repo layout
 

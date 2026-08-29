@@ -173,7 +173,7 @@ def _parse_id_list(field_name: str, raw: str | None) -> tuple[int, ...]:
 @dataclass(frozen=True)
 class CameraZone:
     fence: tuple[Point, ...] | None
-    far_side: str | None  # "left" | "right"
+    outside: str | None  # "left" | "right"
     depth_cutoff: float
     ignore: tuple[tuple[Point, ...], ...]
 
@@ -285,15 +285,15 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
             raise ConfigError(f"cameras.yaml: {camera_id!r} fence needs >= 2 points")
         fence = tuple(_parse_point(camera_id, "fence", p) for p in raw_fence)
 
-    far_side = entry.get("far_side")
-    if far_side is not None:
-        far_side = str(far_side).lower()
-        if far_side not in ("left", "right"):
+    outside = entry.get("outside")
+    if outside is not None:
+        outside = str(outside).lower()
+        if outside not in ("left", "right"):
             raise ConfigError(
-                f"cameras.yaml: {camera_id!r} far_side must be 'left' or 'right', got {far_side!r}"
+                f"cameras.yaml: {camera_id!r} outside must be 'left' or 'right', got {outside!r}"
             )
-    if fence is not None and far_side is None:
-        raise ConfigError(f"cameras.yaml: {camera_id!r} has a fence but no far_side")
+    if fence is not None and outside is None:
+        raise ConfigError(f"cameras.yaml: {camera_id!r} has a fence but no outside")
 
     depth_cutoff = entry.get("depth_cutoff", 0.0)
     depth_cutoff = float(depth_cutoff)
@@ -311,7 +311,7 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
         if len(polygon) < 3:
             raise ConfigError(f"cameras.yaml: {camera_id!r} ignore polygons need >= 3 points")
 
-    return CameraZone(fence=fence, far_side=far_side, depth_cutoff=depth_cutoff, ignore=ignore)
+    return CameraZone(fence=fence, outside=outside, depth_cutoff=depth_cutoff, ignore=ignore)
 
 
 def _parse_point(camera_id: str, field_name: str, point: Any) -> Point:

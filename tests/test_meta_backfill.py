@@ -8,7 +8,7 @@ from scripts.meta_backfill import run_backfill
 from src import db
 from src.config import Camera, CamerasConfig, CameraZone
 
-_ZONE = CameraZone(fence=None, far_side=None, depth_cutoff=1.0, ignore=())
+_ZONE = CameraZone(fence=None, outside=None, depth_cutoff=1.0, ignore=())
 
 
 @dataclass

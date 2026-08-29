@@ -359,3 +359,130 @@ def test_priority_clips_stay_first_when_spread_across_cameras(tmp_path: Path):
 
     assert seen[0] == ("cam06", 21519)
     conn.close()
+
+
+def test_startup_prefix_duplicate_auto_labeled_without_prompting(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    initial = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    stopped = "Cam Alert*: (Stopped*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    _seed(
+        conn,
+        1,
+        camera_id="cam10",
+        caption=initial,
+        file_path="data/history/cam10/1.mp4",
+        timestamp="2026-01-01T20:00:00Z",
+    )
+    _seed(
+        conn,
+        2,
+        camera_id="cam10",
+        caption=stopped,
+        file_path="data/history/cam10/2.mp4",
+        timestamp="2026-01-01T20:04:00Z",
+    )
+
+    seen_ids: list[int] = []
+
+    def prompt_fn(clip):
+        seen_ids.append(clip["message_id"])
+        return "guard", None
+
+    labeled = run_labeling_session(
+        conn,
+        prompt_fn=prompt_fn,
+        detect_prefix_duplicates=True,
+        frame_match_fn=lambda short_path, long_path: True,
+    )
+
+    assert labeled == 2
+    assert seen_ids == [2]  # clip 1 auto-labeled, never reaches the prompt
+    label1 = db.get_label(conn, "chan1", 1)
+    assert label1["label"] == "startup"
+    assert "auto:" in label1["notes"]
+    assert db.get_label(conn, "chan1", 2)["label"] == "guard"
+    conn.close()
+
+
+def test_startup_prefix_duplicate_disabled_by_default(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    initial = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    stopped = "Cam Alert*: (Stopped*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    _seed(conn, 1, camera_id="cam10", caption=initial, file_path="data/history/cam10/1.mp4")
+    _seed(conn, 2, camera_id="cam10", caption=stopped, file_path="data/history/cam10/2.mp4")
+
+    seen_ids: list[int] = []
+
+    def prompt_fn(clip):
+        seen_ids.append(clip["message_id"])
+        return "guard", None
+
+    run_labeling_session(
+        conn, prompt_fn=prompt_fn, frame_match_fn=lambda short_path, long_path: True
+    )
+
+    assert seen_ids == [1, 2]  # detect_prefix_duplicates=False -- nothing auto-labeled
+    conn.close()
+
+
+def test_startup_prefix_duplicate_not_applied_when_frames_differ(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    initial = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    stopped = "Cam Alert*: (Stopped*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    _seed(conn, 1, camera_id="cam10", caption=initial, file_path="data/history/cam10/1.mp4")
+    _seed(conn, 2, camera_id="cam10", caption=stopped, file_path="data/history/cam10/2.mp4")
+
+    seen_ids: list[int] = []
+
+    def prompt_fn(clip):
+        seen_ids.append(clip["message_id"])
+        return "guard", None
+
+    run_labeling_session(
+        conn,
+        prompt_fn=prompt_fn,
+        detect_prefix_duplicates=True,
+        frame_match_fn=lambda short_path, long_path: False,
+    )
+
+    assert seen_ids == [1, 2]  # frames don't match -- both go through the normal prompt
+    conn.close()
+
+
+def test_startup_prefix_duplicate_never_applied_to_priority_clips(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    initial = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 6 @ 21-07-26 22:30:43"
+    stopped = "Cam Alert*: (Timeout*) NATURE RIDGE COMPLEX, MOTIONVIEWER 6 @ 21-07-26 22:30:43"
+    _seed(
+        conn,
+        21519,
+        camera_id="cam06",
+        caption=initial,
+        file_path="data/history/cam06/21519.mp4",
+        timestamp="2026-07-21T20:31:21Z",
+    )
+    _seed(
+        conn,
+        21520,
+        camera_id="cam06",
+        caption=stopped,
+        file_path="data/history/cam06/21520.mp4",
+        timestamp="2026-07-21T20:36:05Z",
+    )
+
+    seen_ids: list[int] = []
+
+    def prompt_fn(clip):
+        seen_ids.append(clip["message_id"])
+        return "incident", None
+
+    labeled = run_labeling_session(
+        conn,
+        prompt_fn=prompt_fn,
+        detect_prefix_duplicates=True,
+        frame_match_fn=lambda short_path, long_path: True,
+    )
+
+    assert labeled == 2
+    assert seen_ids == [21519, 21520]  # priority clip 21519 still goes through the prompt
+    conn.close()

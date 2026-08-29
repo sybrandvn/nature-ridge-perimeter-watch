@@ -14,6 +14,14 @@ Some triggers also send two alert messages for the same physical event -- e.g. a
 timestamp. Once you label one, its still-unlabeled sibling shows a suggested label
 you can accept with Enter, or override by typing another letter/word as usual.
 
+The earlier half of such a pair is often not an independent blank clip at all --
+it's a literal frame-for-frame prefix of the later clip (same recording, sent early
+as a preview). Before an interactive session starts, any unlabeled earlier-half clip
+whose frames match the paired clip's start (mean pixel difference near zero across
+every frame) is auto-labeled `startup` and never prompted for. Known rare-event clips
+(PRIORITY_MESSAGE_IDS) are never auto-labeled this way even if they happen to match.
+Pass --no-startup-overlap-check to disable and review these by hand instead.
+
 Omitting --camera walks every camera's remaining clips shuffled and interleaved
 round-robin across cameras, so a session gets a spread instead of exhausting one
 camera's queue before moving to the next. Priority clips (known rare events) still
@@ -21,7 +29,7 @@ come first, unshuffled.
 
 Run:
     uv run python scripts/label.py [--camera CAM_ID] [--limit N] [--include-no-file]
-        [--short-clip-seconds SECS] [--confirm-short-count N]
+        [--short-clip-seconds SECS] [--confirm-short-count N] [--no-startup-overlap-check]
 """
 
 from __future__ import annotations
@@ -34,6 +42,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -44,6 +53,7 @@ from src.db import VALID_LABELS  # noqa: E402
 PromptFn = Callable[[Mapping], "tuple[str, str | None] | None"]  # None => quit
 BulkConfirmFn = Callable[[str, int], bool]
 DurationFn = Callable[[str], "float | None"]
+FrameMatchFn = Callable[[str, str], bool]
 
 # Known rare-class clips from README.md section 4 (crawl incident, probe, animal
 # sightings), so a labeling session surfaces them early instead of behind months of
@@ -116,6 +126,103 @@ def _event_label_map(conn) -> dict[str, str]:
         if key is not None:
             mapping[key] = row["label"]
     return mapping
+
+
+def _event_clips_map(conn) -> dict[str, list[Mapping]]:
+    """event_key -> every clip sharing that embedded-timestamp event (any label
+    state), ordered earliest-first by message timestamp. The earliest clip in a pair
+    is the one that can be an auto-labeled `startup` prefix duplicate; unlike
+    `_event_label_map` this doesn't require either clip to be labeled yet."""
+    mapping: dict[str, list[Mapping]] = {}
+    for row in conn.execute("SELECT * FROM clips ORDER BY timestamp"):
+        key = _event_key(row["camera_id"], row["caption"])
+        if key is not None:
+            mapping.setdefault(key, []).append(row)
+    return mapping
+
+
+def _read_frames(path: str, limit: int) -> list[np.ndarray]:
+    cap = cv2.VideoCapture(path)
+    frames: list[np.ndarray] = []
+    try:
+        while len(frames) < limit:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            frames.append(frame)
+    finally:
+        cap.release()
+    return frames
+
+
+def _frame_mad(a: np.ndarray, b: np.ndarray) -> float:
+    if a.shape != b.shape:
+        a = cv2.resize(a, (b.shape[1], b.shape[0]))
+    return float(np.mean(np.abs(a.astype(int) - b.astype(int))))
+
+
+def _frames_prefix_match(
+    short_path: str, long_path: str, *, mad_threshold: float = 4.0, max_frames: int = 10
+) -> bool:
+    """True if every frame of `short_path` matches (low pixel difference) the
+    same-index frame of `long_path` -- i.e. the shorter clip is a literal
+    recording-start duplicate of the longer one, not independent footage.
+
+    Confirmed empirically 2026-08-29 on cam06/cam08/cam15 Initial/Stopped pairs:
+    mean absolute pixel difference stays under 3 across every frame of the shorter
+    clip when it's a genuine duplicate start, versus jumping past 15 by frame 2-3
+    on a pair that just happens to share an embedded timestamp but isn't (one
+    cam01b pair had corrupt fps metadata and diverged immediately)."""
+    short_frames = _read_frames(short_path, max_frames)
+    if not short_frames:
+        return False
+    long_frames = _read_frames(long_path, len(short_frames))
+    if len(long_frames) < len(short_frames):
+        return False
+    return all(_frame_mad(s, long_frames[i]) < mad_threshold for i, s in enumerate(short_frames))
+
+
+def _apply_startup_prefix_duplicates(
+    conn,
+    *,
+    camera_id: str | None = None,
+    frame_match_fn: FrameMatchFn = _frames_prefix_match,
+) -> int:
+    """Auto-label the earlier half of an Initial/Stopped pair as `startup` when its
+    frames are a literal duplicate of the paired clip's start, so it never needs a
+    human to watch it. Skips clips already labeled (handled by iter_unlabeled_clips),
+    clips with no downloaded file, and known rare-event clips (PRIORITY_MESSAGE_IDS)
+    even if they'd otherwise match -- a known real event is never auto-labeled."""
+    event_clips = _event_clips_map(conn)
+    applied = 0
+    for row in db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=True):
+        if row["message_id"] in PRIORITY_MESSAGE_IDS.get(row["camera_id"], frozenset()):
+            continue
+        key = _event_key(row["camera_id"], row["caption"])
+        if key is None:
+            continue
+        siblings = event_clips.get(key, [])
+        if len(siblings) < 2:
+            continue
+        earliest, partner = siblings[0], siblings[1]
+        if (earliest["channel_id"], earliest["message_id"]) != (
+            row["channel_id"],
+            row["message_id"],
+        ):
+            continue  # only the earlier half of the pair is a startup candidate
+        if not partner["file_path"]:
+            continue
+        if not frame_match_fn(row["file_path"], partner["file_path"]):
+            continue
+        db.upsert_label(
+            conn,
+            channel_id=row["channel_id"],
+            message_id=row["message_id"],
+            label="startup",
+            notes=f"auto: frame-identical prefix of {partner['camera_id']}#{partner['message_id']}",
+        )
+        applied += 1
+    return applied
 
 
 # One line per src.db.VALID_LABELS entry, per docs/plan.md's Ground truth labels section.
@@ -207,9 +314,16 @@ def run_labeling_session(
     confirm_short_count: int = 3,
     bulk_confirm_fn: BulkConfirmFn | None = None,
     duration_fn: DurationFn = _clip_duration_seconds,
+    detect_prefix_duplicates: bool = False,
+    frame_match_fn: FrameMatchFn = _frames_prefix_match,
     rng: random.Random | None = None,
 ) -> int:
     labeled = 0
+    auto_labeled = 0
+    if detect_prefix_duplicates:
+        auto_labeled = _apply_startup_prefix_duplicates(
+            conn, camera_id=camera_id, frame_match_fn=frame_match_fn
+        )
     rows = db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=with_file_only)
     priority, rest = _prioritize([dict(row) for row in rows])
     rest = _spread_by_camera(rest, rng or random.Random())
@@ -287,7 +401,7 @@ def run_labeling_session(
                 and confirm(label, remaining_short)
             ):
                 bulk_label = label
-    return labeled
+    return labeled + auto_labeled
 
 
 def main() -> None:  # pragma: no cover - interactive I/O
@@ -311,6 +425,14 @@ def main() -> None:  # pragma: no cover - interactive I/O
         default=3,
         help="Short clips to confirm individually before offering to bulk-label the rest",
     )
+    parser.add_argument(
+        "--no-startup-overlap-check",
+        action="store_true",
+        help=(
+            "Disable auto-labeling the earlier half of an Initial/Stopped pair as "
+            "'startup' when its frames are a literal duplicate of the paired clip's start"
+        ),
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
@@ -323,6 +445,7 @@ def main() -> None:  # pragma: no cover - interactive I/O
         with_file_only=not args.include_no_file,
         short_clip_seconds=args.short_clip_seconds or None,
         confirm_short_count=args.confirm_short_count,
+        detect_prefix_duplicates=not args.no_startup_overlap_check,
     )
     conn.close()
     print(f"\nLabeled {labeled} clip(s).")

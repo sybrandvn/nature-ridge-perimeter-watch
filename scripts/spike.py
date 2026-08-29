@@ -77,6 +77,8 @@ FEATURE_COLUMNS = (
     "path_length",
     "jitter",
     "persistence",
+    "motion_pixel_fraction",
+    "blob_count",
 )
 
 
@@ -121,6 +123,7 @@ def extract_clip_features(
     reference_row: float | None = None,
     warmup_frames: int = 10,
     max_area_fraction: float = 0.25,
+    min_blob_area_fraction: float = 0.0005,
     threshold: int = 18,
 ) -> dict[str, float] | None:
     """Run a simple background-subtraction detector over one clip and compute
@@ -156,6 +159,7 @@ def extract_clip_features(
 
     frame_height, frame_width = considered[0].shape[:2]
     max_area = max_area_fraction * frame_height * frame_width
+    min_blob_area = min_blob_area_fraction * frame_height * frame_width
 
     grays = [
         cv2.GaussianBlur(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY), (5, 5), 0) for f in considered
@@ -170,12 +174,25 @@ def extract_clip_features(
     best_frame: np.ndarray | None = None
     best_area = -1.0
     whole_frame = _whole_frame_contour(frame_width, frame_height)
+    motion_pixel_fraction = 0.0
+    blob_count = 0
 
     for frame, gray in zip(considered, grays, strict=True):
         whole_frame_green_ratios.append(green_light_ratio(frame, whole_frame))
         diff = cv2.absdiff(gray, background)
         _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        # Peak-frame readings, not an average -- a storm/wind frame with motion
+        # scattered across many small blobs (bushes, branches) reads very
+        # differently from a single compact subject even at the same threshold.
+        motion_pixel_fraction = max(
+            motion_pixel_fraction, float(np.count_nonzero(mask)) / mask.size
+        )
+        frame_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        blob_count = max(
+            blob_count,
+            sum(1 for c in frame_contours if min_blob_area <= cv2.contourArea(c) <= max_area),
+        )
         contour = largest_contour(mask, max_area=max_area)
         if contour is None:
             continue
@@ -211,6 +228,8 @@ def extract_clip_features(
         "path_length": path_length(centroids),
         "jitter": jitter(centroids),
         "persistence": persistence(frames_detected, len(considered)),
+        "motion_pixel_fraction": motion_pixel_fraction,
+        "blob_count": float(blob_count),
     }
 
 

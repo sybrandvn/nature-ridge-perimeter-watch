@@ -180,3 +180,56 @@ Materially stronger than the first pass, but still one open decision:
 4. Whether this passes depends on the bar: usable as an **escalation** signal on
    top of outside geometry (the design in `docs/plan.md`), not usable as a
    standalone classifier. Confirming that reading is the remaining call.
+
+## Addendum (2026-08-29): straddling, and two new blob-count/motion-area features
+
+Re-run on 250 feature rows (up from 160) after schema v5's class propagation
+filled in more clips. Two ideas checked, both directly against real data:
+
+**"Only outside" vs "straddles inside and outside" as a guard signal.** A
+single blob whose contour points are only partly outside the fence line
+(`0 < outside_pixel_fraction < 1`, i.e. the same blob straddles the line —
+this is the flashlight beam or body crossing it, not a track moving over
+time) is directional for guard but weaker than it first looked on the smaller
+sample:
+
+| label | n | fully outside (==1) | straddles (mixed) |
+|---|---|---|---|
+| guard | 194 | 23% | 50% |
+| incident | 16 | 31% | 31% |
+| environment | 22 | 5% | 18% |
+| animal | 5 | 20% | 20% |
+
+"Fully outside" alone does **not** separate animal/incident from guard — guard
+reads fully-outside about as often as incident does (23% vs 31%), even after
+excluding clips with a flashlight signal. "Straddles" is still guard-leaning
+but incident's rate rose from 0% to 31% once more incident clips were
+labelled, so treat it as a mild prior, not a rule.
+
+**Storm/wind hypothesis (large scattered motion, not one compact blob).**
+Added two new spike features (`scripts/spike.py`, `min_blob_area_fraction`
+default `0.0005` matching `config/thresholds.yaml`'s `blob.min_area_fraction`):
+`motion_pixel_fraction` (peak fraction of the frame that's foreground motion
+in any single frame) and `blob_count` (peak number of simultaneous blobs above
+the area cutoff). The existing single-largest-blob detector explicitly
+discards this — it picks one contour and rejects anything over 25% of the
+frame as an illumination artifact, so wind-blown-vegetation clips were
+previously invisible to every feature in this document.
+
+| label | n | mean motion_pixel_fraction | mean blob_count |
+|---|---|---|---|
+| environment | 22 | 0.28 | 24.0 |
+| incident | 16 | 0.21 | 14.2 |
+| guard | 194 | 0.20 | 6.7 |
+| unknown | 13 | 0.10 | 4.4 |
+| animal | 5 | 0.07 | 3.4 |
+
+Directionally supports the idea — `environment` clips do show the widest,
+most fragmented motion. Not clean yet: `incident`'s blob_count is also
+elevated, most likely an artifact of only 16 labelled clips rather than a real
+incident characteristic. Needs more labelled `incident`/`animal` volume before
+either feature earns a threshold rule.
+
+Both are additive: existing conclusions/recommendation above are unchanged,
+this only adds two more candidate columns to `data/reports/spike_*.csv` for
+whenever gate 2 (or a future revisit) evaluates thresholds.

@@ -5,6 +5,17 @@ labelled sample, then build the backfill → label → backtest calibration loop
 and delivery-reliability machinery are deferred until thresholds are proven. Alert modules ship as
 tested, manually-invokable functions only.
 
+## Checkpoint (2026-08-30): Phase 0 merged to `main`, needs work before Phase 1 starts
+Phase 0 (steps 1-14) is merged and tagged as a checkpoint, not a clean sign-off. Open items before
+Phase 1 work should build on this without inheriting stale numbers:
+- Gate 2 pass/fail is still the user's explicit call, not made (see step 14 and
+  `docs/handoff.md`).
+- `docs/gate2_separability_finding.md`'s main body predates both a day of extra labelling and the
+  2026-08-30 `zones.py` geometry fix — only its "Addendum 2 (2026-08-30)" section is current.
+  Rerun the main-body analysis on `data/reports/spike_all_2026-08-30.csv` before finalising gate 2.
+- The guard/environment/cam01b-resident `outside_pixel_fraction` inconsistency noted in step 11
+  (likely fence line traced too high) is still open.
+
 ## Scope decisions (2026-08-28)
 - This round: camera-order discovery, CV spike, backtester, stub alert modules. No `main.py`
   service loop, no Dockerfile/compose, no delivery outbox.

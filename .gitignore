@@ -18,6 +18,9 @@ data/reports/*
 *.db
 *.db-wal
 *.db-shm
+*.db.bak-*
+data/backups/
+data/*.log
 
 # Editors / OS
 .vscode/

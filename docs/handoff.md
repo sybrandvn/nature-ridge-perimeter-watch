@@ -33,12 +33,21 @@ is the one open decision blocking Phase 1.
 | 2. Download clips | done — 142+ clips on disk across the spike cameras, later downloads extended to more cameras |
 | 3. Fence polylines | done — extended from 3 to all 18 labelled cameras (2026-08-28) |
 | 4. Hand-label ~150 clips | done, and ongoing past the original milestone — 281 labels rows as of 2026-08-29: 174 with a known event class (guard 126, environment 22, unknown 11, incident 10, animal 5), 121 with only a `startup_state` so far (event class pending its partner clip's review — see schema v5 note below) |
-| 5. Run `scripts/spike.py` | done — rerun multiple times as the detector and feature set improved, latest run is current |
-| 6. Read the CSV, decide gate 2 | **written finding done (`docs/gate2_separability_finding.md`), pass/fail call is the user's, not yet made** |
+| 5. Run `scripts/spike.py` | done — rerun 2026-08-30 with the corrected zone geometry (see below); `data/reports/spike_all_2026-08-30.csv` is current |
+| 6. Read the CSV, decide gate 2 | **written finding done (`docs/gate2_separability_finding.md`), pass/fail call is the user's, not yet made — see staleness note below before signing off** |
 
 ## The next task: gate 2 pass/fail
 
 `docs/gate2_separability_finding.md` has the full writeup. Summary of what it found:
+
+**Staleness warning:** the doc's main body (label counts table, green-flashlight rule, shape/motion
+table, the 53%/58% flashlight-false-positive count) was written 2026-08-28 on 110 guard clips with
+the *old*, direction-of-travel-relative geometry -- it predates both a day of extra labelling
+(guard is now 194 rows) and the 2026-08-30 `zones.py` fix. Only "Addendum 2 (2026-08-30)" is
+current. A quick re-check on today's data found the coarse outside-majority rate barely moved (51%
+vs. the old 53%), but that's not a controlled comparison -- label volume changed too. Rerun the
+whole main-body analysis on `spike_all_2026-08-30.csv` before treating any of its specific numbers
+(other than Addendum 2's) as the basis for the gate 2 sign-off.
 
 - **Green flashlight is a strong guard identifier:** `green_light_ratio > 0.05 OR
   green_light_flicker > 0.02` catches 61% of guard clips, 2% of non-guard, 0/12 animal+incident.

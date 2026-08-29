@@ -46,14 +46,19 @@ class FakeMessage:
 class FakeClient:
     """Stands in for Telethon's TelegramClient for the two calls we make."""
 
-    def __init__(self, messages_by_id: dict[int, FakeMessage]):
+    def __init__(
+        self, messages_by_id: dict[int, FakeMessage], raise_for_ids: set[int] = frozenset()
+    ):
         self._messages_by_id = messages_by_id
+        self._raise_for_ids = raise_for_ids
         self.downloaded: list[tuple[int, str]] = []
 
     async def get_messages(self, channel_ref, *, ids):
         return self._messages_by_id.get(ids)
 
     async def download_media(self, message, *, file):
+        if id(message) in self._raise_for_ids:
+            raise ValueError("Request was unsuccessful 6 time(s)")
         self.downloaded.append((id(message), file))
         Path(file).write_bytes(b"fake video bytes")
 
@@ -175,6 +180,30 @@ async def test_run_download_updates_file_path_and_counts(conn, tmp_path):
         out_dir=str(tmp_path),
     )
 
-    assert counts == {"downloaded": 1, "skipped_no_media": 1}
+    assert counts == {"downloaded": 1, "skipped_no_media": 1, "failed": 0}
     assert db.get_clip(conn, CHANNEL, 1)["file_path"] == str(tmp_path / "cam01" / "1.mp4")
     assert db.get_clip(conn, CHANNEL, 2)["file_path"] is None
+
+
+async def test_run_download_continues_past_a_failed_clip(conn, tmp_path):
+    _seed(conn, "cam01", 1, "2026-07-21T20:00:00Z")
+    _seed(conn, "cam01", 2, "2026-07-21T20:05:00Z")
+    bad_message = FakeMessage(video=FakeMedia())
+    client = FakeClient(
+        {1: bad_message, 2: FakeMessage(video=FakeMedia())},
+        raise_for_ids={id(bad_message)},
+    )
+    candidates = select_download_candidates(conn, cameras=["cam01"])
+
+    counts = await run_download(
+        conn,
+        client,
+        channel_ref="chan_ref",
+        channel_id=CHANNEL,
+        candidates=candidates,
+        out_dir=str(tmp_path),
+    )
+
+    assert counts == {"downloaded": 1, "skipped_no_media": 0, "failed": 1}
+    assert db.get_clip(conn, CHANNEL, 1)["file_path"] is None
+    assert db.get_clip(conn, CHANNEL, 2)["file_path"] == str(tmp_path / "cam01" / "2.mp4")

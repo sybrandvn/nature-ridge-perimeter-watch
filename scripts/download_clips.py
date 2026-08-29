@@ -15,6 +15,12 @@ restricted to a `[--since, --until)` timestamp window, capped at
 atomic rename, and records the path back into `clips.file_path` so
 `scripts/label.py` and `scripts/spike.py` can find it.
 
+A single clip that fails to download (Telegram-side timeout, oversized file,
+etc.) is logged as `status: failed` and skipped rather than aborting the run --
+useful for unattended full-history passes, but this still has no flood-wait
+backoff or reconnect handling, so a wholesale connection loss will still need
+a rerun (safe to do: candidate selection re-queries `file_path IS NULL`).
+
 Run:
     uv run python scripts/download_clips.py --camera cam01b --camera cam07 --camera cam05 \\
         --since 2026-07-20 --until 2026-07-22 --limit-per-camera 10
@@ -92,10 +98,21 @@ async def run_download(
     candidates: list[dict[str, Any]],
     out_dir: str,
 ) -> dict[str, int]:
-    counts = {"downloaded": 0, "skipped_no_media": 0}
+    counts = {"downloaded": 0, "skipped_no_media": 0, "failed": 0}
     for clip in candidates:
         dest = clip_download_path(out_dir, clip["camera_id"], clip["message_id"])
-        downloaded = await download_one(client, channel_ref, clip["message_id"], dest)
+        try:
+            downloaded = await download_one(client, channel_ref, clip["message_id"], dest)
+        except Exception as exc:
+            # A single bad message (Telegram-side timeout, oversized file, etc.) shouldn't
+            # abort the whole run -- log it and keep going so a full-history pass can finish.
+            counts["failed"] += 1
+            logger.info(
+                json.dumps(
+                    {"message_id": clip["message_id"], "status": "failed", "error": str(exc)}
+                )
+            )
+            continue
         if not downloaded:
             counts["skipped_no_media"] += 1
             logger.info(

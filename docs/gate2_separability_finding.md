@@ -233,3 +233,52 @@ either feature earns a threshold rule.
 Both are additive: existing conclusions/recommendation above are unchanged,
 this only adds two more candidate columns to `data/reports/spike_*.csv` for
 whenever gate 2 (or a future revisit) evaluates thresholds.
+
+## Addendum 2 (2026-08-30): outside/inside geometry fix, re-run
+
+`src/zones.py::side_name` was direction-of-travel-relative (depended on which
+way the polyline's points were ordered), which inverted left/right for any
+fence traced top-to-bottom -- confusing enough it looked like a config bug.
+Fixed to plain screen position (point x vs. the fence's x at the same row);
+see the commit for the fence-truth verification. This directly changes every
+row's `outside_pixel_fraction`, so both tables above are re-run here on the
+regenerated `data/reports/spike_all_2026-08-30.csv` (also reflects the 6
+cam01b clips moved from `incident` to the new `resident` class).
+
+**Straddling, re-run:**
+
+| label | n | fully outside (==1) | straddles (mixed) | fully inside (==0) |
+|---|---|---|---|---|
+| guard | 194 | 31% | 50% | 19% |
+| incident | 10 | 80% | 20% | 0% |
+| environment | 22 | 77% | 18% | 5% |
+| animal | 5 | 80% | 20% | 0% |
+| unknown | 13 | 77% | 0% | 23% |
+
+Notably better separation than the pre-fix numbers: guard is now the only
+label that reads "fully inside" at all (19%) and straddles half the time,
+while incident/environment/animal all read "fully outside" 77-80% of the
+time. Still not clean enough alone for a threshold (guard's own 31%
+fully-outside rate overlaps the others, and this is measured on a detector
+that still has the separate, open fence-height issue affecting some clips
+per-camera), but a real improvement over the pre-fix numbers, not just noise.
+
+**Storm/wind, re-run** (motion_pixel_fraction/blob_count don't depend on the
+geometry fix, but `incident`'s n dropped 16->10 once the resident clips were
+reclassified):
+
+| label | n | mean motion_pixel_fraction | mean blob_count |
+|---|---|---|---|
+| environment | 22 | 0.28 | 24.0 |
+| resident | 6 | 0.41 | 25.5 |
+| guard | 194 | 0.20 | 6.7 |
+| unknown | 13 | 0.10 | 4.4 |
+| incident | 10 | 0.09 | 7.4 |
+| animal | 5 | 0.06 | 3.4 |
+
+With the residents removed, `incident` no longer looks storm-like (motion
+dropped 0.21->0.09, blob_count 14.2->7.4) -- the earlier "small-n artifact"
+caveat was actually those 6 resident clips (bakkie/vehicle, multiple people)
+contaminating the incident sample. `resident` itself now reads as the
+highest-motion class of all, plausibly real (vehicle + multiple people) but
+n=6 is too small to treat as anything but a first look.

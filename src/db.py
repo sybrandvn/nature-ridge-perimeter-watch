@@ -25,6 +25,7 @@ VALID_LABELS = (
     "guard",
     "animal",
     "incident",
+    "resident",
     "environment",
     "unknown",
 )
@@ -60,7 +61,8 @@ CREATE TABLE IF NOT EXISTS labels (
     channel_id TEXT NOT NULL,
     message_id INTEGER NOT NULL,
     label TEXT CHECK (
-        label IS NULL OR label IN ('guard', 'animal', 'incident', 'environment', 'unknown')
+        label IS NULL
+        OR label IN ('guard', 'animal', 'incident', 'resident', 'environment', 'unknown')
     ),
     startup_state TEXT CHECK (
         startup_state IS NULL OR startup_state IN ('clear', 'blank', 'duplicate')

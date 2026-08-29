@@ -5,8 +5,8 @@ backfilled rows don't and walking them produces nothing to watch. Pass --include
 to fall back to the old metadata-only behaviour (label off caption/camera/timestamp alone).
 
 Each labeled clip records two independent things (schema v5):
-  - `label`: what the event WAS (guard/animal/incident/environment/unknown) -- shared
-    by every clip that's part of the same physical trigger.
+  - `label`: what the event WAS (guard/animal/incident/resident/environment/unknown) --
+    shared by every clip that's part of the same physical trigger.
   - `startup_state`: whether THIS clip's own content was usable on its own, for a
     short/early clip that precedes the real one (clear/blank/duplicate) -- says
     nothing about what the event was.
@@ -282,6 +282,7 @@ LABEL_EXAMPLES: dict[str, str] = {
     "guard": "guard on patrol, flashlight visible, usually near/interior side",
     "animal": "an animal crossing -- not a person",
     "incident": "a person: crawling, probing, or climbing, usually far/exterior side",
+    "resident": "an identified resident/authorized person on the interior side -- not a threat",
     "environment": "IR-attracted insects, rain streaks, wind-blown vegetation, shadow artifacts",
     "unknown": "can't tell / too ambiguous to call confidently",
     "startup": "exact frame-duplicate of a later clip's start (auto-detected, rarely hand-picked)",
@@ -296,6 +297,7 @@ LABEL_SHORTCUTS: dict[str, str] = {
     "guard": "g",
     "animal": "a",
     "incident": "i",
+    "resident": "r",
     "environment": "e",
     "unknown": "u",
     "startup": "s",

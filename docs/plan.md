@@ -32,11 +32,11 @@ tested, manually-invokable functions only.
 
 ## Ground truth labels
 Schema v5 (2026-08-29) splits this into two independent columns instead of one:
-- `label`: what the event WAS -- `guard`, `animal`, `incident`, `environment`, or `unknown`.
-  Nullable: a clip can have no class yet if only its `startup_state` is known so far. Shared
-  across every clip in the same physical trigger (same embedded alert timestamp) -- labeling
-  any one clip in an event fills in `label` for every still-unclassed sibling automatically
-  (never overwrites an existing human call on a specific clip).
+- `label`: what the event WAS -- `guard`, `animal`, `incident`, `resident`, `environment`, or
+  `unknown`. Nullable: a clip can have no class yet if only its `startup_state` is known so far.
+  Shared across every clip in the same physical trigger (same embedded alert timestamp) --
+  labeling any one clip in an event fills in `label` for every still-unclassed sibling
+  automatically (never overwrites an existing human call on a specific clip).
 - `startup_state`: whether *this one clip's own content*, viewed alone (no future clip to
   compare against, matching what a live system would actually have), was usable --
   `clear` (subject visible), `blank` (nothing visible), or `duplicate` (frame-identical prefix
@@ -44,7 +44,12 @@ Schema v5 (2026-08-29) splits this into two independent columns instead of one:
   Says nothing about what the event was.
 `environment` covers IR-attracted insects, rain streaks, wind-blown vegetation, and shadow
 artifacts. Naming it separately makes false-page burden directly measurable instead of hiding it
-inside `unknown`.
+inside `unknown`. `resident` (added 2026-08-29) covers an identified resident or other
+authorized person moving on the interior side -- not a guard (no patrol signal expected) and not
+a threat, so it shouldn't sit in `incident` just because a person is visible. Split out after an
+audit found 6 `cam01b` clips explicitly noted as residents sitting in `incident`, which would
+have been counted as false negatives (or, worse, trained a classifier to treat ordinary resident
+movement as an incident) had they stayed there.
 
 Why split: v4 had a single `label` column, and a short pre-alert clip auto-labeled `startup` (or
 hand-labeled `startup_clear`/`startup_blank`) silently discarded the event's real class whenever

@@ -233,24 +233,42 @@ Left in place only in case the assumption ever needs checking against real trans
     confidence more than further feature work.
 
 ### Phase 1: Foundation
-15. Scaffold the `uv` Python 3.12 project: locked dependencies, ruff, pytest, `.env.example`,
-    structured JSON logging, console entry points. Depends on both Phase 0 gates.
-16. Validated config loading for env, `config/thresholds.yaml`, `config/cameras.yaml`; normalised
-    coordinates; motion-extraction settings split from classification thresholds. `cameras.yaml`
-    carries the confirmed fence order and the operating window.
-17. SQLite via `CREATE TABLE IF NOT EXISTS` plus a `schema_version` — no migration framework by
-    default (export labels to JSONL, delete db, reimport, is the documented fallback). In
+15. [done] Scaffold the `uv` Python 3.12 project: locked dependencies, ruff, pytest,
+    `.env.example`, structured JSON logging, console entry points. Depends on both Phase 0 gates.
+    Locked deps/ruff/pytest/`.env.example` existed from the Phase 0 spike already. Structured
+    logging added 2026-08-30 as `src/logging_setup.py::configure_logging` (a `JsonFormatter` on
+    the root logger) — replaces the old per-call-site `logger.info(json.dumps({...}))` pattern in
+    `scripts/meta_backfill.py`/`scripts/download_clips.py` with `logger.info(event, extra={...})`.
+    "Console entry points" scoped down to the existing `main()` + `if __name__ == "__main__"`
+    pattern per script: this project is `uv init --app --no-package` (flat `src/`, no
+    `[build-system]`), so real installed `[project.scripts]` entries aren't meaningful without
+    converting to a packaged layout, which would contradict the deliberate flat-layout choice.
+16. [done] Validated config loading for env, `config/thresholds.yaml`, `config/cameras.yaml`;
+    normalised coordinates; motion-extraction settings split from classification thresholds.
+    `cameras.yaml` carries the confirmed fence order and the operating window. Built during the
+    Phase 0 spike (`src/config.py`) to support it; carries over as-is.
+17. [done] SQLite via `CREATE TABLE IF NOT EXISTS` plus a `schema_version` — no migration
+    framework by default (export labels to JSONL, delete db, reimport, is the documented
+    fallback). In
     practice, once `clips` holds real backfilled volume, a targeted in-place table rebuild
     (`scripts/migrate_schema_v5.py`: rename, recreate from the current schema, copy+transform,
     bump `schema_version`, keep the old table rather than dropping it) is the proportionate
     approach for a change scoped to one table — done for the v4->v5 label split, 2026-08-29.
     Tables: `clips`, `labels`, `blob_tracks` (feature cache), `system_events`, `backtest_runs`,
     `backtest_results`. WAL, busy timeout, foreign keys, narrow repository functions. Index
-    `(timestamp)` and `(camera_id, timestamp)`.
-18. Label export/import to JSONL as the durability guarantee, so the database can be rebuilt
-    without losing hand-entered ground truth.
-19. Promote the Phase 0 scripts into supported modules (`src/backfill.py`, `src/sequence.py`) now
-    that their approach is validated.
+    `(timestamp)` and `(camera_id, timestamp)`. Built during the Phase 0 spike (`src/db.py`);
+    carries over as-is.
+18. [done] Label export/import to JSONL as the durability guarantee, so the database can be
+    rebuilt without losing hand-entered ground truth. Built during the Phase 0 spike
+    (`src/db.py::export_labels_jsonl`/`import_labels_jsonl`); carries over as-is.
+19. [done, 2026-08-30] Promote the Phase 0 scripts into supported modules (`src/backfill.py`,
+    `src/sequence.py`) now that their approach is validated. `src/sequence.py` was already
+    promoted (built directly there during 0b). `src/backfill.py` is new: `run_backfill`/
+    `extract_primitives`/`RawMessage` moved out of `scripts/meta_backfill.py` verbatim, which is
+    now a thin wrapper around it (Telethon client wiring + `main()` only), matching the
+    established pattern in `scripts/infer_camera_order.py` (algorithm in `src/`, script keeps only
+    I/O glue). `tests/test_meta_backfill.py` renamed to `tests/test_backfill.py` to match.
+
 
 ### Phase 2: Corpus and CV
 20. Camera-ID parsing hardened against every caption shape observed in 0a, plus

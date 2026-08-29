@@ -35,10 +35,14 @@ round-robin across cameras, so a session gets a spread instead of exhausting one
 camera's queue before moving to the next. Priority clips (known rare events) still
 come first, unshuffled.
 
+Pass --message-ids-file to review a curated shortlist instead (e.g. candidates from
+scripts/backtest.py) -- one message_id per line, reviewed in the order given rather
+than timestamp/round-robin order. Already-labeled ids in the file are skipped.
+
 Run:
     uv run python scripts/label.py [--camera CAM_ID] [--limit N] [--include-no-file]
         [--short-clip-seconds SECS] [--confirm-short-count N] [--no-startup-overlap-check]
-        [--relabel-label LABEL]
+        [--relabel-label LABEL] [--message-ids-file PATH]
 """
 
 from __future__ import annotations
@@ -345,12 +349,17 @@ def run_labeling_session(
     detect_prefix_duplicates: bool = False,
     frame_match_fn: FrameMatchFn = _frames_prefix_match,
     relabel_label: str | None = None,
+    message_ids: list[int] | None = None,
     rng: random.Random | None = None,
 ) -> int:
     """`relabel_label`, if set, re-walks clips that ALREADY carry that label (e.g.
     `startup`) instead of unlabeled clips -- for re-triaging a prior label into a
     finer-grained one (e.g. splitting `startup` into `startup_clear`/`startup_blank`).
     Disables `detect_prefix_duplicates` (auto-labeling only applies to unlabeled clips).
+
+    `message_ids`, if set, restricts the queue to exactly those clips (any camera),
+    in the order given -- e.g. a curated screening shortlist -- instead of the usual
+    timestamp/round-robin ordering. Already-labeled clips in the list are skipped.
     """
     labeled = 0
     auto_labeled = 0
@@ -358,15 +367,30 @@ def run_labeling_session(
         auto_labeled = _apply_startup_prefix_duplicates(
             conn, camera_id=camera_id, frame_match_fn=frame_match_fn
         )
-    if relabel_label is not None:
-        rows = db.iter_clips_with_label(
-            conn, relabel_label, camera_id=camera_id, with_file_only=with_file_only
-        )
+    if message_ids is not None:
+        by_id = {row["message_id"]: dict(row) for row in db.iter_clips(conn)}
+        rows = []
+        for mid in message_ids:
+            row = by_id.get(mid)
+            if row is None:
+                continue
+            if with_file_only and not row["file_path"]:
+                continue
+            if db.get_label(conn, row["channel_id"], row["message_id"]) is not None:
+                continue
+            rows.append(row)
     else:
-        rows = db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=with_file_only)
-    priority, rest = _prioritize([dict(row) for row in rows])
-    rest = _spread_by_camera(rest, rng or random.Random())
-    rows = priority + rest
+        if relabel_label is not None:
+            rows = db.iter_clips_with_label(
+                conn, relabel_label, camera_id=camera_id, with_file_only=with_file_only
+            )
+        else:
+            rows = db.iter_unlabeled_clips(
+                conn, camera_id=camera_id, with_file_only=with_file_only
+            )
+        priority, rest = _prioritize([dict(row) for row in rows])
+        rest = _spread_by_camera(rest, rng or random.Random())
+        rows = priority + rest
 
     # Priority clips are known real events -- never eligible for the short-clip bulk
     # shortcut below, even if one happens to be short (e.g. cam06's Initial alert 21519).
@@ -482,7 +506,27 @@ def main() -> None:  # pragma: no cover - interactive I/O
             "startup_clear/startup_blank"
         ),
     )
+    parser.add_argument(
+        "--message-ids-file",
+        default=None,
+        help=(
+            "Review exactly the message_ids listed in this file (one per line, "
+            "# comments/blank lines ignored), in the order given, instead of the usual "
+            "unlabeled queue -- e.g. a scripts/backtest.py screening shortlist"
+        ),
+    )
     args = parser.parse_args()
+    if args.message_ids_file and args.relabel_label:
+        parser.error("--message-ids-file and --relabel-label are mutually exclusive")
+
+    message_ids = None
+    if args.message_ids_file:
+        text = Path(args.message_ids_file).read_text()
+        message_ids = [
+            int(line.split("#", 1)[0].strip())
+            for line in text.splitlines()
+            if line.split("#", 1)[0].strip()
+        ]
 
     app_cfg = load_app_config(require_telegram=False)
     conn = db.connect(app_cfg.db_path)
@@ -496,6 +540,7 @@ def main() -> None:  # pragma: no cover - interactive I/O
         confirm_short_count=args.confirm_short_count,
         detect_prefix_duplicates=not args.no_startup_overlap_check,
         relabel_label=args.relabel_label,
+        message_ids=message_ids,
     )
     conn.close()
     print(f"\nLabeled {labeled} clip(s).")

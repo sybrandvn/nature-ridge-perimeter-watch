@@ -10,7 +10,11 @@ Rules:
   - animal_or_incident_candidate: aspect_ratio < 0.95 and green_light_ratio < 0.05
     (75% recall / 22% precision on 12 labelled positives -- a screening signal,
     not a verdict; guard_candidate wins if both match, since the green-light
-    exclusion is what raises this rule's precision)
+    exclusion is what raises this rule's precision). This category doesn't split
+    animal vs incident -- there's no validated rule for that. The finding doc's
+    median table (jitter 2.1 vs 38.1, path_length 25 vs 281, animal vs incident)
+    is included as a soft hint on candidate rows, not a rule, since it's only
+    4 vs 8 clips.
   - insect_candidate: jitter > 50 and solidity < 0.85
     (55% of labelled `environment` clips)
   - no_motion: extract_clip_features found nothing to track
@@ -61,6 +65,7 @@ REPORT_COLUMNS = (
     "jitter",
     "persistence",
     "outside_pixel_fraction",
+    "path_length",
 )
 
 

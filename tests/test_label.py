@@ -136,6 +136,70 @@ def test_resolve_label_rejects_unknown_input():
     assert _resolve_label("") is None
 
 
+def test_run_labeling_session_message_ids_preserves_given_order(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    _seed(conn, 1, camera_id="cam01", timestamp="2026-01-01T20:00:00Z")
+    _seed(conn, 2, camera_id="cam05", timestamp="2026-01-02T20:00:00Z")
+    _seed(conn, 3, camera_id="cam02", timestamp="2026-01-03T20:00:00Z")
+
+    seen: list[int] = []
+
+    def prompt_fn(clip):
+        seen.append(clip["message_id"])
+        return "animal", None
+
+    labeled = run_labeling_session(
+        conn, prompt_fn=prompt_fn, message_ids=[3, 1, 2], detect_prefix_duplicates=False
+    )
+
+    assert labeled == 3
+    assert seen == [3, 1, 2]
+    conn.close()
+
+
+def test_run_labeling_session_message_ids_skips_already_labeled_and_missing(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    _seed(conn, 1)
+    _seed(conn, 2)
+    db.upsert_label(conn, channel_id="chan1", message_id=1, label="guard")
+
+    seen: list[int] = []
+
+    def prompt_fn(clip):
+        seen.append(clip["message_id"])
+        return "animal", None
+
+    labeled = run_labeling_session(
+        conn,
+        prompt_fn=prompt_fn,
+        message_ids=[1, 2, 999],  # 1 already labeled, 999 doesn't exist
+        detect_prefix_duplicates=False,
+    )
+
+    assert labeled == 1
+    assert seen == [2]
+    conn.close()
+
+
+def test_run_labeling_session_message_ids_respects_with_file_only(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    _seed(conn, 1, file_path=None)
+    _seed(conn, 2, file_path="data/history/cam01/2.mp4")
+
+    labeled = run_labeling_session(
+        conn,
+        prompt_fn=lambda _clip: ("animal", None),
+        message_ids=[1, 2],
+        with_file_only=True,
+        detect_prefix_duplicates=False,
+    )
+
+    assert labeled == 1
+    assert db.get_label(conn, "chan1", 1) is None
+    assert db.get_label(conn, "chan1", 2)["label"] == "animal"
+    conn.close()
+
+
 
 def test_short_clips_prompted_individually_until_confirm_count_reached(tmp_path: Path):
     conn = db.connect(tmp_path / "t.db")

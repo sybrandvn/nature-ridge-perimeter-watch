@@ -200,15 +200,21 @@ def _apply_startup_prefix_duplicates(
     *,
     camera_id: str | None = None,
     frame_match_fn: FrameMatchFn = _frames_prefix_match,
+    message_ids: set[int] | None = None,
 ) -> int:
     """Auto-label the earlier half of an Initial/Stopped pair as `startup` when its
     frames are a literal duplicate of the paired clip's start, so it never needs a
     human to watch it. Skips clips already labeled (handled by iter_unlabeled_clips),
     clips with no downloaded file, and known rare-event clips (PRIORITY_MESSAGE_IDS)
-    even if they'd otherwise match -- a known real event is never auto-labeled."""
+    even if they'd otherwise match -- a known real event is never auto-labeled.
+
+    `message_ids`, if set, restricts candidates to that set -- e.g. scoping the scan
+    to a curated review list instead of walking every unlabeled clip in the db."""
     event_clips = _event_clips_map(conn)
     applied = 0
     for row in db.iter_unlabeled_clips(conn, camera_id=camera_id, with_file_only=True):
+        if message_ids is not None and row["message_id"] not in message_ids:
+            continue
         if row["message_id"] in PRIORITY_MESSAGE_IDS.get(row["camera_id"], frozenset()):
             continue
         key = _event_key(row["camera_id"], row["caption"])
@@ -360,15 +366,19 @@ def run_labeling_session(
     `message_ids`, if set, restricts the queue to exactly those clips (any camera),
     in the order given -- e.g. a curated screening shortlist -- instead of the usual
     timestamp/round-robin ordering. Already-labeled clips in the list are skipped.
-    Disables `detect_prefix_duplicates` too (the full-corpus auto-scan is irrelevant
-    to a small curated list, and pointlessly widens the window for a concurrent
-    writer -- e.g. scripts/download_clips.py -- to collide on the db).
+    `detect_prefix_duplicates`, if also set, scopes the startup auto-scan to just
+    these ids rather than the whole db -- catches genuine startup duplicates inside
+    the curated list without the full-corpus scan's write-contention risk against a
+    concurrent writer (e.g. scripts/download_clips.py).
     """
     labeled = 0
     auto_labeled = 0
-    if detect_prefix_duplicates and relabel_label is None and message_ids is None:
+    if detect_prefix_duplicates and relabel_label is None:
         auto_labeled = _apply_startup_prefix_duplicates(
-            conn, camera_id=camera_id, frame_match_fn=frame_match_fn
+            conn,
+            camera_id=camera_id,
+            frame_match_fn=frame_match_fn,
+            message_ids=set(message_ids) if message_ids is not None else None,
         )
     if message_ids is not None:
         by_id = {row["message_id"]: dict(row) for row in db.iter_clips(conn)}

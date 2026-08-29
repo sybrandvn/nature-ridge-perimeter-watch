@@ -199,6 +199,66 @@ def test_run_labeling_session_message_ids_respects_with_file_only(tmp_path: Path
     assert db.get_label(conn, "chan1", 2)["label"] == "animal"
     conn.close()
 
+def test_run_labeling_session_message_ids_scopes_prefix_duplicate_scan(tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    initial_a = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    stopped_a = "Cam Alert*: (Stopped*) NATURE RIDGE COMPLEX, MOTIONVIEWER 10 @ 14-03-24 20:44:22"
+    _seed(
+        conn,
+        1,
+        camera_id="cam10",
+        caption=initial_a,
+        file_path="data/history/cam10/1.mp4",
+        timestamp="2026-01-01T20:00:00Z",
+    )
+    _seed(
+        conn,
+        2,
+        camera_id="cam10",
+        caption=stopped_a,
+        file_path="data/history/cam10/2.mp4",
+        timestamp="2026-01-01T20:04:00Z",
+    )
+    # A second Initial/Stopped pair, outside the curated list -- must not be auto-labeled.
+    initial_b = "Cam Alert*: (Initial*) NATURE RIDGE COMPLEX, MOTIONVIEWER 11 @ 14-03-24 21:00:00"
+    stopped_b = "Cam Alert*: (Stopped*) NATURE RIDGE COMPLEX, MOTIONVIEWER 11 @ 14-03-24 21:00:00"
+    _seed(
+        conn,
+        3,
+        camera_id="cam11",
+        caption=initial_b,
+        file_path="data/history/cam11/3.mp4",
+        timestamp="2026-01-01T21:00:00Z",
+    )
+    _seed(
+        conn,
+        4,
+        camera_id="cam11",
+        caption=stopped_b,
+        file_path="data/history/cam11/4.mp4",
+        timestamp="2026-01-01T21:04:00Z",
+    )
+
+    seen_ids: list[int] = []
+
+    def prompt_fn(clip):
+        seen_ids.append(clip["message_id"])
+        return "guard", None
+
+    labeled = run_labeling_session(
+        conn,
+        prompt_fn=prompt_fn,
+        message_ids=[1, 2],
+        detect_prefix_duplicates=True,
+        frame_match_fn=lambda short_path, long_path: True,
+    )
+
+    assert labeled == 2  # 1 auto-labeled + 1 prompted
+    assert seen_ids == [2]  # clip 1 auto-labeled, never reaches the prompt
+    assert db.get_label(conn, "chan1", 1)["label"] == "startup"
+    # clip 3 would match too, but it's outside message_ids so the scan skips it
+    assert db.get_label(conn, "chan1", 3) is None
+    conn.close()
 
 
 def test_short_clips_prompted_individually_until_confirm_count_reached(tmp_path: Path):

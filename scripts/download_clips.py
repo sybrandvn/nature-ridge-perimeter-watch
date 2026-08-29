@@ -2,11 +2,11 @@
 
 Downloads actual video files for a hand-picked set of cameras (typically a
 narrow date window around a known incident) using rows already present in
-`clips` from `scripts/meta_backfill.py`. This is deliberately small-scale --
-a few clips per camera, enough to hand-label and run `scripts/spike.py`
-against -- not the resumable full-history backfill (that's Phase 1's
-`src/backfill.py`, which handles every message type, flood-wait/reconnect,
-and a deterministic manifest).
+`clips` from `src.backfill` (metadata-only, no video). This is deliberately
+small-scale -- a few clips per camera, enough to hand-label and run
+`scripts/spike.py` against -- not the resumable full-history video backfill
+(that's Phase 2 step 21: every message type, flood-wait/reconnect, and a
+deterministic manifest).
 
 Selection: clips matching `--camera` with no `file_path` yet, optionally
 restricted to a `[--since, --until)` timestamp window, capped at
@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
 from pathlib import Path
@@ -40,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import db  # noqa: E402
 from src.config import load_app_config, resolve_channel_ref  # noqa: E402
+from src.logging_setup import configure_logging  # noqa: E402
 
 logger = logging.getLogger("download_clips")
 
@@ -108,15 +108,15 @@ async def run_download(
             # abort the whole run -- log it and keep going so a full-history pass can finish.
             counts["failed"] += 1
             logger.info(
-                json.dumps(
-                    {"message_id": clip["message_id"], "status": "failed", "error": str(exc)}
-                )
+                "download_clip",
+                extra={"message_id": clip["message_id"], "status": "failed", "error": str(exc)},
             )
             continue
         if not downloaded:
             counts["skipped_no_media"] += 1
             logger.info(
-                json.dumps({"message_id": clip["message_id"], "status": "skipped_no_media"})
+                "download_clip",
+                extra={"message_id": clip["message_id"], "status": "skipped_no_media"},
             )
             continue
         db.set_clip_file_path(
@@ -124,9 +124,12 @@ async def run_download(
         )
         counts["downloaded"] += 1
         logger.info(
-            json.dumps(
-                {"message_id": clip["message_id"], "status": "downloaded", "file_path": str(dest)}
-            )
+            "download_clip",
+            extra={
+                "message_id": clip["message_id"],
+                "status": "downloaded",
+                "file_path": str(dest),
+            },
         )
     conn.commit()
     return counts
@@ -147,7 +150,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def main() -> None:  # pragma: no cover - requires real Telegram credentials
     from telethon import TelegramClient
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    configure_logging()
     args = parse_args()
 
     app_cfg = load_app_config()
@@ -179,7 +182,7 @@ async def main() -> None:  # pragma: no cover - requires real Telegram credentia
             out_dir=args.out_dir,
         )
     conn.close()
-    logger.info(json.dumps({"summary": counts}))
+    logger.info("download_summary", extra={"summary": counts})
 
 
 if __name__ == "__main__":  # pragma: no cover

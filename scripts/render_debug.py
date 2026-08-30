@@ -69,6 +69,8 @@ DEFAULTS = {
 }
 
 COLOR_TRACKED = (255, 0, 255)
+COLOR_RECOVERED = (0, 165, 255)
+COLOR_REVERSE = (255, 255, 0)
 COLOR_BLOB = (200, 200, 0)
 COLOR_DISCARDED = (90, 90, 90)
 COLOR_FENCE = (0, 255, 255)
@@ -292,6 +294,17 @@ def render_clip(
             scale=0.5,
             thickness=2,
         )
+        traced_box = detection.dropped_frame_boxes[warm_index]
+        if traced_box is not None:
+            x0, y0, x1, y1 = (c * scale for c in traced_box)
+            cv2.rectangle(canvas, (x0, y0), (x1, y1), COLOR_REVERSE, 2)
+            _text(
+                canvas,
+                "TRACKED (reverse trace)",
+                (x0, max(11, y0 - 4)),
+                color=COLOR_REVERSE,
+                scale=0.4,
+            )
         panel = np.zeros((height + hud_height, width, 3), dtype=np.uint8)
         panel[:height] = canvas
         live = [
@@ -345,9 +358,22 @@ def render_clip(
                 )
                 _draw_trail(canvas, history)
                 x, y, w, h = cv2.boundingRect(scaled)
-                cv2.rectangle(canvas, (x, y), (x + w, y + h), COLOR_TRACKED, 2)
-                cv2.drawContours(canvas, [scaled], -1, COLOR_TRACKED, 1)
-                _text(canvas, "TRACKED", (x, max(11, y - 4)), color=COLOR_TRACKED, scale=0.4)
+                if detected.filled_by_reverse:
+                    box_color = COLOR_REVERSE
+                    label = (
+                        "RECOVERED (reverse fill)"
+                        if detected.recovered
+                        else "TRACKED (reverse fill)"
+                    )
+                elif detected.recovered:
+                    box_color = COLOR_RECOVERED
+                    label = "RECOVERED (appearance match)"
+                else:
+                    box_color = COLOR_TRACKED
+                    label = "TRACKED"
+                cv2.rectangle(canvas, (x, y), (x + w, y + h), box_color, 2)
+                cv2.drawContours(canvas, [scaled], -1, box_color, 1)
+                _text(canvas, label, (x, max(11, y - 4)), color=box_color, scale=0.4)
                 blob_width_px = float(cv2.boundingRect(detected.largest)[2])
                 if prev_centroid is not None and blob_width_px > 0:
                     step = np.hypot(
@@ -375,6 +401,8 @@ def render_clip(
             light_frac = float(np.count_nonzero(green_light_mask(detected.frame))) / (
                 detected.frame.shape[0] * detected.frame.shape[1]
             )
+            recovered_total = sum(1 for f in detection.frames if f.recovered)
+            reverse_total = sum(1 for f in detection.frames if f.filled_by_reverse)
             live = [
                 (title, ""),
                 (
@@ -388,7 +416,14 @@ def render_clip(
                     f"{len(detected.blobs)} kept"
                     f" / {discarded_small} too small, {discarded_large} too big",
                 ),
-                ("tracked blob area", f"{area:.0f} px" if area else "none"),
+                (
+                    "tracked blob area",
+                    f"{area:.0f} px"
+                    + (" (recovered)" if detected.recovered else "")
+                    + (" (reverse fill)" if detected.filled_by_reverse else "")
+                    if area
+                    else "none",
+                ),
                 (
                     "instant speed (body/frame)",
                     f"{instant_speed:.2f}" if instant_speed is not None else "n/a",
@@ -396,6 +431,8 @@ def render_clip(
                 ("frame light_ratio", f"{light_frac:.4f}"),
                 ("motion px fraction", f"{detected.motion_pixel_fraction:.4f}"),
                 ("flare frames", f"{flare_total}/{len(detection.frames)}"),
+                ("recovered frames (appearance)", f"{recovered_total}/{len(detection.frames)}"),
+                ("reverse-filled frames", f"{reverse_total}/{len(detection.frames)}"),
             ]
             if features is not None:
                 live += [
@@ -418,6 +455,11 @@ def render_clip(
                         f" {features['longest_detection_run']:.2f}",
                     ),
                     ("clip blob_count", f"{features['blob_count']:.0f}"),
+                    (
+                        "clip color_fraction (green gated?)",
+                        f"{features['color_fraction']:.2f}"
+                        + (" YES" if features["color_fraction"] > 0.15 else " no"),
+                    ),
                 ]
             if overrides:
                 live.append(("OVERRIDDEN", ", ".join(overrides)))

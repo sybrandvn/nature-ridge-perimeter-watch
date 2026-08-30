@@ -35,7 +35,7 @@ import argparse
 import csv
 import sys
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +49,7 @@ from src.config import CamerasConfig, CameraZone, load_app_config, load_cameras_
 from src.features import (  # noqa: E402
     area_stability,
     aspect_ratio,
+    color_saturation_fraction,
     edge_density,
     flare_frames,
     flare_settle_index,
@@ -81,6 +82,7 @@ FEATURE_COLUMNS = (
     "aspect_ratio",
     "solidity",
     "saturation_ratio",
+    "color_fraction",
     "green_light_ratio",
     "green_light_flicker",
     "row_normalised_area",
@@ -141,11 +143,25 @@ def _bbox_center(bbox: tuple[int, int, int, int]) -> tuple[float, float]:
     return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
 
 
+def _size_relative_margin(
+    bbox: tuple[int, int, int, int], *, margin_fraction: float, min_margin: float
+) -> float:
+    """Search/jump slack scaled to the tracked object's own size rather than a
+    fixed fraction of the frame -- a frame-relative radius lets a small
+    subject's track latch onto an unrelated blob or lookalike patch far
+    outside where it could plausibly have moved by the next frame.
+    """
+    x0, y0, x1, y1 = bbox
+    return max(margin_fraction * max(x1 - x0, y1 - y0), min_margin)
+
+
 def track_contour(
     candidates: list[np.ndarray],
     track_bbox: tuple[int, int, int, int] | None,
     *,
     max_jump_distance: float,
+    size_margin_fraction: float = 0.75,
+    min_size_margin: float = 6.0,
 ) -> np.ndarray | None:
     """Pick the candidate contour that continues an existing track, instead of
     always re-selecting the frame's largest blob independently.
@@ -154,10 +170,20 @@ def track_contour(
     too many consecutive misses), this falls back to the largest candidate --
     the original behaviour. With an active track, it prefers the candidate
     with the highest bounding-box overlap (IoU) against the last known
-    position; if nothing overlaps, it falls back to the nearest centroid
-    within `max_jump_distance`. This is what keeps the "tracked" identity from
-    flipping between two co-occurring subjects (e.g. two people) just because
-    their relative blob sizes swap from one frame to the next.
+    position; if nothing overlaps, it falls back to the nearest centroid,
+    within whichever is smaller of `max_jump_distance` (a hard, frame-sized
+    ceiling) and a margin scaled to the track's own size -- a fixed
+    frame-relative radius let a small subject's track jump to an unrelated
+    blob far outside where it could plausibly have moved. This is what keeps
+    the "tracked" identity from flipping between two co-occurring subjects
+    (e.g. two people) just because their relative blob sizes swap from one
+    frame to the next.
+
+    When an active track has no plausible continuation this frame, this
+    returns None rather than grabbing the largest blob in the frame -- the
+    caller's miss-tolerance / appearance-recovery machinery gets a chance to
+    reacquire first, and only a track that's fully dropped (track_bbox is
+    None again) starts fresh unconstrained.
     """
     if not candidates:
         return None
@@ -176,12 +202,337 @@ def track_contour(
         for cx, cy in (_bbox_center(box) for box in boxes)
     ]
     best_dist_idx = min(range(len(candidates)), key=lambda i: distances[i])
-    if distances[best_dist_idx] <= max_jump_distance:
+    allowed = min(
+        max_jump_distance,
+        _size_relative_margin(
+            track_bbox, margin_fraction=size_margin_fraction, min_margin=min_size_margin
+        ),
+    )
+    if distances[best_dist_idx] <= allowed:
         return candidates[best_dist_idx]
 
-    # No plausible continuation of the existing track -- treat this as a fresh
-    # acquisition rather than force-matching an unrelated blob.
-    return max(candidates, key=cv2.contourArea)
+    # No plausible continuation -- do NOT blindly grab the frame's largest
+    # blob, that's exactly the "teleport across the frame" behaviour this cap
+    # exists to prevent. Report a miss instead, so the caller's existing
+    # appearance-recovery / miss-tolerance machinery gets a chance, and only a
+    # track that is fully dropped (track_bbox is None) starts fresh anywhere.
+    return None
+
+
+def _bbox_to_rect_contour(bbox: tuple[int, int, int, int]) -> np.ndarray:
+    """Synthesize a rectangular contour from a bbox, for tracks recovered by
+    appearance matching rather than a real background-subtraction blob."""
+    x0, y0, x1, y1 = bbox
+    return np.array([[[x0, y0]], [[x1, y0]], [[x1, y1]], [[x0, y1]]], dtype=np.int32)
+
+
+def reacquire_by_template(
+    gray_frame: np.ndarray,
+    template: np.ndarray,
+    last_bbox: tuple[int, int, int, int],
+    *,
+    search_margin: float,
+    match_threshold: float,
+    velocity: tuple[float, float] = (0.0, 0.0),
+) -> tuple[int, int, int, int] | None:
+    """Look for the last-known subject's appearance directly in the raw frame,
+    for the frames where background-subtraction finds no candidate at all
+    (e.g. the subject now blends into the background in brightness terms, even
+    though it hasn't moved or changed shape). Returns the matched bbox, sized
+    like `template`, or None if nothing in the search window around
+    `last_bbox` clears `match_threshold`.
+
+    This is a template match (normalised cross-correlation) of the last known
+    crop against a window around the last known position, not a full-frame
+    search -- keeps it cheap and stops it latching onto an unrelated lookalike
+    elsewhere in frame. `search_margin` should already be scaled to the
+    subject's own size (see `_size_relative_margin`) rather than a fixed
+    frame-relative radius, or a small subject can match a lookalike patch far
+    from anywhere it could plausibly be.
+
+    `velocity` (last observed per-frame centre displacement) shifts and
+    stretches the window toward the direction of travel: the edge trailing
+    the motion stays exactly `search_margin` from the last known position
+    (so a subject that doubles back is still covered), while the leading edge
+    extends out to roughly the last position plus `velocity` -- a moving
+    subject is more likely to have continued than reversed, but not so much
+    more likely that a genuine reversal gets missed.
+    """
+    th, tw = template.shape[:2]
+    if th == 0 or tw == 0:
+        return None
+    x0, y0, x1, y1 = last_bbox
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    vx, vy = velocity
+    base_half_w, base_half_h = (x1 - x0) / 2.0 + search_margin, (y1 - y0) / 2.0 + search_margin
+    center_x, center_y = cx + vx / 2.0, cy + vy / 2.0
+    half_w, half_h = base_half_w + abs(vx) / 2.0, base_half_h + abs(vy) / 2.0
+    frame_height, frame_width = gray_frame.shape[:2]
+    wx0 = max(int(center_x - half_w), 0)
+    wy0 = max(int(center_y - half_h), 0)
+    wx1 = min(int(center_x + half_w), frame_width)
+    wy1 = min(int(center_y + half_h), frame_height)
+    window = gray_frame[wy0:wy1, wx0:wx1]
+    if window.shape[0] < th or window.shape[1] < tw:
+        return None
+    result = cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+    if max_val < match_threshold:
+        return None
+    match_x, match_y = max_loc
+    return (wx0 + match_x, wy0 + match_y, wx0 + match_x + tw, wy0 + match_y + th)
+
+
+def _run_track_pass(
+    grays: list[np.ndarray],
+    candidates_per_frame: list[list[np.ndarray]],
+    *,
+    max_jump_distance: float,
+    max_track_miss_frames: int,
+    template_match_threshold: float,
+    search_margin_fraction: float = 0.75,
+    min_search_margin: float = 6.0,
+) -> list[tuple[np.ndarray | None, bool]]:
+    """Run the track_contour + reacquire_by_template state machine once over a
+    sequence of frames, in whatever order they're given -- forward, or
+    reversed for a backward scan. Returns (contour, recovered) per frame.
+
+    A single direction can only ever pick a track up once bg-diff first finds
+    a candidate for it (or, within the miss tolerance, once an appearance
+    template exists to reacquire against) -- it has nothing to offer the
+    frames before that point. Running the same state machine again over the
+    reversed sequence lets a track that starts late from the front fill in
+    those earlier frames from the back, and vice versa for one that ends
+    early.
+
+    Appearance reacquisition searches within `search_margin_fraction` of the
+    track's own current size (floored at `min_search_margin` pixels), not a
+    fixed frame-relative radius, biased toward the last observed direction of
+    travel (see `reacquire_by_template`) -- otherwise a small, slow subject's
+    track can bounce to an unrelated lookalike patch well outside where it
+    could plausibly have moved in one frame.
+    """
+    results: list[tuple[np.ndarray | None, bool]] = []
+    track_bbox: tuple[int, int, int, int] | None = None
+    track_miss = 0
+    template: np.ndarray | None = None
+    velocity = (0.0, 0.0)
+    for gray, candidates in zip(grays, candidates_per_frame, strict=True):
+        contour = track_contour(
+            candidates,
+            track_bbox,
+            max_jump_distance=max_jump_distance,
+            size_margin_fraction=search_margin_fraction,
+            min_size_margin=min_search_margin,
+        )
+        recovered = False
+        if contour is None and track_bbox is not None and template is not None:
+            search_margin = min(
+                max_jump_distance,
+                _size_relative_margin(
+                    track_bbox, margin_fraction=search_margin_fraction, min_margin=min_search_margin
+                ),
+            )
+            reacquired_bbox = reacquire_by_template(
+                gray,
+                template,
+                track_bbox,
+                search_margin=search_margin,
+                match_threshold=template_match_threshold,
+                velocity=velocity,
+            )
+            if reacquired_bbox is not None:
+                contour = _bbox_to_rect_contour(reacquired_bbox)
+                recovered = True
+        if contour is None:
+            track_miss += 1
+            if track_miss > max_track_miss_frames:
+                track_bbox = None
+                template = None
+                velocity = (0.0, 0.0)
+        else:
+            new_bbox = _contour_bbox(contour)
+            if track_bbox is not None:
+                old_center, new_center = _bbox_center(track_bbox), _bbox_center(new_bbox)
+                velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
+            track_bbox = new_bbox
+            track_miss = 0
+            if not recovered:
+                x0, y0, x1, y1 = track_bbox
+                crop = gray[y0:y1, x0:x1]
+                if crop.size > 0:
+                    template = crop
+        results.append((contour, recovered))
+    return results
+
+
+@dataclass(frozen=True)
+class TrackedObject:
+    """One persistently-identified subject in one frame, from the multi-object
+    tracker (see `track_multiple_objects`). Kept separate from `FrameDetection`
+    so it's purely additive diagnostic detail, not fed into feature scoring."""
+
+    track_id: int
+    bbox: tuple[int, int, int, int]
+    # other track ids currently sharing this same bbox (background-subtraction
+    # can no longer tell them apart), empty when this id has its own blob.
+    merged_ids: tuple[int, ...] = ()
+
+
+def track_multiple_objects(
+    candidates_per_frame: list[list[np.ndarray]],
+    *,
+    max_jump_distance: float,
+    max_track_miss_frames: int,
+    size_margin_fraction: float = 0.75,
+    min_size_margin: float = 6.0,
+) -> list[list[TrackedObject]]:
+    """Greedy multi-object tracker: gives every distinct subject its own
+    persistent id across frames, instead of `track_contour`'s single "the"
+    track. Candidates are assigned to existing tracks by bounding-box overlap
+    first, then by nearest centroid within the same size-relative cap as
+    `track_contour` (see `_size_relative_margin`); an unmatched candidate
+    spawns a new id, and a track is dropped after `max_track_miss_frames`
+    consecutive frames with nothing assigned to it.
+
+    When two or more active tracks' last positions both fall inside a single
+    candidate blob (e.g. two people and a backpack walk close enough that
+    background-subtraction can no longer separate them), all of them are kept
+    alive against that same blob (`TrackedObject.merged_ids`) rather than one
+    being silently dropped -- this is what lets a merge be shown (and survived)
+    as "still 2 tracks, temporarily sharing one box" instead of collapsing to
+    a single identity that then has to be re-acquired as if it were new once
+    the subjects separate again. While merged, each track's own internal
+    position estimate is dead-reckoned forward by its last observed velocity
+    rather than snapped to the shared blob, so that when the blob splits back
+    into separate candidates, each id's drifted position is still closest to
+    its own actual half of the split rather than an arbitrary pick between
+    two now-identical candidate scores.
+    """
+    next_id = 0
+    tracks: dict[int, dict] = {}
+    results: list[list[TrackedObject]] = []
+
+    for candidates in candidates_per_frame:
+        boxes = [_contour_bbox(c) for c in candidates]
+        claims: dict[int, list[int]] = {}
+        for tid, track in tracks.items():
+            if not boxes:
+                continue
+            ious = [_bbox_iou(track["bbox"], box) for box in boxes]
+            best_iou_idx = max(range(len(boxes)), key=lambda i: ious[i])
+            if ious[best_iou_idx] > 0:
+                claims.setdefault(best_iou_idx, []).append(tid)
+                continue
+            allowed = min(
+                max_jump_distance,
+                _size_relative_margin(
+                    track["bbox"], margin_fraction=size_margin_fraction, min_margin=min_size_margin
+                ),
+            )
+            track_center = _bbox_center(track["bbox"])
+            distances = [
+                ((cx - track_center[0]) ** 2 + (cy - track_center[1]) ** 2) ** 0.5
+                for cx, cy in (_bbox_center(box) for box in boxes)
+            ]
+            nearest_idx = min(range(len(boxes)), key=lambda i: distances[i])
+            if distances[nearest_idx] <= allowed:
+                claims.setdefault(nearest_idx, []).append(tid)
+
+        frame_tracks: list[TrackedObject] = []
+        matched_ids: set[int] = set()
+        for cand_idx, tids in claims.items():
+            bbox = boxes[cand_idx]
+            if len(tids) == 1:
+                tid = tids[0]
+                old_center, new_center = _bbox_center(tracks[tid]["bbox"]), _bbox_center(bbox)
+                tracks[tid]["velocity"] = (
+                    new_center[0] - old_center[0],
+                    new_center[1] - old_center[1],
+                )
+                tracks[tid]["bbox"] = bbox
+                tracks[tid]["miss"] = 0
+                frame_tracks.append(TrackedObject(track_id=tid, bbox=bbox))
+                matched_ids.add(tid)
+                continue
+            for tid in tids:
+                vx, vy = tracks[tid].get("velocity", (0.0, 0.0))
+                x0, y0, x1, y1 = tracks[tid]["bbox"]
+                tracks[tid]["bbox"] = (x0 + vx, y0 + vy, x1 + vx, y1 + vy)
+                tracks[tid]["miss"] = 0
+                merged_ids = tuple(sorted(set(tids) - {tid}))
+                frame_tracks.append(TrackedObject(track_id=tid, bbox=bbox, merged_ids=merged_ids))
+                matched_ids.add(tid)
+
+        for tid in list(tracks.keys()):
+            if tid in matched_ids:
+                continue
+            tracks[tid]["miss"] += 1
+            if tracks[tid]["miss"] > max_track_miss_frames:
+                del tracks[tid]
+
+        claimed_candidate_idxs = set(claims.keys())
+        for cand_idx, box in enumerate(boxes):
+            if cand_idx in claimed_candidate_idxs:
+                continue
+            tid = next_id
+            next_id += 1
+            tracks[tid] = {"bbox": box, "miss": 0}
+            frame_tracks.append(TrackedObject(track_id=tid, bbox=box))
+
+        results.append(frame_tracks)
+    return results
+
+
+def _reverse_template_trace(
+    grays: list[np.ndarray],
+    start_bbox: tuple[int, int, int, int],
+    start_template: np.ndarray,
+    *,
+    search_margin: float,
+    match_threshold: float,
+    search_margin_fraction: float = 0.75,
+    min_search_margin: float = 6.0,
+) -> list[tuple[int, int, int, int] | None]:
+    """Walk backward through frames with no usable background model at all
+    (warmup/flare, dropped before the flare-settle cutoff) using only
+    appearance matching against a single fixed anchor template -- there's no
+    diff mask to track against there, and the anchor isn't refreshed frame to
+    frame since a flare frame's own crop is a worse reference, not a better
+    one. Stops (leaving the rest None) at the first frame that doesn't match,
+    rather than keep guessing once the trail goes cold.
+
+    Each step's search window is scaled to the subject's own size (like
+    `_run_track_pass`) and biased by the displacement observed on the
+    previous step, so the trace follows a plausible path back through the
+    flare rather than jumping to a lookalike patch.
+    """
+    results: list[tuple[int, int, int, int] | None] = []
+    bbox = start_bbox
+    velocity = (0.0, 0.0)
+    for gray in grays:
+        margin = min(
+            search_margin,
+            _size_relative_margin(
+                bbox, margin_fraction=search_margin_fraction, min_margin=min_search_margin
+            ),
+        )
+        match = reacquire_by_template(
+            gray,
+            start_template,
+            bbox,
+            search_margin=margin,
+            match_threshold=match_threshold,
+            velocity=velocity,
+        )
+        if match is None:
+            break
+        old_center, new_center = _bbox_center(bbox), _bbox_center(match)
+        velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
+        results.append(match)
+        bbox = match
+    results.extend([None] * (len(grays) - len(results)))
+    return results
 
 
 def contour_centroid(contour: np.ndarray) -> tuple[float, float] | None:
@@ -214,6 +565,8 @@ class FrameDetection:
     motion_pixel_fraction: float
     median_grey: float
     is_flare: bool
+    recovered: bool = False  # track continued via appearance match, not a real bg-diff blob
+    filled_by_reverse: bool = False  # forward pass found nothing here; a backward scan did
 
 
 @dataclass(frozen=True)
@@ -227,6 +580,12 @@ class ClipDetection:
     warmup_dropped: int
     total_frames: int
     dropped_frames: list[np.ndarray]  # raw frames before the flare-settle cutoff, undetected
+    # bbox per dropped_frames entry, from tracing the first scored frame's appearance
+    # backward into the flare/warmup region -- None where the trace didn't reach/match.
+    dropped_frame_boxes: list[tuple[int, int, int, int] | None]
+    # every persistently-identified subject per frame, from track_multiple_objects --
+    # additive diagnostic detail, parallel to `frames`, not used in feature scoring.
+    multi_tracks: list[list[TrackedObject]] = field(default_factory=list)
 
 
 def detect_clip(
@@ -239,6 +598,11 @@ def detect_clip(
     max_flare_fraction: float = 0.4,
     max_track_jump_fraction: float = 0.2,
     max_track_miss_frames: int = 5,
+    template_match_threshold: float = 0.55,
+    flare_match_relax: float = 0.1,
+    track_search_margin_fraction: float = 0.75,
+    min_track_search_margin: float = 6.0,
+    fragment_close_kernel_size: int = 9,
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
@@ -265,8 +629,54 @@ def detect_clip(
     before it is dropped and the next frame re-acquires on the largest blob,
     same as the original stateless behaviour.
 
+    Within that miss tolerance, a frame with NO plausible background-diff
+    candidate at all is not simply skipped: `reacquire_by_template` searches
+    the raw (non-diffed) frame around the last known position for the last
+    known appearance (a cropped greyscale patch, refreshed on every real
+    detection), so a subject that stops registering against the background
+    model (e.g. it stands still long enough to blend in, or the diff briefly
+    drops below `threshold`) still gets a `FrameDetection.recovered=True` box
+    instead of a gap. This is a template match, not a full-frame search, so it
+    can only find the same subject near where it was last seen: the search
+    window is capped at `track_search_margin_fraction` of the track's own
+    current size (floored at `min_track_search_margin` pixels), not a fixed
+    frame-relative radius, and is biased toward the last observed direction
+    of travel while still covering a full reversal -- otherwise a small or
+    slow-moving subject's box can bounce to an unrelated lookalike patch well
+    outside where it could plausibly have moved in one frame.
+
+    That same forward-only pass can still miss the frames before a track ever
+    gets its first bg-diff hit (e.g. the subject enters slowly, or is small
+    enough that it only starts registering a few frames in) -- there's
+    nothing to reacquire against yet at that point. `_run_track_pass` is run a
+    second time over these frames in reverse, seeded independently, so a
+    track that only "starts" partway through can fill in the earlier frames
+    from the back; wherever the forward pass found nothing, the backward
+    result (marked `FrameDetection.filled_by_reverse=True`) is used instead.
+    That same backward scan is then extended past `considered[0]`, into the
+    raw warmup/flare frames dropped before the cutoff, using only appearance
+    matching against a single fixed anchor crop (there is no background model
+    there to diff against) and a slightly relaxed `template_match_threshold`
+    (by `flare_match_relax`) since those frames are noisier/differently lit --
+    results land in `ClipDetection.dropped_frame_boxes`, kept separate from
+    `frames` since they're still not fed into feature scoring.
+
     Kept separate from `extract_clip_features` so overlays and diagnostics can
     render exactly what scored a clip rather than a lookalike reimplementation.
+
+    A low-contrast subject against a similarly-coloured background (e.g. a
+    brown animal in daylight) often diffs out as several small disconnected
+    fragments rather than one solid blob, so `largest`/`centroid` only ever
+    covers part of it. After the existing MORPH_OPEN (which removes speckle
+    noise), a MORPH_CLOSE with a `fragment_close_kernel_size` kernel bridges
+    small gaps between nearby fragments into one contour before anything else
+    runs -- set it to 0 to disable and fall back to the raw opened mask.
+
+    `ClipDetection.multi_tracks` additionally runs `track_multiple_objects`
+    over the same per-frame candidates, giving every distinct subject in the
+    clip its own persistent id (not just the single `largest` track) -- purely
+    additive diagnostic detail for telling separate subjects apart in an
+    overlay, including when two of them briefly merge into one blob.
     """
     cap = cv2.VideoCapture(video_path)
     try:
@@ -300,42 +710,100 @@ def detect_clip(
 
     background = np.median(np.stack(grays), axis=0).astype(np.uint8)
     kernel = np.ones((3, 3), np.uint8)
+    close_kernel = (
+        np.ones((fragment_close_kernel_size, fragment_close_kernel_size), np.uint8)
+        if fragment_close_kernel_size > 0
+        else None
+    )
 
     flares = flare_frames(medians, tolerance=flare_tolerance)
     max_jump_distance = max_track_jump_fraction * (frame_width**2 + frame_height**2) ** 0.5
 
-    detections: list[FrameDetection] = []
-    track_bbox: tuple[int, int, int, int] | None = None
-    track_miss = 0
-    for frame_index, (frame, gray) in enumerate(zip(considered, grays, strict=True)):
+    masks: list[np.ndarray] = []
+    per_frame_contours: list[list[np.ndarray]] = []
+    per_frame_blobs: list[list[np.ndarray]] = []
+    per_frame_candidates: list[list[np.ndarray]] = []
+    motion_fracs: list[float] = []
+    for gray in grays:
         diff = cv2.absdiff(gray, background)
         _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        if close_kernel is not None:
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
         frame_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        blobs = [c for c in frame_contours if min_blob_area <= cv2.contourArea(c) <= max_area]
-        candidates = [c for c in frame_contours if 0 < cv2.contourArea(c) <= max_area]
-        contour = track_contour(candidates, track_bbox, max_jump_distance=max_jump_distance)
+        masks.append(mask)
+        per_frame_contours.append(list(frame_contours))
+        per_frame_blobs.append(
+            [c for c in frame_contours if min_blob_area <= cv2.contourArea(c) <= max_area]
+        )
+        per_frame_candidates.append(
+            [c for c in frame_contours if 0 < cv2.contourArea(c) <= max_area]
+        )
+        motion_fracs.append(float(np.count_nonzero(mask)) / mask.size)
+
+    track_kwargs = {
+        "max_jump_distance": max_jump_distance,
+        "max_track_miss_frames": max_track_miss_frames,
+        "template_match_threshold": template_match_threshold,
+        "search_margin_fraction": track_search_margin_fraction,
+        "min_search_margin": min_track_search_margin,
+    }
+    forward = _run_track_pass(grays, per_frame_candidates, **track_kwargs)
+    backward = list(
+        reversed(
+            _run_track_pass(
+                list(reversed(grays)), list(reversed(per_frame_candidates)), **track_kwargs
+            )
+        )
+    )
+    multi_tracks = track_multiple_objects(
+        per_frame_blobs,
+        max_jump_distance=max_jump_distance,
+        max_track_miss_frames=max_track_miss_frames,
+        size_margin_fraction=track_search_margin_fraction,
+        min_size_margin=min_track_search_margin,
+    )
+
+    detections: list[FrameDetection] = []
+    for frame_index, frame in enumerate(considered):
+        contour, recovered = forward[frame_index]
+        filled_by_reverse = False
         if contour is None:
-            track_miss += 1
-            if track_miss > max_track_miss_frames:
-                track_bbox = None
-        else:
-            track_bbox = _contour_bbox(contour)
-            track_miss = 0
+            back_contour, back_recovered = backward[frame_index]
+            if back_contour is not None:
+                contour, recovered, filled_by_reverse = back_contour, back_recovered, True
         detections.append(
             FrameDetection(
                 index=frame_index,
                 frame=frame,
-                mask=mask,
-                all_contours=list(frame_contours),
-                blobs=blobs,
+                mask=masks[frame_index],
+                all_contours=per_frame_contours[frame_index],
+                blobs=per_frame_blobs[frame_index],
                 largest=contour,
                 centroid=None if contour is None else contour_centroid(contour),
-                motion_pixel_fraction=float(np.count_nonzero(mask)) / mask.size,
+                motion_pixel_fraction=motion_fracs[frame_index],
                 median_grey=medians[frame_index],
+                recovered=recovered,
+                filled_by_reverse=filled_by_reverse,
                 is_flare=flares[frame_index],
             )
         )
+
+    dropped_frame_boxes: list[tuple[int, int, int, int] | None] = [None] * drop
+    if drop > 0 and detections[0].largest is not None:
+        x0, y0, x1, y1 = _contour_bbox(detections[0].largest)
+        seed_template = grays[0][y0:y1, x0:x1]
+        if seed_template.size > 0:
+            traced = _reverse_template_trace(
+                list(reversed(all_grays[:drop])),
+                (x0, y0, x1, y1),
+                seed_template,
+                search_margin=max_jump_distance,
+                match_threshold=max(0.0, template_match_threshold - flare_match_relax),
+                search_margin_fraction=track_search_margin_fraction,
+                min_search_margin=min_track_search_margin,
+            )
+            dropped_frame_boxes = list(reversed(traced))
 
     return ClipDetection(
         frames=detections,
@@ -345,6 +813,8 @@ def detect_clip(
         warmup_dropped=drop,
         total_frames=total_frames,
         dropped_frames=frames[:drop],
+        dropped_frame_boxes=dropped_frame_boxes,
+        multi_tracks=multi_tracks,
     )
 
 
@@ -358,9 +828,20 @@ def extract_clip_features(
     threshold: int = 18,
     flare_tolerance: float = 3.0,
     max_flare_fraction: float = 0.4,
+    daylight_color_fraction: float = 0.15,
+    template_match_threshold: float = 0.55,
 ) -> dict[str, float] | None:
     """Run the detector over one clip and compute features for its largest
     track. Returns None if no motion was detected.
+
+    `daylight_color_fraction` gates `green_light_ratio`/`green_light_flicker`:
+    those exist to catch the guard's flashlight, a small saturated green spot
+    against otherwise near-monochrome IR content. A dusk/daytime clip with
+    real ambient colour (green foliage covering much of the frame) can read
+    the same way to a single contour's hue check, so if `color_fraction`
+    (broad-frame saturation, see `src.features.color_saturation_fraction`)
+    clears this threshold the clip is treated as genuine colour footage and
+    both green-light features are zeroed rather than trusted.
     """
     detection = detect_clip(
         video_path,
@@ -369,6 +850,7 @@ def extract_clip_features(
         threshold=threshold,
         flare_tolerance=flare_tolerance,
         max_flare_fraction=max_flare_fraction,
+        template_match_threshold=template_match_threshold,
     )
     if detection is None:
         return None
@@ -380,6 +862,7 @@ def extract_clip_features(
     blob_areas: list[float] = []
     detected_indices: list[int] = []
     whole_frame_green_ratios: list[float] = []
+    color_fractions: list[float] = []
     frames_detected = 0
     best_contour: np.ndarray | None = None
     best_frame: np.ndarray | None = None
@@ -390,6 +873,7 @@ def extract_clip_features(
 
     for detected in considered:
         whole_frame_green_ratios.append(green_light_ratio(detected.frame, whole_frame))
+        color_fractions.append(color_saturation_fraction(detected.frame))
         # Peak-frame readings, not an average -- a storm/wind frame with motion
         # scattered across many small blobs (bushes, branches) reads very
         # differently from a single compact subject even at the same threshold.
@@ -418,14 +902,21 @@ def extract_clip_features(
     points = normalized_contour_points(best_contour, frame_width, frame_height)
     track = [(x / frame_width, y / frame_height) for x, y in centroids]
     best_width = float(cv2.boundingRect(best_contour)[2])
+    color_fraction = sum(color_fractions) / len(color_fractions) if color_fractions else 0.0
+    is_daylight_color = color_fraction > daylight_color_fraction
 
     return {
         "outside_pixel_fraction": outside_pixel_fraction(points, zone),
         "aspect_ratio": aspect_ratio(best_contour),
         "solidity": solidity(best_contour),
         "saturation_ratio": saturation_ratio(best_frame, best_contour),
-        "green_light_ratio": green_light_ratio(best_frame, best_contour),
-        "green_light_flicker": green_light_flicker(whole_frame_green_ratios),
+        "color_fraction": color_fraction,
+        "green_light_ratio": (
+            0.0 if is_daylight_color else green_light_ratio(best_frame, best_contour)
+        ),
+        "green_light_flicker": (
+            0.0 if is_daylight_color else green_light_flicker(whole_frame_green_ratios)
+        ),
         "row_normalised_area": row_normalised_area(best_contour, ref_row),
         "edge_density": edge_density(best_frame, best_contour),
         "path_length": path_length(centroids),

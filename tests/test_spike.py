@@ -108,29 +108,384 @@ def test_track_contour_prefers_overlap_over_size():
 
 
 def test_track_contour_falls_back_to_nearest_centroid_without_overlap():
-    # No candidate overlaps the previous box, but one is much closer to it.
+    # No candidate overlaps the previous box, but one is much closer to it --
+    # a generous size margin here isolates this from the size-relative cap
+    # (covered separately below) so this purely tests nearest-centroid choice.
     track_bbox = (5, 5, 15, 15)
     nearby = _square_contour(20, 20, 4)
     far = _square_contour(80, 80, 4)
-    result = spike.track_contour([nearby, far], track_bbox, max_jump_distance=50)
+    result = spike.track_contour(
+        [nearby, far], track_bbox, max_jump_distance=50, min_size_margin=50
+    )
     assert result is nearby
 
 
-def test_track_contour_reacquires_largest_when_track_is_lost():
-    # Neither candidate is within max_jump_distance of the old track -- treat
-    # it as a fresh acquisition (same as no track at all) rather than force a
-    # match onto something unrelated.
+def test_track_contour_returns_none_when_track_is_lost_rather_than_reacquiring_blindly():
+    # Neither candidate is within max_jump_distance of the old track -- report
+    # a miss (None) instead of force-matching onto something unrelated; the
+    # caller's appearance-recovery / miss-tolerance machinery gets the chance
+    # to reacquire properly, or drop the track, before anything jumps.
     track_bbox = (5, 5, 15, 15)
     small = _square_contour(100, 100, 4)
     big = _square_contour(140, 140, 10)
     result = spike.track_contour([small, big], track_bbox, max_jump_distance=5)
-    assert result is big
+    assert result is None
 
 
 def test_track_contour_returns_none_for_no_candidates():
     assert spike.track_contour([], (0, 0, 10, 10), max_jump_distance=10) is None
 
 
+def test_track_contour_size_relative_cap_beats_generous_max_jump_distance():
+    # A tiny (4x4) track shouldn't be allowed to jump 21px to a candidate just
+    # because max_jump_distance (a generous, frame-wide ceiling) allows it --
+    # the effective jump distance is also capped near the track's own size, so
+    # this candidate is rejected. Reports a miss (None) rather than jumping to
+    # whatever else is in frame.
+    track_bbox = (5, 5, 9, 9)
+    nearby = _square_contour(20, 20, 4)  # ~21px from the track centre
+    big = _square_contour(100, 100, 10)
+    result = spike.track_contour([nearby, big], track_bbox, max_jump_distance=50)
+    assert result is None
+
+
+def test_track_multiple_objects_assigns_stable_ids_to_two_independent_subjects():
+    # Two subjects, far enough apart to never share a candidate, should each
+    # keep the same id across every frame they appear in.
+    frame0 = [_square_contour(10, 10, 4), _square_contour(60, 10, 4)]
+    frame1 = [_square_contour(12, 10, 4), _square_contour(58, 10, 4)]
+    frame2 = [_square_contour(14, 10, 4), _square_contour(56, 10, 4)]
+    results = spike.track_multiple_objects(
+        [frame0, frame1, frame2], max_jump_distance=50, max_track_miss_frames=2
+    )
+    ids_by_frame = [{t.track_id for t in frame} for frame in results]
+    assert ids_by_frame == [{0, 1}] * 3
+    assert all(t.merged_ids == () for frame in results for t in frame)
+
+
+def test_track_multiple_objects_spawns_new_id_for_later_unmatched_candidate():
+    frame0 = [_square_contour(10, 10, 4)]
+    frame1 = [_square_contour(12, 10, 4), _square_contour(80, 80, 4)]
+    results = spike.track_multiple_objects(
+        [frame0, frame1], max_jump_distance=50, max_track_miss_frames=2
+    )
+    assert {t.track_id for t in results[0]} == {0}
+    assert {t.track_id for t in results[1]} == {0, 1}
+
+
+def test_track_multiple_objects_drops_track_after_miss_tolerance():
+    frame0 = [_square_contour(10, 10, 4)]
+    empty: list[np.ndarray] = []
+    # Reappearing well after the miss tolerance should be a fresh id, not a
+    # continuation of the dropped one.
+    results = spike.track_multiple_objects(
+        [frame0, empty, empty, empty, frame0], max_jump_distance=50, max_track_miss_frames=1
+    )
+    assert {t.track_id for t in results[0]} == {0}
+    assert results[1] == [] and results[2] == [] and results[3] == []
+    assert {t.track_id for t in results[4]} == {1}
+
+
+def test_track_multiple_objects_keeps_both_ids_alive_through_a_merge_and_resplits():
+    # Two subjects converge into one background-diff blob for a frame, then
+    # separate again -- both ids should survive the merge (flagged via
+    # merged_ids) and reattach to the correct side once they split back out.
+    frame0 = [_square_contour(10, 10, 4), _square_contour(30, 10, 4)]
+    frame1 = [_square_contour(12, 10, 4), _square_contour(28, 10, 4)]
+    merged = [_square_contour(12, 10, 20)]  # spans both subjects' last boxes
+    frame3 = [_square_contour(16, 10, 4), _square_contour(24, 10, 4)]
+    results = spike.track_multiple_objects(
+        [frame0, frame1, merged, frame3], max_jump_distance=50, max_track_miss_frames=2
+    )
+
+    merge_frame = results[2]
+    assert {t.track_id for t in merge_frame} == {0, 1}
+    for t in merge_frame:
+        assert t.merged_ids == (1 - t.track_id,)
+
+    split_frame = results[3]
+    assert {t.track_id for t in split_frame} == {0, 1}
+    split_by_id = {t.track_id: t.bbox for t in split_frame}
+    left_box, right_box = spike._contour_bbox(frame3[0]), spike._contour_bbox(frame3[1])
+    # id 0 was on the left before the merge and should reattach to the left
+    # candidate after the split, not the right one.
+    assert split_by_id[0] == left_box
+    assert split_by_id[1] == right_box
+
+
+def _draw_textured_patch(img: np.ndarray, x: int, y: int, outer: int, inner: int) -> None:
+    # Solid-fill blocks have zero internal variance, which makes normalised
+    # cross-correlation undefined -- give the patch real internal structure so
+    # a template match has something to lock onto.
+    img[y : y + 8, x : x + 8] = outer
+    img[y + 2 : y + 6, x + 2 : x + 6] = inner
+
+
+def test_reacquire_by_template_finds_shifted_low_contrast_patch():
+    # Same shape/pattern as the template, shifted a few pixels and at much
+    # lower absolute contrast -- simulates a subject that has visually blended
+    # into the background (too small a brightness delta to diff-detect) but
+    # hasn't changed shape or moved far.
+    template_frame = np.zeros((40, 40), dtype=np.uint8)
+    _draw_textured_patch(template_frame, 10, 10, 200, 100)
+    template = template_frame[10:18, 10:18]
+
+    frame = np.zeros((40, 40), dtype=np.uint8)
+    _draw_textured_patch(frame, 15, 12, 15, 8)  # low contrast, shifted by (5, 2)
+
+    match = spike.reacquire_by_template(
+        frame, template, last_bbox=(10, 10, 18, 18), search_margin=15, match_threshold=0.5
+    )
+
+    assert match is not None
+    x0, y0, _x1, _y1 = match
+    assert (x0, y0) == (15, 12)
+
+
+def test_reacquire_by_template_returns_none_when_nothing_matches():
+    frame = np.zeros((40, 40), dtype=np.uint8)  # nothing resembling the template anywhere
+    template = np.zeros((8, 8), dtype=np.uint8)
+    template[2:6, 2:6] = 200
+
+    match = spike.reacquire_by_template(
+        frame, template, last_bbox=(10, 10, 18, 18), search_margin=15, match_threshold=0.9
+    )
+
+    assert match is None
+
+
+def test_reacquire_by_template_returns_none_when_search_window_too_small():
+    frame = np.zeros((10, 10), dtype=np.uint8)
+    template = np.zeros((8, 8), dtype=np.uint8)
+    template[2:6, 2:6] = 200
+
+    # Near the corner with almost no margin -- the clipped window ends up
+    # smaller than the template itself.
+    match = spike.reacquire_by_template(
+        frame, template, last_bbox=(8, 8, 10, 10), search_margin=1, match_threshold=0.1
+    )
+
+    assert match is None
+
+
+def test_reacquire_by_template_ignores_far_patch_without_velocity():
+    # A tight, size-relative margin (no direction bias) shouldn't reach a
+    # patch shifted 22px away from the last known position.
+    template_frame = np.zeros((60, 60), dtype=np.uint8)
+    _draw_textured_patch(template_frame, 10, 10, 200, 100)
+    template = template_frame[10:18, 10:18]
+
+    frame = np.zeros((60, 60), dtype=np.uint8)
+    _draw_textured_patch(frame, 32, 10, 15, 8)  # shifted +22 in x
+
+    match = spike.reacquire_by_template(
+        frame, template, last_bbox=(10, 10, 18, 18), search_margin=5, match_threshold=0.5
+    )
+
+    assert match is None
+
+
+def test_reacquire_by_template_velocity_extends_search_in_direction_of_travel():
+    # Same scene as above, but with a velocity matching the subject's actual
+    # displacement -- the search window should stretch forward enough to find
+    # it, without needing a larger base margin.
+    template_frame = np.zeros((60, 60), dtype=np.uint8)
+    _draw_textured_patch(template_frame, 10, 10, 200, 100)
+    template = template_frame[10:18, 10:18]
+
+    frame = np.zeros((60, 60), dtype=np.uint8)
+    _draw_textured_patch(frame, 32, 10, 15, 8)  # shifted +22 in x
+
+    match = spike.reacquire_by_template(
+        frame,
+        template,
+        last_bbox=(10, 10, 18, 18),
+        search_margin=5,
+        match_threshold=0.5,
+        velocity=(20.0, 0.0),
+    )
+
+    assert match is not None
+    x0, y0, _x1, _y1 = match
+    assert (x0, y0) == (32, 10)
+
+
+def test_reacquire_by_template_velocity_still_finds_reversal_near_last_position():
+    # A subject that doubles back (moves opposite to its last velocity)
+    # should still be found close to its last known position -- the trailing
+    # edge of the window isn't shrunk by a forward velocity bias.
+    template_frame = np.zeros((60, 60), dtype=np.uint8)
+    _draw_textured_patch(template_frame, 10, 10, 200, 100)
+    template = template_frame[10:18, 10:18]
+
+    frame = np.zeros((60, 60), dtype=np.uint8)
+    _draw_textured_patch(frame, 7, 10, 15, 8)  # shifted -3 in x, opposite the velocity
+
+    match = spike.reacquire_by_template(
+        frame,
+        template,
+        last_bbox=(10, 10, 18, 18),
+        search_margin=5,
+        match_threshold=0.5,
+        velocity=(20.0, 0.0),
+    )
+
+    assert match is not None
+    x0, y0, _x1, _y1 = match
+    assert (x0, y0) == (7, 10)
+
+
+def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(monkeypatch):
+    # A single textured subject moves across frame, well-detected by
+    # background-subtraction everywhere except one frame where it's drawn at
+    # much lower contrast (diff stays under `threshold`) -- the appearance
+    # (shape/texture) hasn't changed, only how visible it is against the
+    # background model. Moves slowly relative to its own 8px size, well within
+    # the size-relative jump cap, so only the dip frame needs recovery.
+    positions = [5, 9, 13, 17, 21, 25]
+    contrasts = [(200, 100)] * 6
+    contrasts[2] = (15, 8)  # frame index 2 (post any warmup): low-contrast dip
+    frames = []
+    for pos, (outer, inner) in zip(positions, contrasts, strict=True):
+        frame = np.zeros((70, 70, 3), dtype=np.uint8)
+        _draw_textured_patch(frame[:, :, 0], pos, 30, outer, inner)
+        _draw_textured_patch(frame[:, :, 1], pos, 30, outer, inner)
+        _draw_textured_patch(frame[:, :, 2], pos, 30, outer, inner)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+
+    assert detection is not None
+    dip_frame = detection.frames[2]
+    assert dip_frame.largest is not None
+    assert dip_frame.recovered is True
+    # Every other frame should be a real bg-diff detection, not a recovery.
+    assert all(not f.recovered for i, f in enumerate(detection.frames) if i != 2)
+
+
+def test_detect_clip_fills_gap_before_track_first_locks_on_via_backward_pass(monkeypatch):
+    # The subject is only visible faintly (below `threshold`) for the first
+    # couple of frames, so the forward pass has no candidate -- and no track
+    # yet -- to work with there. A backward scan starting from the frame
+    # where it does clear the threshold should fill those leading frames in.
+    # Moves slowly relative to its own 8px size, well within the
+    # size-relative jump cap, so bg-diff frames continue directly.
+    positions = [5, 9, 13, 17, 21, 25]
+    contrasts = [(15, 8), (15, 8), (200, 100), (200, 100), (200, 100), (200, 100)]
+    frames = []
+    for pos, (outer, inner) in zip(positions, contrasts, strict=True):
+        frame = np.zeros((70, 70, 3), dtype=np.uint8)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], pos, 30, outer, inner)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+
+    assert detection is not None
+    assert detection.frames[0].largest is not None
+    assert detection.frames[0].filled_by_reverse is True
+    assert detection.frames[0].recovered is True
+    assert detection.frames[1].filled_by_reverse is True
+    # The frames where bg-diff genuinely fired should not be marked as fills.
+    assert all(not f.filled_by_reverse for f in detection.frames[2:])
+
+
+def test_detect_clip_traces_track_backward_into_dropped_flare_frames(monkeypatch):
+    # Same textured subject, visible throughout the opening IR-gain ramp
+    # (dropped before the background model / feature scoring, per
+    # flare_settle_index) at the same spot the first scored frame finds it --
+    # the anchor established there should trace back through those raw,
+    # never-scored frames via appearance alone.
+    def _frame(value: int, pos: int) -> np.ndarray:
+        frame = _blank_frame(value=value)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], pos, 30, 200, 100)
+        return frame
+
+    ramp = [_frame(v, pos=5) for v in (220, 150, 80, 20, 0)]  # excluded from background model
+    positions = (5, 15, 25, 35, 45)
+    trailing = [_frame(0, pos) for pos in positions]  # settled, but still part of the ramp clip
+    subject = [_frame(0, pos) for pos in positions]
+    monkeypatch.setattr(
+        spike.cv2, "VideoCapture", lambda _path: FakeCapture(ramp + trailing + subject)
+    )
+
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+
+    assert detection is not None
+    assert detection.warmup_dropped == 5
+    assert detection.frames[0].largest is not None
+    assert detection.frames[0].recovered is False
+    assert len(detection.dropped_frame_boxes) == 5
+    # The trace should reach at least the ramp frames closest to the scored
+    # boundary -- how far back it gets before the ramp's brightness washes out
+    # the appearance match is a real limit, not something to pin exactly here.
+    assert detection.dropped_frame_boxes[-1] is not None
+    assert sum(box is not None for box in detection.dropped_frame_boxes) >= 2
+
+
+def _frame_with_split_subject(
+    pos: int, gap: int, *, width: int = 140, height: int = 60, patch: int = 6
+):
+    # Two solid patches, exactly `gap` background pixels apart -- simulates a
+    # low-contrast subject that background-subtraction only picks up as
+    # disconnected fragments.
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    frame[20 : 20 + patch, pos : pos + patch] = 100
+    right = pos + patch + gap
+    frame[20 : 20 + patch, right : right + patch] = 100
+    return frame
+
+
+def test_detect_clip_bridges_fragmented_low_contrast_blob_by_default(monkeypatch):
+    # A small gap between two fragments of the same subject should be bridged
+    # by the default MORPH_CLOSE step into one contour spanning both, instead
+    # of only ever finding one half of the animal.
+    positions = (5, 15, 25, 35, 45)
+    frames = [_frame_with_split_subject(pos, gap=5) for pos in positions]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+
+    assert detection is not None
+    last = detection.frames[-1]
+    assert last.largest is not None
+    x0, _y0, x1, _y1 = spike._contour_bbox(last.largest)
+    assert (x1 - x0) >= 17  # spans both 6px patches plus the 5px gap between them
+
+
+def test_detect_clip_leaves_fragments_separate_when_closing_disabled(monkeypatch):
+    # A gap wide enough to survive the pre-morphology Gaussian blur unmerged,
+    # so disabling MORPH_CLOSE is what's actually being exercised here.
+    positions = (5, 15, 25, 35, 45)
+    frames = [_frame_with_split_subject(pos, gap=20) for pos in positions]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    detection = spike.detect_clip("clip.mp4", threshold=18, fragment_close_kernel_size=0)
+
+    assert detection is not None
+    last = detection.frames[-1]
+    assert len(last.blobs) == 2
+
+
+def test_detect_clip_populates_multi_tracks_for_two_independent_subjects(monkeypatch):
+    positions = (5, 15, 25, 35, 45)
+    frames = []
+    for pos in positions:
+        frame = np.zeros((70, 140, 3), dtype=np.uint8)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], pos, 30, 200, 100)
+            _draw_textured_patch(frame[:, :, c], pos + 80, 30, 200, 100)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+
+    assert detection is not None
+    assert len(detection.multi_tracks) == len(detection.frames)
+    assert all(len(frame_tracks) == 2 for frame_tracks in detection.multi_tracks)
 
 
 def test_extract_clip_features_returns_none_without_motion(monkeypatch, tmp_path):
@@ -211,6 +566,30 @@ def test_extract_clip_features_flags_swinging_flashlight(monkeypatch, tmp_path):
 
     assert result is not None
     assert result["green_light_flicker"] > 0.1
+
+
+def test_extract_clip_features_zeroes_green_light_in_broad_daylight_colour(monkeypatch, tmp_path):
+    # Dusk/daytime footage with real ambient colour (green foliage covering
+    # most of the frame) can pass the same hue/saturation/value check as the
+    # guard's flashlight if the subject itself picks up a green cast -- the
+    # broad-frame colour_fraction gate should suppress both green features
+    # here even though the un-gated per-contour check would fire.
+    def _frame_with_green_square(pos: int, size: int = 60) -> np.ndarray:
+        frame = np.zeros((size, size, 3), dtype=np.uint8)
+        frame[:, :] = (0, 150, 0)  # broad saturated ambient green background
+        cv2.rectangle(frame, (pos, pos), (pos + 8, pos + 8), (0, 220, 0), thickness=-1)
+        return frame
+
+    positions = (5, 12, 19, 26, 33, 40)
+    frames = [_frame_with_green_square(pos) for pos in positions]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
+    assert result["color_fraction"] > 0.15
+    assert result["green_light_ratio"] == 0.0
+    assert result["green_light_flicker"] == 0.0
 
 
 def test_iter_labelled_clips_with_files_requires_both_file_and_label(tmp_path: Path):

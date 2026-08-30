@@ -35,6 +35,7 @@ import argparse
 import csv
 import sys
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,7 @@ from src.features import (  # noqa: E402
     area_stability,
     aspect_ratio,
     edge_density,
+    flare_frames,
     green_light_flicker,
     green_light_ratio,
     heading_change,
@@ -130,18 +132,44 @@ def _whole_frame_contour(frame_width: int, frame_height: int) -> np.ndarray:
     return np.array([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]], dtype=np.int32)
 
 
-def extract_clip_features(
+@dataclass(frozen=True)
+class FrameDetection:
+    """Everything the detector saw in one frame, before it is reduced to features."""
+
+    index: int
+    frame: np.ndarray
+    mask: np.ndarray
+    blobs: list[np.ndarray]  # contours passing both the min and max area gates
+    largest: np.ndarray | None  # largest contour under max_area, no min gate
+    centroid: tuple[float, float] | None
+    motion_pixel_fraction: float
+    median_grey: float
+    is_flare: bool
+
+
+@dataclass(frozen=True)
+class ClipDetection:
+    """Per-frame detector output for a whole clip."""
+
+    frames: list[FrameDetection]
+    background: np.ndarray
+    frame_width: int
+    frame_height: int
+    warmup_dropped: int
+    total_frames: int
+
+
+def detect_clip(
     video_path: str,
-    zone: CameraZone,
     *,
-    reference_row: float | None = None,
     warmup_frames: int = 10,
     max_area_fraction: float = 0.25,
     min_blob_area_fraction: float = 0.0005,
     threshold: int = 18,
-) -> dict[str, float] | None:
-    """Run a simple background-subtraction detector over one clip and compute
-    features for its largest track. Returns None if no motion was detected.
+    flare_tolerance: float = 3.0,
+) -> ClipDetection | None:
+    """Run the background-subtraction detector over one clip, keeping per-frame
+    detail. Returns None if the clip has no readable frames.
 
     Consecutive-frame differencing was tried first and failed on the real
     footage: these cameras spend roughly the first two seconds of every clip
@@ -151,6 +179,9 @@ def extract_clip_features(
     per-pixel median of what remains (the subject moves, the fence doesn't),
     and blobs larger than `max_area_fraction` of the frame are rejected as
     residual illumination changes rather than subjects.
+
+    Kept separate from `extract_clip_features` so overlays and diagnostics can
+    render exactly what scored a clip rather than a lookalike reimplementation.
     """
     cap = cv2.VideoCapture(video_path)
     try:
@@ -169,7 +200,8 @@ def extract_clip_features(
 
     # Keep the warmup frames if dropping them would leave too little to model a
     # background from -- short blank "startup" clips are shorter than the warmup.
-    considered = frames[warmup_frames:] if total_frames - warmup_frames >= 5 else frames
+    drop = warmup_frames if total_frames - warmup_frames >= 5 else 0
+    considered = frames[drop:]
 
     frame_height, frame_width = considered[0].shape[:2]
     max_area = max_area_fraction * frame_height * frame_width
@@ -180,6 +212,69 @@ def extract_clip_features(
     ]
     background = np.median(np.stack(grays), axis=0).astype(np.uint8)
     kernel = np.ones((3, 3), np.uint8)
+
+    medians = [float(np.median(g)) for g in grays]
+    flares = flare_frames(medians, tolerance=flare_tolerance)
+
+    detections: list[FrameDetection] = []
+    for frame_index, (frame, gray) in enumerate(zip(considered, grays, strict=True)):
+        diff = cv2.absdiff(gray, background)
+        _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        frame_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        blobs = [c for c in frame_contours if min_blob_area <= cv2.contourArea(c) <= max_area]
+        contour = largest_contour(mask, max_area=max_area)
+        if contour is not None and cv2.contourArea(contour) <= 0:
+            contour = None
+        detections.append(
+            FrameDetection(
+                index=frame_index,
+                frame=frame,
+                mask=mask,
+                blobs=blobs,
+                largest=contour,
+                centroid=None if contour is None else contour_centroid(contour),
+                motion_pixel_fraction=float(np.count_nonzero(mask)) / mask.size,
+                median_grey=medians[frame_index],
+                is_flare=flares[frame_index],
+            )
+        )
+
+    return ClipDetection(
+        frames=detections,
+        background=background,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        warmup_dropped=drop,
+        total_frames=total_frames,
+    )
+
+
+def extract_clip_features(
+    video_path: str,
+    zone: CameraZone,
+    *,
+    reference_row: float | None = None,
+    warmup_frames: int = 10,
+    max_area_fraction: float = 0.25,
+    min_blob_area_fraction: float = 0.0005,
+    threshold: int = 18,
+) -> dict[str, float] | None:
+    """Run the detector over one clip and compute features for its largest
+    track. Returns None if no motion was detected.
+    """
+    detection = detect_clip(
+        video_path,
+        warmup_frames=warmup_frames,
+        max_area_fraction=max_area_fraction,
+        min_blob_area_fraction=min_blob_area_fraction,
+        threshold=threshold,
+    )
+    if detection is None:
+        return None
+
+    frame_width, frame_height = detection.frame_width, detection.frame_height
+    considered = detection.frames
 
     centroids: list[tuple[float, float]] = []
     blob_areas: list[float] = []
@@ -193,40 +288,28 @@ def extract_clip_features(
     motion_pixel_fraction = 0.0
     blob_count = 0
 
-    for frame_index, (frame, gray) in enumerate(zip(considered, grays, strict=True)):
-        whole_frame_green_ratios.append(green_light_ratio(frame, whole_frame))
-        diff = cv2.absdiff(gray, background)
-        _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    for detected in considered:
+        whole_frame_green_ratios.append(green_light_ratio(detected.frame, whole_frame))
         # Peak-frame readings, not an average -- a storm/wind frame with motion
         # scattered across many small blobs (bushes, branches) reads very
         # differently from a single compact subject even at the same threshold.
-        motion_pixel_fraction = max(
-            motion_pixel_fraction, float(np.count_nonzero(mask)) / mask.size
-        )
-        frame_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        blob_count = max(
-            blob_count,
-            sum(1 for c in frame_contours if min_blob_area <= cv2.contourArea(c) <= max_area),
-        )
-        contour = largest_contour(mask, max_area=max_area)
+        motion_pixel_fraction = max(motion_pixel_fraction, detected.motion_pixel_fraction)
+        blob_count = max(blob_count, len(detected.blobs))
+        contour = detected.largest
         if contour is None:
             continue
         area = cv2.contourArea(contour)
-        if area <= 0:
-            continue
         frames_detected += 1
-        detected_indices.append(frame_index)
+        detected_indices.append(detected.index)
         blob_areas.append(area)
         # Shape features describe the subject at its clearest, not whichever
         # frame happened to be last -- tracks often end on a fading speck.
         if area > best_area:
             best_area = area
             best_contour = contour
-            best_frame = frame
-        centroid = contour_centroid(contour)
-        if centroid is not None:
-            centroids.append(centroid)
+            best_frame = detected.frame
+        if detected.centroid is not None:
+            centroids.append(detected.centroid)
 
     if best_contour is None or best_frame is None:
         return None

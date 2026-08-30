@@ -232,6 +232,54 @@ def green_light_flicker(whole_frame_green_ratios: Sequence[float]) -> float:
     return math.sqrt(variance)
 
 
+def flare_frames(frame_medians: Sequence[float], *, tolerance: float = 3.0) -> list[bool]:
+    """Which frames are corrupted by an IR gain/illuminator step.
+
+    These cameras change IR gain (and switch the illuminator) as a *global*
+    exposure change, so the whole-frame median grey level jumps by 12-24 levels
+    between adjacent frames. Once settled it moves by 0-2 levels even while a
+    subject crosses the frame, because one animal covers too few pixels to
+    shift the median. That gap is what makes flare separable from motion at all.
+
+    Both frames either side of a step are marked: the step is a transition, and
+    neither end of it can be differenced against a stable background.
+    """
+    n = len(frame_medians)
+    if n < 2:
+        return [False] * n
+    flagged = [False] * n
+    for i in range(1, n):
+        if abs(frame_medians[i] - frame_medians[i - 1]) > tolerance:
+            flagged[i - 1] = True
+            flagged[i] = True
+    return flagged
+
+
+def flare_settle_index(
+    frame_medians: Sequence[float],
+    *,
+    tolerance: float = 3.0,
+    max_fraction: float = 0.4,
+) -> int:
+    """First frame index after the opening IR gain ramp has settled.
+
+    A fixed warmup cut is wrong in both directions on this footage: some clips
+    settle by frame 2 and lose usable subject motion, while others are still
+    ramping at frame 21 and poison the background model. Measuring the ramp per
+    clip fixes both.
+
+    `max_fraction` caps how much of a clip this may discard -- the cameras are
+    motion-triggered, so the subject is often already moving during the ramp,
+    and on a short clip dropping the ramp can mean dropping the whole event.
+    """
+    flagged = flare_frames(frame_medians, tolerance=tolerance)
+    settle = 0
+    for i, is_flare in enumerate(flagged):
+        if is_flare:
+            settle = i + 1
+    return min(settle, int(len(frame_medians) * max_fraction))
+
+
 def _hhmm_to_minutes(value: str) -> int:
     hours, minutes = value.split(":")
     return int(hours) * 60 + int(minutes)

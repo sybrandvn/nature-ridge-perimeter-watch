@@ -6,6 +6,8 @@ from src.features import (
     area_stability,
     aspect_ratio,
     edge_density,
+    flare_frames,
+    flare_settle_index,
     green_light_flicker,
     green_light_ratio,
     heading_change,
@@ -228,3 +230,41 @@ def test_time_of_day_at_window_start_boundary_is_night():
 def test_time_of_day_at_window_end_boundary_is_day():
     # 04:00 UTC + 2h offset = 06:00 local, exactly the window end (exclusive).
     assert time_of_day("2026-01-01T04:00:00Z") == "day"
+
+
+def test_flare_frames_marks_both_sides_of_a_gain_step():
+    # Settled at 40, one 15-level step up to 55, settled again.
+    assert flare_frames([40, 40, 55, 55, 55]) == [False, True, True, False, False]
+
+
+def test_flare_frames_ignores_subject_sized_median_drift():
+    # A subject crossing shifts the whole-frame median by a level or two at most.
+    assert flare_frames([40, 41, 42, 41, 40]) == [False] * 5
+
+
+def test_flare_frames_catches_a_mid_clip_illuminator_kick():
+    flagged = flare_frames([40, 40, 40, 60, 60, 60])
+    assert flagged == [False, False, True, True, False, False]
+
+
+def test_flare_frames_degenerate_inputs():
+    assert flare_frames([]) == []
+    assert flare_frames([40.0]) == [False]
+
+
+def test_flare_settle_index_is_after_the_opening_ramp():
+    # 10 -> 25 -> 40 are gain steps; the trailing 40 -> 42 is below tolerance,
+    # so the ramp is considered settled from frame 3 onwards.
+    medians = [10, 25, 40, 42, 42, 42, 42, 42, 42, 42]
+    assert flare_settle_index(medians) == 3
+
+
+def test_flare_settle_index_is_zero_for_a_clip_that_never_flares():
+    assert flare_settle_index([44] * 10) == 0
+
+
+def test_flare_settle_index_never_discards_more_than_max_fraction():
+    # A short clip that ramps most of the way through must still keep footage:
+    # the cameras are motion-triggered, so the subject is already in frame.
+    medians = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    assert flare_settle_index(medians, max_fraction=0.4) == 4

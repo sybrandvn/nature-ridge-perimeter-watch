@@ -81,6 +81,58 @@ def test_normalized_contour_points_scales_to_unit_range():
     assert points == [(0.0, 0.0), (0.5, 0.0), (0.5, 1.0), (0.0, 1.0)]
 
 
+def _square_contour(x: int, y: int, size: int) -> np.ndarray:
+    mask = np.zeros((y + size + 5, x + size + 5), dtype=np.uint8)
+    mask[y : y + size, x : x + size] = 255
+    return spike.largest_contour(mask)
+
+
+def test_track_contour_returns_largest_when_no_active_track():
+    small = _square_contour(0, 0, 4)
+    big = _square_contour(40, 40, 10)
+    assert spike.track_contour([small, big], None, max_jump_distance=100) is big
+
+
+def test_track_contour_prefers_overlap_over_size():
+    # A previous track near (5, 5)-(15, 15): a small candidate that overlaps it
+    # should win over a much bigger candidate that is elsewhere in frame -- this
+    # is what stops the tracked identity flipping between two co-occurring
+    # subjects just because their relative blob sizes swap between frames.
+    track_bbox = (5, 5, 15, 15)
+    overlapping_small = _square_contour(5, 5, 4)
+    far_big = _square_contour(40, 40, 10)
+    result = spike.track_contour(
+        [overlapping_small, far_big], track_bbox, max_jump_distance=100
+    )
+    assert result is overlapping_small
+
+
+def test_track_contour_falls_back_to_nearest_centroid_without_overlap():
+    # No candidate overlaps the previous box, but one is much closer to it.
+    track_bbox = (5, 5, 15, 15)
+    nearby = _square_contour(20, 20, 4)
+    far = _square_contour(80, 80, 4)
+    result = spike.track_contour([nearby, far], track_bbox, max_jump_distance=50)
+    assert result is nearby
+
+
+def test_track_contour_reacquires_largest_when_track_is_lost():
+    # Neither candidate is within max_jump_distance of the old track -- treat
+    # it as a fresh acquisition (same as no track at all) rather than force a
+    # match onto something unrelated.
+    track_bbox = (5, 5, 15, 15)
+    small = _square_contour(100, 100, 4)
+    big = _square_contour(140, 140, 10)
+    result = spike.track_contour([small, big], track_bbox, max_jump_distance=5)
+    assert result is big
+
+
+def test_track_contour_returns_none_for_no_candidates():
+    assert spike.track_contour([], (0, 0, 10, 10), max_jump_distance=10) is None
+
+
+
+
 def test_extract_clip_features_returns_none_without_motion(monkeypatch, tmp_path):
     frames = [_blank_frame() for _ in range(5)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))

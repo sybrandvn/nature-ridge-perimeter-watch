@@ -117,6 +117,73 @@ def largest_contour(mask: np.ndarray, *, max_area: float | None = None) -> np.nd
     return max(contours, key=cv2.contourArea)
 
 
+def _contour_bbox(contour: np.ndarray) -> tuple[int, int, int, int]:
+    x, y, w, h = cv2.boundingRect(contour)
+    return (x, y, x + w, y + h)
+
+
+def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    iw = max(0, min(ax1, bx1) - max(ax0, bx0))
+    ih = max(0, min(ay1, by1) - max(ay0, by0))
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = (ax1 - ax0) * (ay1 - ay0)
+    area_b = (bx1 - bx0) * (by1 - by0)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _bbox_center(bbox: tuple[int, int, int, int]) -> tuple[float, float]:
+    x0, y0, x1, y1 = bbox
+    return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+
+
+def track_contour(
+    candidates: list[np.ndarray],
+    track_bbox: tuple[int, int, int, int] | None,
+    *,
+    max_jump_distance: float,
+) -> np.ndarray | None:
+    """Pick the candidate contour that continues an existing track, instead of
+    always re-selecting the frame's largest blob independently.
+
+    With no active track (nothing tracked yet, or the track was dropped after
+    too many consecutive misses), this falls back to the largest candidate --
+    the original behaviour. With an active track, it prefers the candidate
+    with the highest bounding-box overlap (IoU) against the last known
+    position; if nothing overlaps, it falls back to the nearest centroid
+    within `max_jump_distance`. This is what keeps the "tracked" identity from
+    flipping between two co-occurring subjects (e.g. two people) just because
+    their relative blob sizes swap from one frame to the next.
+    """
+    if not candidates:
+        return None
+    if track_bbox is None:
+        return max(candidates, key=cv2.contourArea)
+
+    boxes = [_contour_bbox(c) for c in candidates]
+    ious = [_bbox_iou(track_bbox, box) for box in boxes]
+    best_iou_idx = max(range(len(candidates)), key=lambda i: ious[i])
+    if ious[best_iou_idx] > 0:
+        return candidates[best_iou_idx]
+
+    track_center = _bbox_center(track_bbox)
+    distances = [
+        ((cx - track_center[0]) ** 2 + (cy - track_center[1]) ** 2) ** 0.5
+        for cx, cy in (_bbox_center(box) for box in boxes)
+    ]
+    best_dist_idx = min(range(len(candidates)), key=lambda i: distances[i])
+    if distances[best_dist_idx] <= max_jump_distance:
+        return candidates[best_dist_idx]
+
+    # No plausible continuation of the existing track -- treat this as a fresh
+    # acquisition rather than force-matching an unrelated blob.
+    return max(candidates, key=cv2.contourArea)
+
+
 def contour_centroid(contour: np.ndarray) -> tuple[float, float] | None:
     m = cv2.moments(contour)
     if m["m00"] == 0:
@@ -168,6 +235,8 @@ def detect_clip(
     threshold: int = 18,
     flare_tolerance: float = 3.0,
     max_flare_fraction: float = 0.4,
+    max_track_jump_fraction: float = 0.2,
+    max_track_miss_frames: int = 5,
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
@@ -182,6 +251,17 @@ def detect_clip(
     dropped before the background is modelled. Blobs larger than
     `max_area_fraction` of the frame are additionally rejected as residual
     illumination change rather than a subject.
+
+    The per-frame `largest`/`centroid` is not simply "the biggest blob this
+    frame" -- it is a persistent track (see `track_contour`) that prefers
+    continuing the previous frame's identity by bounding-box overlap, then by
+    nearest centroid within `max_track_jump_fraction` of the frame diagonal.
+    This is what keeps a tracked subject from flipping to a second person/
+    animal that happens to have a larger blob in a later frame. The track
+    tolerates up to `max_track_miss_frames` consecutive frames with no
+    matching candidate (e.g. the subject briefly blends into the background)
+    before it is dropped and the next frame re-acquires on the largest blob,
+    same as the original stateless behaviour.
 
     Kept separate from `extract_clip_features` so overlays and diagnostics can
     render exactly what scored a clip rather than a lookalike reimplementation.
@@ -220,17 +300,26 @@ def detect_clip(
     kernel = np.ones((3, 3), np.uint8)
 
     flares = flare_frames(medians, tolerance=flare_tolerance)
+    max_jump_distance = max_track_jump_fraction * (frame_width**2 + frame_height**2) ** 0.5
 
     detections: list[FrameDetection] = []
+    track_bbox: tuple[int, int, int, int] | None = None
+    track_miss = 0
     for frame_index, (frame, gray) in enumerate(zip(considered, grays, strict=True)):
         diff = cv2.absdiff(gray, background)
         _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         frame_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         blobs = [c for c in frame_contours if min_blob_area <= cv2.contourArea(c) <= max_area]
-        contour = largest_contour(mask, max_area=max_area)
-        if contour is not None and cv2.contourArea(contour) <= 0:
-            contour = None
+        candidates = [c for c in frame_contours if 0 < cv2.contourArea(c) <= max_area]
+        contour = track_contour(candidates, track_bbox, max_jump_distance=max_jump_distance)
+        if contour is None:
+            track_miss += 1
+            if track_miss > max_track_miss_frames:
+                track_bbox = None
+        else:
+            track_bbox = _contour_bbox(contour)
+            track_miss = 0
         detections.append(
             FrameDetection(
                 index=frame_index,

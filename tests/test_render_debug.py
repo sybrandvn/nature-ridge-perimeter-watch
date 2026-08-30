@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
-from scripts.render_debug import DEFAULTS, _draw_light_mask, render_clip
+from scripts.render_debug import DEFAULTS, _draw_dashed_rect, _draw_light_mask, render_clip
 from scripts.spike import detect_clip
 from src.config import CameraZone
 
@@ -84,6 +84,19 @@ def test_draw_light_mask_is_suppressed_when_daylight_gated():
     canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
     _draw_light_mask(canvas, frame, daylight_gated=True)
     assert not canvas.any()
+
+
+def test_draw_dashed_rect_draws_fewer_pixels_than_a_solid_rectangle():
+    # The whole point of the dashed style is that an inferred (recovered /
+    # reverse-filled) box reads as visually less certain than a genuine
+    # detection's solid box -- confirm it actually leaves gaps rather than
+    # drawing a continuous outline.
+    dashed = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    _draw_dashed_rect(dashed, (5, 5), (55, 40), (255, 0, 255), thickness=2)
+    solid = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    cv2.rectangle(solid, (5, 5), (55, 40), (255, 0, 255), 2)
+    assert dashed.any()
+    assert np.count_nonzero(dashed) < np.count_nonzero(solid)
 
 
 def test_render_clip_returns_none_for_an_unreadable_clip(tmp_path, zone):

@@ -98,6 +98,36 @@ def _text(img, s, org, *, color=(235, 235, 235), scale=0.4, thickness=1) -> None
     cv2.putText(img, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
 
 
+def _draw_dashed_rect(
+    img: np.ndarray,
+    pt1: tuple[int, int],
+    pt2: tuple[int, int],
+    color: tuple[int, int, int],
+    *,
+    thickness: int = 2,
+    dash_length: int = 6,
+) -> None:
+    """Dashed-outline rectangle -- used for recovered/reverse-filled boxes so
+    an inferred (template-dragged) detection reads as visually less certain
+    than a genuine bg-diff hit, not just a different colour. A solid box of
+    equal weight for every provenance type looks equally confident even when
+    the underlying evidence is a fixed-size template match on a stale frame,
+    not a fresh measurement."""
+    x0, y0 = pt1
+    x1, y1 = pt2
+    for xa, ya, xb, yb in ((x0, y0, x1, y0), (x0, y1, x1, y1), (x0, y0, x0, y1), (x1, y0, x1, y1)):
+        length = max(abs(xb - xa), abs(yb - ya))
+        steps = max(1, length // (dash_length * 2))
+        for i in range(int(steps) + 1):
+            t0 = (i * 2 * dash_length) / length if length else 0
+            t1 = min(1.0, t0 + dash_length / length) if length else 1.0
+            px0 = int(round(xa + (xb - xa) * t0))
+            py0 = int(round(ya + (yb - ya) * t0))
+            px1 = int(round(xa + (xb - xa) * t1))
+            py1 = int(round(ya + (yb - ya) * t1))
+            cv2.line(img, (px0, py0), (px1, py1), color, thickness)
+
+
 def _zone_layers(width: int, height: int, zone: CameraZone) -> tuple[np.ndarray, np.ndarray]:
     """Static zone artwork as (tint, ink) layers, built once per clip.
 
@@ -371,10 +401,10 @@ def render_clip(
         traced_box = detection.dropped_frame_boxes[warm_index]
         if traced_box is not None:
             x0, y0, x1, y1 = (c * scale for c in traced_box)
-            cv2.rectangle(canvas, (x0, y0), (x1, y1), COLOR_REVERSE, 2)
+            _draw_dashed_rect(canvas, (x0, y0), (x1, y1), COLOR_REVERSE, thickness=2)
             _text(
                 canvas,
-                "TRACKED (reverse trace)",
+                "INFERRED - TRACKED (reverse trace)",
                 (x0, max(11, y0 - 4)),
                 color=COLOR_REVERSE,
                 scale=0.4,
@@ -441,6 +471,7 @@ def render_clip(
                 )
                 _draw_trail(canvas, history)
                 x, y, w, h = cv2.boundingRect(scaled)
+                inferred = detected.filled_by_reverse or detected.recovered
                 if detected.filled_by_reverse:
                     box_color = COLOR_REVERSE
                     label = (
@@ -454,7 +485,13 @@ def render_clip(
                 else:
                     box_color = COLOR_TRACKED
                     label = "TRACKED"
-                cv2.rectangle(canvas, (x, y), (x + w, y + h), box_color, 2)
+                if inferred:
+                    # Dashed, not solid -- this box is a fixed-size template
+                    # dragged along, not a fresh measurement of the subject.
+                    _draw_dashed_rect(canvas, (x, y), (x + w, y + h), box_color, thickness=2)
+                    label = "INFERRED - " + label
+                else:
+                    cv2.rectangle(canvas, (x, y), (x + w, y + h), box_color, 2)
                 cv2.drawContours(canvas, [scaled], -1, box_color, 1)
                 _text(canvas, label, (x, max(11, y - 4)), color=box_color, scale=0.4)
                 blob_width_px = float(cv2.boundingRect(detected.largest)[2])

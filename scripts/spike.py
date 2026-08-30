@@ -35,7 +35,7 @@ import argparse
 import csv
 import sys
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +143,25 @@ def _bbox_center(bbox: tuple[int, int, int, int]) -> tuple[float, float]:
     return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
 
 
+def _bbox_area(bbox: tuple[int, int, int, int]) -> float:
+    x0, y0, x1, y1 = bbox
+    return max(0, x1 - x0) * max(0, y1 - y0)
+
+
+def _size_change_plausible(from_area: float, to_area: float, max_ratio: float) -> bool:
+    """Whether `to_area` is within `max_ratio` of `from_area`, both growing and
+    shrinking -- a same-subject bounding box shouldn't balloon or collapse by
+    many times its own area from one tracked frame to the next; that's a sign
+    a track has latched onto (or is handing off to) an unrelated blob that
+    merely overlaps or sits near the last known position, not the same
+    subject changing size gradually.
+    """
+    if from_area <= 0 or to_area <= 0:
+        return True
+    ratio = to_area / from_area
+    return (1.0 / max_ratio) <= ratio <= max_ratio
+
+
 def _size_relative_margin(
     bbox: tuple[int, int, int, int], *, margin_fraction: float, min_margin: float
 ) -> float:
@@ -162,6 +181,7 @@ def track_contour(
     max_jump_distance: float,
     size_margin_fraction: float = 0.75,
     min_size_margin: float = 6.0,
+    max_size_change_ratio: float = 4.0,
 ) -> np.ndarray | None:
     """Pick the candidate contour that continues an existing track, instead of
     always re-selecting the frame's largest blob independently.
@@ -179,6 +199,17 @@ def track_contour(
     (e.g. two people) just because their relative blob sizes swap from one
     frame to the next.
 
+    Both of those checks (overlap, and nearest-centroid-within-margin) only
+    ever consider position -- a candidate that overlaps or sits near the last
+    known box but whose area balloons or collapses by more than
+    `max_size_change_ratio` (both ways) is treated as not a plausible
+    continuation either, same as if it were too far away. Without this, a
+    track can silently "hand off" from a real subject onto a much larger or
+    smaller co-located blob (e.g. a residual-illumination blob shrinking away
+    while the real, much smaller subject happens to sit inside it) and keep
+    going under the same identity, at the wrong size, for the rest of the
+    clip.
+
     When an active track has no plausible continuation this frame, this
     returns None rather than grabbing the largest blob in the frame -- the
     caller's miss-tolerance / appearance-recovery machinery gets a chance to
@@ -191,15 +222,22 @@ def track_contour(
         return max(candidates, key=cv2.contourArea)
 
     boxes = [_contour_bbox(c) for c in candidates]
-    ious = [_bbox_iou(track_bbox, box) for box in boxes]
+    track_area = _bbox_area(track_bbox)
+    size_ok = [
+        _size_change_plausible(track_area, _bbox_area(box), max_size_change_ratio)
+        for box in boxes
+    ]
+    ious = [
+        _bbox_iou(track_bbox, box) if ok else 0.0 for box, ok in zip(boxes, size_ok, strict=True)
+    ]
     best_iou_idx = max(range(len(candidates)), key=lambda i: ious[i])
     if ious[best_iou_idx] > 0:
         return candidates[best_iou_idx]
 
     track_center = _bbox_center(track_bbox)
     distances = [
-        ((cx - track_center[0]) ** 2 + (cy - track_center[1]) ** 2) ** 0.5
-        for cx, cy in (_bbox_center(box) for box in boxes)
+        ((cx - track_center[0]) ** 2 + (cy - track_center[1]) ** 2) ** 0.5 if ok else float("inf")
+        for ok, (cx, cy) in zip(size_ok, (_bbox_center(box) for box in boxes), strict=True)
     ]
     best_dist_idx = min(range(len(candidates)), key=lambda i: distances[i])
     allowed = min(
@@ -292,6 +330,8 @@ def _run_track_pass(
     template_match_threshold: float,
     search_margin_fraction: float = 0.75,
     min_search_margin: float = 6.0,
+    max_recovered_streak: int = 12,
+    max_size_change_ratio: float = 4.0,
 ) -> list[tuple[np.ndarray | None, bool]]:
     """Run the track_contour + reacquire_by_template state machine once over a
     sequence of frames, in whatever order they're given -- forward, or
@@ -311,10 +351,25 @@ def _run_track_pass(
     travel (see `reacquire_by_template`) -- otherwise a small, slow subject's
     track can bounce to an unrelated lookalike patch well outside where it
     could plausibly have moved in one frame.
+
+    A track sustained for more than `max_recovered_streak` consecutive frames
+    purely by appearance recovery, with no real background-subtraction hit in
+    between, is dropped and re-acquired fresh. Appearance matching can't tell
+    a genuine subject that's briefly blended into the background from a
+    static, high-texture background feature (e.g. a wire or vine) that was
+    mistakenly picked up once -- both trivially keep re-matching their own
+    unchanging template forever. Without this cap, whichever one is anchored
+    first wins permanently, even while a much larger, genuinely moving
+    candidate persists elsewhere in the same frames.
+
+    `max_size_change_ratio` (see `track_contour`) rejects a continuation whose
+    area balloons or collapses by more than that factor from the track's own
+    last size, both growing and shrinking.
     """
     results: list[tuple[np.ndarray | None, bool]] = []
     track_bbox: tuple[int, int, int, int] | None = None
     track_miss = 0
+    recovered_streak = 0
     template: np.ndarray | None = None
     velocity = (0.0, 0.0)
     for gray, candidates in zip(grays, candidates_per_frame, strict=True):
@@ -324,6 +379,7 @@ def _run_track_pass(
             max_jump_distance=max_jump_distance,
             size_margin_fraction=search_margin_fraction,
             min_size_margin=min_search_margin,
+            max_size_change_ratio=max_size_change_ratio,
         )
         recovered = False
         if contour is None and track_bbox is not None and template is not None:
@@ -346,6 +402,7 @@ def _run_track_pass(
                 recovered = True
         if contour is None:
             track_miss += 1
+            recovered_streak = 0
             if track_miss > max_track_miss_frames:
                 track_bbox = None
                 template = None
@@ -357,6 +414,12 @@ def _run_track_pass(
                 velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
             track_bbox = new_bbox
             track_miss = 0
+            recovered_streak = recovered_streak + 1 if recovered else 0
+            if recovered_streak > max_recovered_streak:
+                track_bbox = None
+                template = None
+                velocity = (0.0, 0.0)
+                recovered_streak = 0
             if not recovered:
                 x0, y0, x1, y1 = track_bbox
                 crop = gray[y0:y1, x0:x1]
@@ -603,6 +666,8 @@ def detect_clip(
     track_search_margin_fraction: float = 0.75,
     min_track_search_margin: float = 6.0,
     fragment_close_kernel_size: int = 9,
+    max_recovered_streak: int = 12,
+    max_size_change_ratio: float = 4.0,
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
@@ -677,6 +742,31 @@ def detect_clip(
     clip its own persistent id (not just the single `largest` track) -- purely
     additive diagnostic detail for telling separate subjects apart in an
     overlay, including when two of them briefly merge into one blob.
+
+    A track sustained for more than `max_recovered_streak` consecutive frames
+    purely by appearance recovery (never reconfirmed by a real background-diff
+    hit) is dropped and re-acquired fresh instead of kept indefinitely.
+    Appearance matching can't distinguish a genuine subject that's briefly
+    blended into the background from a static, high-texture background
+    feature (e.g. a wire or vine) that was mistakenly picked up once -- both
+    trivially keep re-matching their own unchanging template forever. Without
+    this, whichever is anchored first wins permanently, even while a much
+    larger, genuinely moving candidate persists elsewhere in the same frames.
+
+    A candidate is also rejected as a continuation if its area balloons or
+    collapses by more than `max_size_change_ratio` from the track's own last
+    size, both growing and shrinking -- otherwise a real subject's track can
+    silently "hand off" onto a much larger or smaller co-located blob (e.g. a
+    residual-illumination blob shrinking away while the real, much smaller
+    subject happens to sit inside it) and keep going under the same identity,
+    at the wrong size, for the rest of the clip. The same ratio also decides
+    which early frame is trustworthy enough to seed the backward appearance
+    trace into `dropped_frame_boxes`: if `considered[0]`'s own box is itself
+    an implausible outlier against the clip's typical tracked size (e.g. that
+    same residual-illumination blob, before it's had a chance to collapse
+    down to the real subject), the trace seeds instead from the first later
+    frame whose size is plausible, and traces backward through the
+    intervening frames too, not just the true warmup/flare ones.
     """
     cap = cv2.VideoCapture(video_path)
     try:
@@ -747,6 +837,8 @@ def detect_clip(
         "template_match_threshold": template_match_threshold,
         "search_margin_fraction": track_search_margin_fraction,
         "min_search_margin": min_track_search_margin,
+        "max_recovered_streak": max_recovered_streak,
+        "max_size_change_ratio": max_size_change_ratio,
     }
     forward = _run_track_pass(grays, per_frame_candidates, **track_kwargs)
     backward = list(
@@ -790,12 +882,26 @@ def detect_clip(
         )
 
     dropped_frame_boxes: list[tuple[int, int, int, int] | None] = [None] * drop
-    if drop > 0 and detections[0].largest is not None:
-        x0, y0, x1, y1 = _contour_bbox(detections[0].largest)
-        seed_template = grays[0][y0:y1, x0:x1]
+    seed_index = 0
+    tracked_areas = sorted(
+        _bbox_area(_contour_bbox(fd.largest)) for fd in detections if fd.largest is not None
+    )
+    if tracked_areas:
+        typical_area = tracked_areas[len(tracked_areas) // 2]
+        for i, fd in enumerate(detections):
+            if fd.largest is None:
+                continue
+            if _size_change_plausible(
+                typical_area, _bbox_area(_contour_bbox(fd.largest)), max_size_change_ratio
+            ):
+                seed_index = i
+                break
+    if (drop > 0 or seed_index > 0) and detections[seed_index].largest is not None:
+        x0, y0, x1, y1 = _contour_bbox(detections[seed_index].largest)
+        seed_template = grays[seed_index][y0:y1, x0:x1]
         if seed_template.size > 0:
             traced = _reverse_template_trace(
-                list(reversed(all_grays[:drop])),
+                list(reversed(all_grays[:drop] + grays[:seed_index])),
                 (x0, y0, x1, y1),
                 seed_template,
                 search_margin=max_jump_distance,
@@ -803,7 +909,24 @@ def detect_clip(
                 search_margin_fraction=track_search_margin_fraction,
                 min_search_margin=min_track_search_margin,
             )
-            dropped_frame_boxes = list(reversed(traced))
+            traced = list(reversed(traced))
+            dropped_frame_boxes = traced[:drop]
+            # A seed_index above 0 means considered[0]..considered[seed_index-1]
+            # were themselves implausibly-sized outliers (see docstring); the
+            # same backward trace covers them too, so replace their detection
+            # with the traced (properly-sized) box instead of leaving the
+            # original oversized/undersized one in place.
+            for offset, box in enumerate(traced[drop:]):
+                if box is None:
+                    continue
+                bbox_contour = _bbox_to_rect_contour(box)
+                detections[offset] = replace(
+                    detections[offset],
+                    largest=bbox_contour,
+                    centroid=contour_centroid(bbox_contour),
+                    recovered=True,
+                    filled_by_reverse=True,
+                )
 
     return ClipDetection(
         frames=detections,

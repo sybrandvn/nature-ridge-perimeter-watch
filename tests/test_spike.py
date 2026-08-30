@@ -97,25 +97,35 @@ def test_track_contour_prefers_overlap_over_size():
     # A previous track near (5, 5)-(15, 15): a small candidate that overlaps it
     # should win over a much bigger candidate that is elsewhere in frame -- this
     # is what stops the tracked identity flipping between two co-occurring
-    # subjects just because their relative blob sizes swap between frames.
+    # subjects just because their relative blob sizes swap between frames. A
+    # generous size-change ratio here isolates this from the size-change cap
+    # (covered separately below) so this purely tests overlap preference.
     track_bbox = (5, 5, 15, 15)
     overlapping_small = _square_contour(5, 5, 4)
     far_big = _square_contour(40, 40, 10)
     result = spike.track_contour(
-        [overlapping_small, far_big], track_bbox, max_jump_distance=100
+        [overlapping_small, far_big],
+        track_bbox,
+        max_jump_distance=100,
+        max_size_change_ratio=10.0,
     )
     assert result is overlapping_small
 
 
 def test_track_contour_falls_back_to_nearest_centroid_without_overlap():
     # No candidate overlaps the previous box, but one is much closer to it --
-    # a generous size margin here isolates this from the size-relative cap
-    # (covered separately below) so this purely tests nearest-centroid choice.
+    # a generous size margin and size-change ratio here isolate this from the
+    # size-relative and size-change caps (covered separately below) so this
+    # purely tests nearest-centroid choice.
     track_bbox = (5, 5, 15, 15)
     nearby = _square_contour(20, 20, 4)
     far = _square_contour(80, 80, 4)
     result = spike.track_contour(
-        [nearby, far], track_bbox, max_jump_distance=50, min_size_margin=50
+        [nearby, far],
+        track_bbox,
+        max_jump_distance=50,
+        min_size_margin=50,
+        max_size_change_ratio=10.0,
     )
     assert result is nearby
 
@@ -147,6 +157,35 @@ def test_track_contour_size_relative_cap_beats_generous_max_jump_distance():
     big = _square_contour(100, 100, 10)
     result = spike.track_contour([nearby, big], track_bbox, max_jump_distance=50)
     assert result is None
+
+
+def test_track_contour_rejects_overlapping_candidate_with_implausible_size_change():
+    # A candidate that overlaps the track's last box but whose area collapses
+    # by far more than max_size_change_ratio (both ways) is not a plausible
+    # continuation -- e.g. a large residual-illumination blob shrinking away
+    # while a much smaller, unrelated blob happens to sit inside it. Falls
+    # through to nearest-centroid, which also fails the same size check here,
+    # so this reports a miss (None) rather than "handing off" onto the tiny
+    # blob under the same identity.
+    track_bbox = (0, 0, 20, 20)  # area 400
+    tiny_overlap = _square_contour(0, 0, 2)  # area 4, ratio 100x -- way outside cap
+    result = spike.track_contour(
+        [tiny_overlap], track_bbox, max_jump_distance=50, max_size_change_ratio=4.0
+    )
+    assert result is None
+
+
+def test_track_contour_accepts_overlapping_candidate_within_size_change_cap():
+    # Same shape of overlap as above, but the candidate's area is within the
+    # default cap of the track's own size -- a normal, gradual size change
+    # (e.g. the subject turning or moving slightly closer/further) should
+    # still be accepted as a continuation.
+    track_bbox = (0, 0, 20, 20)  # area 400
+    modest_shrink = _square_contour(0, 0, 12)  # area 144, ratio ~2.8x -- within cap
+    result = spike.track_contour(
+        [modest_shrink], track_bbox, max_jump_distance=50, max_size_change_ratio=4.0
+    )
+    assert result is modest_shrink
 
 
 def test_track_multiple_objects_assigns_stable_ids_to_two_independent_subjects():
@@ -335,6 +374,57 @@ def test_reacquire_by_template_velocity_still_finds_reversal_near_last_position(
     assert (x0, y0) == (7, 10)
 
 
+def test_run_track_pass_drops_track_stuck_on_static_texture_after_recovered_streak():
+    # A small, unchanging textured patch (e.g. a wire/vine) gets tracked
+    # first, then stops registering as a bg-diff candidate (as if it settled
+    # into the background model) -- but its pixels are still physically
+    # there, so appearance-recovery trivially keeps re-matching it forever. A
+    # much bigger candidate is present the whole time but far outside the
+    # tiny track's search margin, so it's never picked while the recovery
+    # streak is under the cap. After the cap, the track should drop and the
+    # next frame should pick up the real, bigger candidate instead.
+    wire = _square_contour(5, 5, 8)
+    big = _square_contour(40, 40, 20)
+
+    def _gray(_frame_index: int) -> np.ndarray:
+        g = np.zeros((80, 80), dtype=np.uint8)
+        _draw_textured_patch(g, 5, 5, 200, 100)  # wire's real pixels, unchanging
+        return g
+
+    grays = [_gray(i) for i in range(7)]
+    candidates_per_frame = [
+        [wire],  # frame 0: only the wire registers
+        [wire],  # frame 1: still overlaps -> plain continuation
+        [big],  # frame 2+: wire no longer a bg-diff candidate, big appears
+        [big],
+        [big],
+        [big],
+        [big],
+    ]
+
+    results = spike._run_track_pass(
+        grays,
+        candidates_per_frame,
+        max_jump_distance=200,
+        max_track_miss_frames=5,
+        template_match_threshold=0.5,
+        max_recovered_streak=2,
+    )
+
+    recovered_flags = [r for _c, r in results]
+    assert recovered_flags[0] is False
+    assert recovered_flags[1] is False
+    # Frames 2-3: still within the streak cap, sustained by recovery alone.
+    assert recovered_flags[2] is True
+    assert recovered_flags[3] is True
+    # Once the streak exceeds the cap, the track drops and re-acquires on the
+    # only remaining real candidate (the big, distant one) instead of
+    # perpetually re-matching the static wire texture.
+    last_contour, last_recovered = results[-1]
+    assert last_recovered is False
+    assert spike._contour_bbox(last_contour) == spike._contour_bbox(big)
+
+
 def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(monkeypatch):
     # A single textured subject moves across frame, well-detected by
     # background-subtraction everywhere except one frame where it's drawn at
@@ -424,6 +514,42 @@ def test_detect_clip_traces_track_backward_into_dropped_flare_frames(monkeypatch
     # the appearance match is a real limit, not something to pin exactly here.
     assert detection.dropped_frame_boxes[-1] is not None
     assert sum(box is not None for box in detection.dropped_frame_boxes) >= 2
+
+
+def test_detect_clip_reverse_trace_seeds_from_plausible_size_not_frame_zero(monkeypatch):
+    # Frame 0's own contour is a residual-illumination-sized outlier -- a big
+    # patch swallows the real, much smaller subject's own true appearance --
+    # while every other tracked frame is that same small subject at a
+    # consistent size, spaced far enough apart frame to frame that the
+    # per-pixel median background used for bg-diff stays clean. Seeding the
+    # backward trace from frame 0 as-is would carry that oversized box in; it
+    # should instead seed from the first later frame whose size is plausible
+    # against the clip's typical tracked size, and use that same trace to
+    # correct frame 0's own box too.
+    size = 260
+
+    def _frame(pos: int, *, big: bool = False) -> np.ndarray:
+        frame = _blank_frame(size=size)
+        for c in range(3):
+            if big:
+                frame[:, :, c][8:48, 8:48] = 200
+            frame[:, :, c][20:28, pos : pos + 8] = 200
+            frame[:, :, c][22:26, pos + 2 : pos + 6] = 100
+        return frame
+
+    positions = [10, 40, 70, 100, 130, 160, 190, 220]
+    frames = [_frame(positions[0], big=True)] + [_frame(p) for p in positions[1:]]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    detection = spike.detect_clip(
+        "clip.mp4", threshold=18, max_track_miss_frames=3, min_track_search_margin=35
+    )
+
+    assert detection is not None
+    assert detection.frames[0].largest is not None
+    x0, y0, x1, y1 = spike._contour_bbox(detection.frames[0].largest)
+    assert max(x1 - x0, y1 - y0) < 20
+    assert detection.frames[0].filled_by_reverse is True
 
 
 def _frame_with_split_subject(

@@ -1,16 +1,21 @@
-# Handoff: gate-2 pass/fail is the open decision
+# Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
-Written 2026-08-28, updated 2026-08-29 for an agent picking this up fresh. `docs/plan.md` is the
-full plan and stays authoritative; this is the short version of where things actually stand and
-what to do next.
+Written 2026-08-28, updated 2026-08-29, updated again 2026-08-30 for an agent picking this up
+fresh. `docs/plan.md` is the full plan and stays authoritative; this is the short version of
+where things actually stand and what to do next.
 
 ## Where the project is
 
-Everything is on branch `feat/phase0-foundations`. Working tree clean, 200 tests passing
+On branch `feat/phase1-foundation` (branched off `main` at the `phase0-checkpoint` tag;
+`feat/phase0-foundations` is retired but kept). Working tree clean, 203 tests passing
 (`uv run ruff check . && uv run pytest -q`).
 
-Phase 0 gates all downstream work. Both gates now have a resolution or a written finding — gate 2
-is the one open decision blocking Phase 1.
+Phase 0 is merged to `main` as a checkpoint, not a clean sign-off — see `docs/plan.md`'s
+"Checkpoint (2026-08-30)" section. Gate 2 pass/fail is still the one open decision affecting
+calibration/threshold work (Phase 3). That did not block Phase 1's foundation scaffolding (steps
+15-19: project scaffolding, config/db, label JSONL durability, promoting Phase 0 scripts into
+`src/backfill.py`/`src/sequence.py`), which is now done — see "Phase 1 foundation — done
+below.
 
 - **Phase 0a (metadata backfill) — done.** 16,887 clips in `data/perimeter_watch.db` with camera,
   timestamp, caption. Camera roster (`cam01`-`cam16`, plus `cam01a`/`cam01b`) is populated in
@@ -150,11 +155,33 @@ fails the same way but with looser earlier-frame differences (moving subject, no
   a ~15min gap as a sanity bound only. Real pair gaps in the db: min 5s, median 3.2min, p95
   4.75min, max 8.6min across 8,274 pairs.
 
+## Phase 1 foundation — done (2026-08-30)
+
+Steps 15-19 of `docs/plan.md`. `src/config.py`/`src/db.py` (config loading, SQLite schema incl.
+`blob_tracks`/`backtest_runs`/`backtest_results`, label JSONL export/import) already existed from
+the Phase 0 spike, so there was nothing to add there. What was actually built:
+
+- `src/logging_setup.py`: a `JsonFormatter` + `configure_logging()` on the root logger, replacing
+  the old per-call-site `logger.info(json.dumps({...}))` pattern in `scripts/meta_backfill.py` and
+  `scripts/download_clips.py` (now `logger.info(event, extra={...})`).
+- `src/backfill.py`: `run_backfill`/`extract_primitives`/`RawMessage` promoted out of
+  `scripts/meta_backfill.py`, which is now a thin Telethon-wiring wrapper around it — matching the
+  existing `src/sequence.py` + `scripts/infer_camera_order.py` split (algorithm in `src/`, script
+  keeps only I/O glue). `tests/test_meta_backfill.py` renamed to `tests/test_backfill.py`.
+- "Console entry points" (from step 15) deliberately not added as real `[project.scripts]`: this
+  repo is `uv init --app --no-package` (no `[build-system]`), so installed entry points aren't
+  meaningful without converting to a packaged layout, which would contradict the flat-layout
+  decision. Each script's own `main()` + `if __name__ == "__main__"` is treated as satisfying it.
+
+Next up is Phase 2 (corpus and CV: camera-ID parsing hardening, resumable full backfill, cached
+blob tracks, zone application, rule-engine classifier) — still gated on the user's gate 2
+pass/fail call for anything threshold-dependent.
+
 ## Conventions
 
 - `uv` for everything: `uv run ruff check . --fix && uv run pytest -q` after every module change
   and before every commit.
-- Commit logically per change, stay on `feat/phase0-foundations`, never auto-merge.
+- Commit logically per change, stay on `feat/phase1-foundation`, never auto-merge.
 - `src/` is flat, no package. `scripts/` are standalone entry points that `sys.path`-insert the
   repo root.
 - DB timestamps are UTC; site local time is UTC+2 (SAST).

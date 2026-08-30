@@ -256,7 +256,8 @@ suppress an outside alert. This must be preserved in `classify.py` when it's bui
 ```
 config/            cameras.yaml, thresholds.yaml
 scripts/           CLI entry points (meta_backfill, infer_camera_order, label, spike)
-src/               config, db, sequence, zones, features, message_parsing, errors
+src/               config, db, backfill, sequence, zones, features, message_parsing,
+                   logging_setup, errors
 tests/             pytest suite (unit tests only; no live Telegram/video needed)
 docs/plan.md       full implementation plan, scope decisions, and what's deferred
 ```

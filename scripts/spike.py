@@ -296,6 +296,14 @@ def reacquire_by_template(
     extends out to roughly the last position plus `velocity` -- a moving
     subject is more likely to have continued than reversed, but not so much
     more likely that a genuine reversal gets missed.
+
+    The match is fixed-scale: the returned box is always the size of the
+    template it was given. Trying several scales per frame and keeping the
+    best was measured on 40 labelled clips and was worse on every proxy --
+    coverage barely moved (30 to 28 boxless frames) while frame-to-frame box
+    size jitter rose from 0.229 to 0.263 and centre-path jerk from 13.0 to
+    13.8, because normalised cross-correlation picks a slightly different
+    best scale each frame and the box flickers between them.
     """
     th, tw = template.shape[:2]
     if th == 0 or tw == 0:
@@ -599,6 +607,88 @@ def _reverse_template_trace(
     return results
 
 
+def _anchor_exemplar_index(detections: list[FrameDetection]) -> int | None:
+    """Index of the frame that shows the subject best, to use as a fixed
+    reference for the whole clip. None if no frame is trustworthy enough.
+
+    Only real background-subtraction hits qualify: a box that was itself
+    produced by appearance matching is not independent evidence of what the
+    subject looks like, so seeding from one would just entrench whatever the
+    first match latched onto. Among those, the one closest to the clip's own
+    median tracked area wins.
+
+    Picking the *largest* box instead is tempting -- more pixels carry more
+    appearance -- but measured on 40 labelled clips it inflated the median
+    box area across the clip from 798 to 2184 px, because the sweep carries
+    the exemplar's size into every frame it fills, including frames where the
+    subject is genuinely smaller. The median-sized exemplar is the one that
+    best represents the subject's typical appearance.
+    """
+    real = [fd for fd in detections if fd.largest is not None and not fd.recovered]
+    if not real:
+        return None
+    areas = sorted(_bbox_area(_contour_bbox(fd.largest)) for fd in real)
+    typical = areas[len(areas) // 2]
+    return min(
+        real, key=lambda fd: abs(_bbox_area(_contour_bbox(fd.largest)) - typical)
+    ).index
+
+
+def _anchor_trace(
+    grays: list[np.ndarray],
+    anchor_index: int,
+    anchor_bbox: tuple[int, int, int, int],
+    anchor_template: np.ndarray,
+    *,
+    search_margin: float,
+    match_threshold: float,
+    search_margin_fraction: float = 0.75,
+    min_search_margin: float = 6.0,
+) -> list[tuple[int, int, int, int] | None]:
+    """Sweep outward from `anchor_index` in both directions, matching every
+    frame against one fixed exemplar of the subject.
+
+    The forward/backward `_run_track_pass` templates are refreshed on each
+    real detection, which is what lets them follow a subject that genuinely
+    changes appearance -- but it also means a partly-wrong box teaches the
+    next match to look for a partly-wrong thing, and the reference can drift
+    into background over a run of frames. Matching against a single
+    never-updated crop of the clip's best-evidenced frame cannot drift.
+
+    Each direction stops at the first frame that fails to match rather than
+    guessing on past a cold trail.
+    """
+    boxes: list[tuple[int, int, int, int] | None] = [None] * len(grays)
+    boxes[anchor_index] = anchor_bbox
+    for direction in (1, -1):
+        bbox = anchor_bbox
+        velocity = (0.0, 0.0)
+        index = anchor_index + direction
+        while 0 <= index < len(grays):
+            margin = min(
+                search_margin,
+                _size_relative_margin(
+                    bbox, margin_fraction=search_margin_fraction, min_margin=min_search_margin
+                ),
+            )
+            match = reacquire_by_template(
+                grays[index],
+                anchor_template,
+                bbox,
+                search_margin=margin,
+                match_threshold=match_threshold,
+                velocity=velocity,
+            )
+            if match is None:
+                break
+            old_center, new_center = _bbox_center(bbox), _bbox_center(match)
+            velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
+            boxes[index] = match
+            bbox = match
+            index += direction
+    return boxes
+
+
 def contour_centroid(contour: np.ndarray) -> tuple[float, float] | None:
     m = cv2.moments(contour)
     if m["m00"] == 0:
@@ -640,6 +730,7 @@ class FrameDetection:
     is_flare: bool
     recovered: bool = False  # track continued via appearance match, not a real bg-diff blob
     filled_by_reverse: bool = False  # forward pass found nothing here; a backward scan did
+    filled_by_anchor: bool = False  # box came from the fixed best-frame exemplar sweep
 
 
 @dataclass(frozen=True)
@@ -678,6 +769,7 @@ def detect_clip(
     fragment_close_kernel_size: int = 9,
     max_recovered_streak: int = 12,
     max_size_change_ratio: float = 4.0,
+    anchor_refine: bool = True,
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
@@ -777,6 +869,24 @@ def detect_clip(
     down to the real subject), the trace seeds instead from the first later
     frame whose size is plausible, and traces backward through the
     intervening frames too, not just the true warmup/flare ones.
+
+    Both passes above refresh their appearance template on every real
+    detection, which is what lets them follow a genuinely changing subject.
+    They can still both come up empty on a frame, so `anchor_refine` adds a
+    final pass: pick the single best-evidenced real detection in the clip
+    (`_anchor_exemplar_index`) and sweep outward from it in both directions
+    matching that one never-updated crop (`_anchor_trace`), filling only the
+    frames still left with no box. Measured on 40 labelled clips this cut
+    boxless frames from 29 to 12 while leaving box-size jitter and centre-path
+    smoothness fractionally better than without it.
+
+    It deliberately does not overwrite boxes that were already recovered by
+    appearance matching, even though those come from a template that can
+    drift. That was tried, on the theory that a fixed exemplar cannot drift,
+    and it was worse on both proxies: size jitter rose from 0.230 to 0.264 and
+    centre-path jerk from 13.2 to 14.3 across 343 rewritten frames. A template
+    refreshed from a nearby frame tracks a subject through gradual change
+    better than one anchored to a distant frame, drift notwithstanding.
     """
     cap = cv2.VideoCapture(video_path)
     try:
@@ -890,6 +1000,38 @@ def detect_clip(
                 is_flare=flares[frame_index],
             )
         )
+
+    # Fill frames that both directional passes left with no box at all, by
+    # matching one fixed exemplar of the clip's best frame outward in both
+    # directions. Frames that already have a box are never touched -- see the
+    # note in the docstring about overwriting appearance-recovered ones.
+    if anchor_refine:
+        anchor_index = _anchor_exemplar_index(detections)
+        if anchor_index is not None:
+            ax0, ay0, ax1, ay1 = _contour_bbox(detections[anchor_index].largest)
+            anchor_template = grays[anchor_index][ay0:ay1, ax0:ax1]
+            if anchor_template.size > 0:
+                anchor_boxes = _anchor_trace(
+                    grays,
+                    anchor_index,
+                    (ax0, ay0, ax1, ay1),
+                    anchor_template,
+                    search_margin=max_jump_distance,
+                    match_threshold=template_match_threshold,
+                    search_margin_fraction=track_search_margin_fraction,
+                    min_search_margin=min_track_search_margin,
+                )
+                for frame_index, box in enumerate(anchor_boxes):
+                    if box is None or detections[frame_index].largest is not None:
+                        continue
+                    anchor_contour = _bbox_to_rect_contour(box)
+                    detections[frame_index] = replace(
+                        detections[frame_index],
+                        largest=anchor_contour,
+                        centroid=contour_centroid(anchor_contour),
+                        recovered=True,
+                        filled_by_anchor=True,
+                    )
 
     dropped_frame_boxes: list[tuple[int, int, int, int] | None] = [None] * drop
     seed_index = 0

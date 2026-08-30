@@ -380,6 +380,96 @@ def test_reacquire_by_template_velocity_still_finds_reversal_near_last_position(
     assert (x0, y0) == (7, 10)
 
 
+def _exemplar_detection(index, bbox, *, recovered=False):
+    x0, y0, x1, y1 = bbox
+    contour = spike._bbox_to_rect_contour((x0, y0, x1, y1))
+    return spike.FrameDetection(
+        index=index,
+        frame=np.zeros((40, 40, 3), dtype=np.uint8),
+        mask=np.zeros((40, 40), dtype=np.uint8),
+        all_contours=[],
+        blobs=[],
+        largest=contour,
+        centroid=spike.contour_centroid(contour),
+        motion_pixel_fraction=0.0,
+        median_grey=0.0,
+        is_flare=False,
+        recovered=recovered,
+    )
+
+
+def test_anchor_exemplar_prefers_median_sized_real_detection():
+    # The oversized frame 2 box is the kind of residual-illumination blob that
+    # would drag every anchor-filled box across the clip up to its own size.
+    detections = [
+        _exemplar_detection(0, (10, 10, 20, 20)),
+        _exemplar_detection(1, (10, 10, 21, 21)),
+        _exemplar_detection(2, (0, 0, 39, 39)),
+    ]
+
+    assert spike._anchor_exemplar_index(detections) == 1
+
+
+def test_anchor_exemplar_ignores_appearance_recovered_boxes():
+    # A recovered box is not independent evidence of the subject's appearance;
+    # seeding from one would entrench whatever the first match latched onto.
+    detections = [
+        _exemplar_detection(0, (10, 10, 20, 20), recovered=True),
+        _exemplar_detection(1, (12, 12, 22, 22)),
+    ]
+
+    assert spike._anchor_exemplar_index(detections) == 1
+
+
+def test_anchor_exemplar_returns_none_without_any_real_detection():
+    detections = [_exemplar_detection(0, (10, 10, 20, 20), recovered=True)]
+
+    assert spike._anchor_exemplar_index(detections) is None
+
+
+def test_anchor_trace_fills_frames_on_both_sides_of_the_anchor():
+    # Subject drifts right by 2px per frame; the anchor sits in the middle, so
+    # only a bidirectional sweep can reach both ends.
+    grays = []
+    for i in range(5):
+        frame = np.zeros((40, 60), dtype=np.uint8)
+        _draw_textured_patch(frame, 10 + 2 * i, 10, 200, 100)
+        grays.append(frame)
+    anchor_template = grays[2][10:18, 14:22]
+
+    boxes = spike._anchor_trace(
+        grays,
+        2,
+        (14, 10, 22, 18),
+        anchor_template,
+        search_margin=10,
+        match_threshold=0.5,
+    )
+
+    assert [None if b is None else b[0] for b in boxes] == [10, 12, 14, 16, 18]
+
+
+def test_anchor_trace_stops_at_first_unmatched_frame():
+    # Frame 3 holds nothing resembling the subject, so the forward sweep must
+    # stop there rather than keep guessing on down a cold trail.
+    grays = []
+    for i in range(5):
+        frame = np.zeros((40, 60), dtype=np.uint8)
+        if i != 3:
+            _draw_textured_patch(frame, 10, 10, 200, 100)
+        grays.append(frame)
+    anchor_template = grays[1][10:18, 10:18]
+
+    boxes = spike._anchor_trace(
+        grays, 1, (10, 10, 18, 18), anchor_template, search_margin=6, match_threshold=0.9
+    )
+
+    assert boxes[0] is not None
+    assert boxes[2] is not None
+    assert boxes[3] is None
+    assert boxes[4] is None
+
+
 def test_run_track_pass_drops_track_stuck_on_static_texture_after_recovered_streak():
     # A small, unchanging textured patch (e.g. a wire/vine) gets tracked
     # first, then stops registering as a bg-diff candidate (as if it settled

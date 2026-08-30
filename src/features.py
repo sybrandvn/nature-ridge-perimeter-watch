@@ -69,6 +69,21 @@ def saturation_ratio(frame_bgr: np.ndarray, contour: np.ndarray) -> float:
     return float(pixels.mean()) / 255.0
 
 
+def color_saturation_fraction(frame_bgr: np.ndarray, *, saturation_threshold: int = 30) -> float:
+    """Fraction of the WHOLE frame with HSV saturation above `saturation_threshold`.
+
+    Distinguishes genuine daylight/dusk colour footage from IR-lit night
+    footage: real ambient colour (foliage, ground, sky) is spread broadly
+    across the frame, whereas true IR content is near-monochrome everywhere
+    except a small lit source (flashlight, headlamp). A single contour's
+    `saturation_ratio` can't tell those apart -- a green flashlight glow and a
+    frame full of green foliage can look identical from inside the blob alone.
+    """
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    saturation = hsv[:, :, 1]
+    return float(np.count_nonzero(saturation > saturation_threshold)) / saturation.size
+
+
 def green_light_mask(
     frame_bgr: np.ndarray,
     *,

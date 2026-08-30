@@ -5,6 +5,7 @@ import pytest
 from src.features import (
     area_stability,
     aspect_ratio,
+    color_saturation_fraction,
     edge_density,
     flare_frames,
     flare_settle_index,
@@ -69,6 +70,27 @@ def test_saturation_ratio_near_zero_for_greyscale_content():
     frame = np.full((50, 50, 3), 128, dtype=np.uint8)  # uniform grey, zero saturation
     contour = _rect_contour(10, 10, 20, 20)
     assert saturation_ratio(frame, contour) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_color_saturation_fraction_high_for_broad_daylight_colour():
+    # Green foliage covering most of the frame -- genuine ambient colour, not
+    # a small lit source.
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    frame[:, :] = (0, 180, 0)  # BGR green, saturated
+    assert color_saturation_fraction(frame) > 0.9
+
+
+def test_color_saturation_fraction_low_for_ir_greyscale_with_small_light():
+    # Near-monochrome IR frame with only a small saturated (flashlight) patch --
+    # should not read as broad daylight colour.
+    frame = np.full((50, 50, 3), 100, dtype=np.uint8)  # grey, zero saturation
+    cv2.rectangle(frame, (5, 5), (9, 9), (0, 255, 0), thickness=-1)  # tiny green light
+    assert color_saturation_fraction(frame) < 0.05
+
+
+def test_color_saturation_fraction_zero_for_pure_greyscale():
+    frame = np.full((50, 50, 3), 128, dtype=np.uint8)
+    assert color_saturation_fraction(frame) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_green_light_mask_flags_only_the_green_pixels():

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
@@ -87,8 +89,9 @@ def test_render_clip_honours_scale(tmp_path, zone):
 def test_render_clip_creates_missing_output_directories(tmp_path, zone):
     clip = _write_clip(tmp_path / "in.mp4")
     out_path = tmp_path / "nested" / "deeper" / "out.mp4"
-    assert render_clip(clip, zone, out_path=str(out_path)) is not None
-    assert out_path.exists()
+    result = render_clip(clip, zone, out_path=str(out_path))
+    assert result is not None
+    assert Path(result).exists()
 
 
 def test_detector_defaults_match_the_spike():

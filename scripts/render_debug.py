@@ -18,11 +18,17 @@ Detection comes from `scripts.spike.detect_clip`, the same function that feeds
 `extract_clip_features`, so what is drawn is what scored the clip. The tuning
 flags default to the spike's own values and the HUD marks them when overridden.
 
+Output is .webm (VP8) so it plays in VS Code's built-in preview and any
+browser -- this OpenCV build can't write a Chromium-playable H.264 mp4.
+
 Run:
-    uv run python scripts/render_debug.py --message-id 21520
-    uv run python scripts/render_debug.py --clip data/history/cam06/21520.mp4 --camera cam06
-    uv run python scripts/render_debug.py --label incident --label animal
-    uv run python scripts/render_debug.py --message-ids-file data/reports/candidates.message_ids
+    uv run python scripts/render_debug.py --message-id 21520 --out out.webm
+    uv run python scripts/render_debug.py --clip data/history/cam06/21520.mp4 \
+        --camera cam06 --out out.webm
+    uv run python scripts/render_debug.py --label incident --label animal \
+        --out data/reports/debug
+    uv run python scripts/render_debug.py \
+        --message-ids-file data/reports/candidates.message_ids --out data/reports/debug
 """
 
 from __future__ import annotations
@@ -209,8 +215,16 @@ def render_clip(
     flare_tolerance: float = DEFAULTS["flare_tolerance"],
     max_flare_fraction: float = DEFAULTS["max_flare_fraction"],
 ) -> str | None:
-    """Write an annotated mp4 for one clip. Returns the path, or None if the
-    clip has no readable frames."""
+    """Write an annotated .webm (VP8) video for one clip. Returns the path, or
+    None if the clip has no readable frames.
+
+    VP8/webm, not H.264/mp4: this OpenCV build only has FFmpeg's hardware
+    h264_v4l2m2m encoder (no libx264), which fails without a v4l2 device, and
+    Chromium (VS Code's built-in preview) can't play the mp4v codec this repo
+    used to write. webm+VP8 is natively decodable by both cv2.VideoCapture and
+    VS Code's preview, so out_path is always coerced to a .webm suffix.
+    """
+    out_path = str(Path(out_path).with_suffix(".webm"))
     detection: ClipDetection | None = detect_clip(
         video_path,
         max_area_fraction=max_area_fraction,
@@ -250,7 +264,7 @@ def render_clip(
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(
-        out_path, cv2.VideoWriter_fourcc(*"mp4v"), source_fps, (width, height + hud_height)
+        out_path, cv2.VideoWriter_fourcc(*"VP80"), source_fps, (width, height + hud_height)
     )
     if not writer.isOpened():
         raise RuntimeError(f"could not open video writer for {out_path}")
@@ -452,7 +466,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.out and len(clips) == 1:
             out_path = args.out
         else:
-            out_path = str(out_dir / f"{clip['camera_id']}_{clip['message_id']}.mp4")
+            out_path = str(out_dir / f"{clip['camera_id']}_{clip['message_id']}.webm")
         title = f"{clip['camera_id']}/{clip['message_id']} {clip['label']}".strip()
         result = render_clip(
             clip["file_path"],

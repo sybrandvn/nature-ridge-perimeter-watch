@@ -98,6 +98,7 @@ FEATURE_COLUMNS = (
     "heading_change",
     "fence_crossed",
     "median_fence_distance",
+    "recovered_fraction",
 )
 
 
@@ -614,6 +615,15 @@ def _whole_frame_contour(frame_width: int, frame_height: int) -> np.ndarray:
     return np.array([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]], dtype=np.int32)
 
 
+def _frame_is_merged(detection: ClipDetection, frame_index: int) -> bool:
+    """True if the multi-object tracker sees two or more subjects sharing one
+    blob in this frame (`TrackedObject.merged_ids` non-empty) -- that frame's
+    largest contour describes a merged group silhouette, not one subject."""
+    if frame_index >= len(detection.multi_tracks):
+        return False
+    return any(t.merged_ids for t in detection.multi_tracks[frame_index])
+
+
 @dataclass(frozen=True)
 class FrameDetection:
     """Everything the detector saw in one frame, before it is reduced to features."""
@@ -982,14 +992,25 @@ def extract_clip_features(
     considered = detection.frames
 
     centroids: list[tuple[float, float]] = []
-    blob_areas: list[float] = []
-    detected_indices: list[int] = []
+    # Genuine bg-diff hits only (excludes recovered/filled_by_reverse frames) --
+    # motion statistics computed over inferred/template-dragged boxes measure the
+    # tracker's willingness to hallucinate a continuation, not real subject
+    # behaviour (see the daylight-gate/provenance retrospective in repo memory).
+    genuine_centroids: list[tuple[float, float]] = []
+    genuine_blob_areas: list[float] = []
+    genuine_detected_indices: list[int] = []
+    genuine_frames_detected = 0
+    non_genuine_frames = 0
     whole_frame_green_ratios: list[float] = []
     color_fractions: list[float] = []
-    frames_detected = 0
     best_contour: np.ndarray | None = None
     best_frame: np.ndarray | None = None
     best_area = -1.0
+    # Fallback when every detected frame is merged (see below) -- better to
+    # describe a merged silhouette than to have no shape features at all.
+    best_contour_any: np.ndarray | None = None
+    best_frame_any: np.ndarray | None = None
+    best_area_any = -1.0
     whole_frame = _whole_frame_contour(frame_width, frame_height)
     motion_pixel_fraction = 0.0
     blob_count = 0
@@ -1002,21 +1023,38 @@ def extract_clip_features(
         # differently from a single compact subject even at the same threshold.
         motion_pixel_fraction = max(motion_pixel_fraction, detected.motion_pixel_fraction)
         blob_count = max(blob_count, len(detected.blobs))
+        if detected.recovered or detected.filled_by_reverse:
+            non_genuine_frames += 1
         contour = detected.largest
         if contour is None:
             continue
         area = cv2.contourArea(contour)
-        frames_detected += 1
-        detected_indices.append(detected.index)
-        blob_areas.append(area)
         # Shape features describe the subject at its clearest, not whichever
-        # frame happened to be last -- tracks often end on a fading speck.
-        if area > best_area:
+        # frame happened to be last -- tracks often end on a fading speck. Any
+        # provenance is eligible here: a recovered/reverse-filled box still
+        # carries a real, previously-measured silhouette worth describing.
+        # A frame where the multi-object tracker sees two+ subjects sharing one
+        # blob (e.g. two people merged) describes a group silhouette, not a
+        # single subject -- excluded from the "clearest frame" pick unless
+        # every detected frame is merged, in which case it's the only option.
+        if area > best_area_any:
+            best_area_any = area
+            best_contour_any = contour
+            best_frame_any = detected.frame
+        if not _frame_is_merged(detection, detected.index) and area > best_area:
             best_area = area
             best_contour = contour
             best_frame = detected.frame
         if detected.centroid is not None:
             centroids.append(detected.centroid)
+            if not detected.recovered and not detected.filled_by_reverse:
+                genuine_frames_detected += 1
+                genuine_detected_indices.append(detected.index)
+                genuine_blob_areas.append(area)
+                genuine_centroids.append(detected.centroid)
+
+    if best_contour is None or best_frame is None:
+        best_contour, best_frame = best_contour_any, best_frame_any
 
     if best_contour is None or best_frame is None:
         return None
@@ -1042,17 +1080,20 @@ def extract_clip_features(
         ),
         "row_normalised_area": row_normalised_area(best_contour, ref_row),
         "edge_density": edge_density(best_frame, best_contour),
-        "path_length": path_length(centroids),
-        "jitter": jitter(centroids),
-        "persistence": persistence(frames_detected, len(considered)),
+        "path_length": path_length(genuine_centroids),
+        "jitter": jitter(genuine_centroids),
+        "persistence": persistence(genuine_frames_detected, len(considered)),
         "motion_pixel_fraction": motion_pixel_fraction,
         "blob_count": float(blob_count),
-        "longest_detection_run": longest_detection_run(detected_indices, len(considered)),
-        "area_stability": area_stability(blob_areas),
-        "normalised_speed": normalised_speed(centroids, best_width),
-        "heading_change": heading_change(centroids),
+        "longest_detection_run": longest_detection_run(genuine_detected_indices, len(considered)),
+        "area_stability": area_stability(genuine_blob_areas),
+        "normalised_speed": normalised_speed(genuine_centroids, best_width),
+        "heading_change": heading_change(genuine_centroids),
         "fence_crossed": float(track_crosses_fence(track, zone)),
         "median_fence_distance": median_fence_distance(track, zone),
+        "recovered_fraction": (
+            non_genuine_frames / len(considered) if considered else 0.0
+        ),
     }
 
 

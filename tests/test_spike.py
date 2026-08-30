@@ -87,6 +87,12 @@ def _square_contour(x: int, y: int, size: int) -> np.ndarray:
     return spike.largest_contour(mask)
 
 
+def _rect_contour(x: int, y: int, w: int, h: int) -> np.ndarray:
+    mask = np.zeros((y + h + 5, x + w + 5), dtype=np.uint8)
+    mask[y : y + h, x : x + w] = 255
+    return spike.largest_contour(mask)
+
+
 def test_track_contour_returns_largest_when_no_active_track():
     small = _square_contour(0, 0, 4)
     big = _square_contour(40, 40, 10)
@@ -454,6 +460,126 @@ def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(mo
     assert all(not f.recovered for i, f in enumerate(detection.frames) if i != 2)
 
 
+def test_extract_clip_features_excludes_recovered_frames_from_motion_stats(monkeypatch):
+    # Same scenario as test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing
+    # (one frame recovered via appearance match, not a real bg-diff hit): the
+    # track-derived motion features should only count the 5 genuine frames,
+    # not treat the recovered one as an equally-trustworthy detection.
+    positions = [5, 9, 13, 17, 21, 25]
+    contrasts = [(200, 100)] * 6
+    contrasts[2] = (15, 8)  # frame index 2: low-contrast dip, recovered via appearance
+    frames = []
+    for pos, (outer, inner) in zip(positions, contrasts, strict=True):
+        frame = np.zeros((70, 70, 3), dtype=np.uint8)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], pos, pos, outer, inner)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features("clip.mp4", _ZONE, threshold=18)
+
+    assert result is not None
+    # 5 of 6 frames are genuine bg-diff hits -- the recovered one is excluded.
+    assert result["persistence"] == pytest.approx(5 / 6)
+    assert result["recovered_fraction"] == pytest.approx(1 / 6)
+
+
+def test_extract_clip_features_recovered_fraction_zero_when_all_genuine(monkeypatch):
+    positions = [5, 9, 13, 17, 21, 25]
+    frames = []
+    for pos in positions:
+        frame = np.zeros((70, 70, 3), dtype=np.uint8)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], pos, pos, 200, 100)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features("clip.mp4", _ZONE, threshold=18)
+
+    assert result is not None
+    assert result["recovered_fraction"] == pytest.approx(0.0)
+    assert result["persistence"] == pytest.approx(1.0)
+
+
+def _fake_frame_detection(index: int, contour: np.ndarray) -> "spike.FrameDetection":
+    return spike.FrameDetection(
+        index=index,
+        frame=_blank_frame(),
+        mask=np.zeros((60, 60), dtype=np.uint8),
+        all_contours=[contour],
+        blobs=[contour],
+        largest=contour,
+        centroid=spike.contour_centroid(contour),
+        motion_pixel_fraction=0.0,
+        median_grey=0.0,
+        is_flare=False,
+    )
+
+
+def test_extract_clip_features_excludes_merged_blob_frame_from_best_contour(monkeypatch):
+    # Frame 0: a single small square subject, unmerged. Frame 1: a much larger
+    # wide rectangle -- as if the multi-object tracker's own accounting says
+    # two subjects are sharing one blob there. Even though frame 1's contour
+    # has the bigger area, the merged frame should be excluded from the
+    # "clearest frame" pick in favour of the smaller, genuinely single-subject
+    # frame 0.
+    square = _rect_contour(5, 5, 10, 10)  # area 100, aspect_ratio 1.0
+    merged_rect = _rect_contour(5, 5, 40, 8)  # area 320, aspect_ratio 0.2
+    frames = [_fake_frame_detection(0, square), _fake_frame_detection(1, merged_rect)]
+    clip_detection = spike.ClipDetection(
+        frames=frames,
+        background=_blank_frame()[:, :, 0],
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=0,
+        total_frames=2,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=[
+            [],
+            [
+                spike.TrackedObject(track_id=0, bbox=(5, 5, 25, 13), merged_ids=(1,)),
+                spike.TrackedObject(track_id=1, bbox=(25, 5, 45, 13), merged_ids=(0,)),
+            ],
+        ],
+    )
+    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+
+    result = spike.extract_clip_features("clip.mp4", _ZONE)
+
+    assert result is not None
+    assert result["aspect_ratio"] == pytest.approx(1.0, abs=0.05)
+
+
+def test_extract_clip_features_falls_back_to_merged_frame_when_no_alternative(monkeypatch):
+    # Both frames are merged -- there's no unmerged alternative, so the merged
+    # (larger) frame should still be used rather than returning no features.
+    small_merge = _rect_contour(5, 5, 10, 10)  # area 100, aspect_ratio 1.0
+    big_merge = _rect_contour(5, 5, 40, 8)  # area 320, aspect_ratio 0.2
+    frames = [_fake_frame_detection(0, small_merge), _fake_frame_detection(1, big_merge)]
+    merged_tracks = [
+        spike.TrackedObject(track_id=0, bbox=(5, 5, 25, 13), merged_ids=(1,)),
+        spike.TrackedObject(track_id=1, bbox=(25, 5, 45, 13), merged_ids=(0,)),
+    ]
+    clip_detection = spike.ClipDetection(
+        frames=frames,
+        background=_blank_frame()[:, :, 0],
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=0,
+        total_frames=2,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=[merged_tracks, merged_tracks],
+    )
+    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+
+    result = spike.extract_clip_features("clip.mp4", _ZONE)
+
+    assert result is not None
+    assert result["aspect_ratio"] == pytest.approx(0.2, abs=0.05)
+
+
 def test_detect_clip_fills_gap_before_track_first_locks_on_via_backward_pass(monkeypatch):
     # The subject is only visible faintly (below `threshold`) for the first
     # couple of frames, so the forward pass has no candidate -- and no track
@@ -652,7 +778,12 @@ def test_extract_clip_features_ignores_ir_warmup_brightness_swing(monkeypatch, t
     # same base level (0) the subject frames sit on, so there's no artificial
     # second step once the ramp ends -- only the opening ramp should be flagged.
     warmup = [_blank_frame(value=v) for v in (220, 150, 80, 20, 0, 0, 0, 0, 0, 0)]
-    subject = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40, 5, 12, 19, 26)]
+    # Smooth there-and-back motion (same 7px step size throughout) rather than a
+    # teleport back to the start -- a big jump-back exceeds the tracker's own
+    # size/jump plausibility caps and gets filled in via the reverse pass
+    # instead of a genuine bg-diff hit, which would defeat this test's own
+    # persistence assertion for reasons unrelated to IR warmup handling.
+    subject = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40, 33, 26, 19, 12)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(warmup + subject))
 
     result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)

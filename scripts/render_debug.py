@@ -8,15 +8,24 @@ thresholds tuned against something visible.
 Drawn per frame:
   - fence polyline, with the OUTSIDE and INSIDE half-frames tinted
   - ignore regions (hatched) and the depth cutoff line
-  - every blob passing the area gates in dim cyan, the tracked (largest) blob
-    in bright magenta
+  - every blob passing the area gates in dim cyan, contours that failed a gate
+    (too small or too big) in dim grey, and the tracked blob in bright magenta
   - a fading trail: past bounding boxes plus the joined centroid path
   - an IR FLARE banner on frames where the global gain stepped
+  - the pre-cutoff warmup frames themselves, first, with an amber banner --
+    these are excluded from the background model and never scored, but are
+    now visible so flare-cutoff accuracy can be judged by eye
   - a HUD of live per-frame values and the clip's final feature vector
 
 Detection comes from `scripts.spike.detect_clip`, the same function that feeds
 `extract_clip_features`, so what is drawn is what scored the clip. The tuning
 flags default to the spike's own values and the HUD marks them when overridden.
+
+When selecting clips by `--label`/`--message-id`/`--message-ids-file`, clips
+that share an embedded alert timestamp (the same physical camera trigger,
+via `scripts.label._event_key`) are collapsed to just the longest one --
+otherwise a short startup-only clip and its longer sibling both carrying the
+same label would both render, and the short one isn't representative.
 
 Output is a real H.264 .mp4 (via `src.video_encode.Mp4Writer`, not
 `cv2.VideoWriter`) so it plays in VS Code's built-in preview, Telegram, and
@@ -43,6 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
+from scripts.label import _event_key  # noqa: E402
 from scripts.spike import ClipDetection, detect_clip, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
@@ -60,11 +70,13 @@ DEFAULTS = {
 
 COLOR_TRACKED = (255, 0, 255)
 COLOR_BLOB = (200, 200, 0)
+COLOR_DISCARDED = (90, 90, 90)
 COLOR_FENCE = (0, 255, 255)
 COLOR_OUTSIDE = (0, 0, 255)
 COLOR_INSIDE = (0, 255, 0)
 COLOR_IGNORE = (110, 110, 110)
 COLOR_FLARE = (0, 90, 255)
+COLOR_WARMUP = (0, 200, 255)
 COLOR_LIGHT = (0, 255, 140)
 HUD_BG = (24, 24, 24)
 TRAIL_LENGTH = 12
@@ -265,16 +277,59 @@ def render_clip(
 
     writer = Mp4Writer(out_path, fps=source_fps, width=width, height=height + hud_height)
 
+    min_blob_area_px = min_blob_area_fraction * detection.frame_height * detection.frame_width
+    max_area_px = max_area_fraction * detection.frame_height * detection.frame_width
+
+    for warm_index, raw_frame in enumerate(detection.dropped_frames):
+        canvas = cv2.resize(raw_frame, (width, height), interpolation=cv2.INTER_CUBIC)
+        _apply_zone(canvas, tint, ink)
+        cv2.rectangle(canvas, (0, 0), (width - 1, height - 1), COLOR_WARMUP, 4)
+        _text(
+            canvas,
+            "IR WARMUP - dropped before background model, not scored",
+            (10, 40),
+            color=COLOR_WARMUP,
+            scale=0.5,
+            thickness=2,
+        )
+        panel = np.zeros((height + hud_height, width, 3), dtype=np.uint8)
+        panel[:height] = canvas
+        live = [
+            (title, ""),
+            (
+                "frame",
+                f"warmup {warm_index + 1}/{detection.warmup_dropped}"
+                f"  (raw frame {warm_index + 1}/{detection.total_frames})",
+            ),
+            ("status", "gain/illuminator settling -- excluded from background model & features"),
+        ]
+        _draw_hud(panel, lines=live, origin_y=height)
+        writer.write(panel)
+
     history: list[tuple[np.ndarray, tuple[float, float]]] = []
     flare_total = sum(1 for f in detection.frames if f.is_flare)
     prev_centroid: tuple[float, float] | None = None
     try:
         for detected in detection.frames:
             canvas = cv2.resize(
-                detected.frame, (width, height), interpolation=cv2.INTER_NEAREST
+                detected.frame, (width, height), interpolation=cv2.INTER_CUBIC
             )
             _apply_zone(canvas, tint, ink)
             _draw_light_mask(canvas, detected.frame)
+
+            discarded_small = 0
+            discarded_large = 0
+            for contour in detected.all_contours:
+                area = cv2.contourArea(contour)
+                if min_blob_area_px <= area <= max_area_px:
+                    continue  # already drawn below as a kept blob
+                if area < min_blob_area_px:
+                    discarded_small += 1
+                else:
+                    discarded_large += 1
+                scaled = (contour * scale).astype(np.int32)
+                x, y, w, h = cv2.boundingRect(scaled)
+                cv2.rectangle(canvas, (x, y), (x + w, y + h), COLOR_DISCARDED, 1)
 
             for contour in detected.blobs:
                 scaled = (contour * scale).astype(np.int32)
@@ -324,11 +379,15 @@ def render_clip(
                 (title, ""),
                 (
                     "frame",
-                    f"{detected.index + 1}/{len(detection.frames)}"
-                    f"  (+{detection.warmup_dropped} flare frames dropped)",
+                    f"{detected.index + 1}/{len(detection.frames)} scored"
+                    f"  ({detection.warmup_dropped} warmup frames shown first, above, not scored)",
                 ),
                 ("median grey", grey),
-                ("blobs this frame", f"{len(detected.blobs)}"),
+                (
+                    "blobs (kept/discarded)",
+                    f"{len(detected.blobs)} kept"
+                    f" / {discarded_small} too small, {discarded_large} too big",
+                ),
                 ("tracked blob area", f"{area:.0f} px" if area else "none"),
                 (
                     "instant speed (body/frame)",
@@ -369,10 +428,57 @@ def render_clip(
     return out_path
 
 
+def _clip_duration_seconds(file_path: str) -> float:
+    cap = cv2.VideoCapture(file_path)
+    try:
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+    finally:
+        cap.release()
+    return frame_count / fps if frame_count > 0 and fps > 0 else 0.0
+
+
+def _prefer_longest_per_event(clips: list[dict]) -> list[dict]:
+    """Collapse clips that share an embedded alert timestamp (the same physical
+    trigger, per `scripts.label._event_key`) to just the longest one.
+
+    Without this, an event's short startup-only clip and its longer, more
+    representative sibling can both carry the same label and both get
+    selected -- rendering the short one isn't useful on its own.
+    """
+    best_by_key: dict[str, dict] = {}
+    result: list[dict] = []
+    for clip in clips:
+        key = _event_key(clip["camera_id"], clip.get("caption"))
+        if key is None:
+            result.append(clip)
+            continue
+        existing = best_by_key.get(key)
+        if existing is None:
+            best_by_key[key] = clip
+            result.append(clip)
+        elif _clip_duration_seconds(clip["file_path"]) > _clip_duration_seconds(
+            existing["file_path"]
+        ):
+            result[result.index(existing)] = clip
+            best_by_key[key] = clip
+    return result
+
+
 def _resolve_clips(args, conn) -> list[dict]:
     """Clips to render, from an explicit path or from the database."""
     if args.clip:
-        return [{"camera_id": args.camera, "message_id": 0, "file_path": args.clip, "label": ""}]
+        return [
+            {
+                "camera_id": args.camera,
+                "message_id": 0,
+                "channel_id": None,
+                "caption": None,
+                "file_path": args.clip,
+                "label": "",
+                "startup_state": None,
+            }
+        ]
 
     message_ids: set[int] = set(args.message_id or [])
     if args.message_ids_file:
@@ -390,12 +496,16 @@ def _resolve_clips(args, conn) -> list[dict]:
         if not row["file_path"] or not Path(row["file_path"]).exists():
             return
         seen.add(row["message_id"])
+        label_row = db.get_label(conn, row["channel_id"], row["message_id"])
         selected.append(
             {
                 "camera_id": row["camera_id"],
                 "message_id": row["message_id"],
+                "channel_id": row["channel_id"],
+                "caption": row["caption"],
                 "file_path": row["file_path"],
                 "label": label,
+                "startup_state": label_row["startup_state"] if label_row is not None else None,
             }
         )
 
@@ -415,6 +525,7 @@ def _resolve_clips(args, conn) -> list[dict]:
             if row["message_id"] in message_ids:
                 take(row, labels.get(row["message_id"], ""))
 
+    selected = _prefer_longest_per_event(selected)
     return selected[: args.limit] if args.limit else selected
 
 
@@ -464,6 +575,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             out_path = str(out_dir / f"{clip['camera_id']}_{clip['message_id']}.mp4")
         title = f"{clip['camera_id']}/{clip['message_id']} {clip['label']}".strip()
+        if clip.get("startup_state"):
+            title += f" [startup_state={clip['startup_state']}]"
         result = render_clip(
             clip["file_path"],
             camera.zone,

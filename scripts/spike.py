@@ -207,6 +207,7 @@ class FrameDetection:
     index: int
     frame: np.ndarray
     mask: np.ndarray
+    all_contours: list[np.ndarray]  # every contour found, before either area gate
     blobs: list[np.ndarray]  # contours passing both the min and max area gates
     largest: np.ndarray | None  # largest contour under max_area, no min gate
     centroid: tuple[float, float] | None
@@ -225,6 +226,7 @@ class ClipDetection:
     frame_height: int
     warmup_dropped: int
     total_frames: int
+    dropped_frames: list[np.ndarray]  # raw frames before the flare-settle cutoff, undetected
 
 
 def detect_clip(
@@ -325,6 +327,7 @@ def detect_clip(
                 index=frame_index,
                 frame=frame,
                 mask=mask,
+                all_contours=list(frame_contours),
                 blobs=blobs,
                 largest=contour,
                 centroid=None if contour is None else contour_centroid(contour),
@@ -341,6 +344,7 @@ def detect_clip(
         frame_height=frame_height,
         warmup_dropped=drop,
         total_frames=total_frames,
+        dropped_frames=frames[:drop],
     )
 
 

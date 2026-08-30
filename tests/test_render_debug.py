@@ -146,3 +146,69 @@ def test_detect_clip_computes_the_cutoff_per_clip_not_a_fixed_window(tmp_path, z
     assert flaring is not None and steady is not None
     assert flaring.warmup_dropped > 0
     assert steady.warmup_dropped == 0
+
+
+def test_render_clip_includes_dropped_warmup_frames_in_output(tmp_path, zone):
+    # The pre-cutoff frames are excluded from scoring but should still be
+    # visible in the rendered video (marked, not silently discarded) so flare-
+    # cutoff accuracy can be judged by eye.
+    clip = _write_clip(tmp_path / "flare.mp4", frames=14, flare_at=6)
+    detection = detect_clip(clip)
+    assert detection is not None
+    assert detection.warmup_dropped > 0
+
+    out = render_clip(clip, zone, out_path=str(tmp_path / "out.mp4"))
+    cap = cv2.VideoCapture(out)
+    try:
+        rendered = 0
+        while cap.read()[0]:
+            rendered += 1
+    finally:
+        cap.release()
+    assert rendered == detection.warmup_dropped + len(detection.frames)
+
+
+def test_prefer_longest_per_event_keeps_only_the_longer_sibling(tmp_path):
+    from scripts.render_debug import _prefer_longest_per_event
+
+    short_clip = _write_clip(tmp_path / "short.mp4", frames=6)
+    long_clip = _write_clip(tmp_path / "long.mp4", frames=20)
+    caption = "Initial alert @ 26-08-30 01:02:03"
+    sibling_caption = "Motion stopped @ 26-08-30 01:02:03"
+
+    clips = [
+        {
+            "camera_id": "cam06",
+            "message_id": 1,
+            "caption": caption,
+            "file_path": short_clip,
+            "label": "incident",
+        },
+        {
+            "camera_id": "cam06",
+            "message_id": 2,
+            "caption": sibling_caption,
+            "file_path": long_clip,
+            "label": "incident",
+        },
+    ]
+
+    result = _prefer_longest_per_event(clips)
+
+    assert len(result) == 1
+    assert result[0]["message_id"] == 2
+
+
+def test_prefer_longest_per_event_leaves_unrelated_clips_alone(tmp_path):
+    from scripts.render_debug import _prefer_longest_per_event
+
+    clip_a = _write_clip(tmp_path / "a.mp4", frames=6)
+    clip_b = _write_clip(tmp_path / "b.mp4", frames=6)
+    clips = [
+        {"camera_id": "cam06", "message_id": 1, "caption": None, "file_path": clip_a, "label": ""},
+        {"camera_id": "cam07", "message_id": 2, "caption": None, "file_path": clip_b, "label": ""},
+    ]
+
+    result = _prefer_longest_per_event(clips)
+
+    assert result == clips

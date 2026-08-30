@@ -51,6 +51,7 @@ from src.features import (  # noqa: E402
     aspect_ratio,
     edge_density,
     flare_frames,
+    flare_settle_index,
     green_light_flicker,
     green_light_ratio,
     heading_change,
@@ -162,23 +163,25 @@ class ClipDetection:
 def detect_clip(
     video_path: str,
     *,
-    warmup_frames: int = 10,
     max_area_fraction: float = 0.25,
     min_blob_area_fraction: float = 0.0005,
     threshold: int = 18,
     flare_tolerance: float = 3.0,
+    max_flare_fraction: float = 0.4,
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
 
     Consecutive-frame differencing was tried first and failed on the real
-    footage: these cameras spend roughly the first two seconds of every clip
-    settling their IR gain, and that whole-frame brightness swing is a far
-    bigger inter-frame delta than an actual animal. It hid a porcupine on
-    cam15/15454 entirely. So warmup frames are dropped, the background is the
-    per-pixel median of what remains (the subject moves, the fence doesn't),
-    and blobs larger than `max_area_fraction` of the frame are rejected as
-    residual illumination changes rather than subjects.
+    footage: these cameras change IR gain/illuminator state as a global
+    exposure step, and that step is a far bigger inter-frame delta than an
+    actual animal. It hid a porcupine on cam15/15454 entirely. Rather than
+    drop a fixed warmup window -- flare settles anywhere from frame 1 to
+    frame 21 depending on the clip, and can recur mid-clip -- the cutoff is
+    measured per clip from `flare_settle_index` and everything up to it is
+    dropped before the background is modelled. Blobs larger than
+    `max_area_fraction` of the frame are additionally rejected as residual
+    illumination change rather than a subject.
 
     Kept separate from `extract_clip_features` so overlays and diagnostics can
     render exactly what scored a clip rather than a lookalike reimplementation.
@@ -198,22 +201,24 @@ def detect_clip(
     if total_frames == 0:
         return None
 
-    # Keep the warmup frames if dropping them would leave too little to model a
-    # background from -- short blank "startup" clips are shorter than the warmup.
-    drop = warmup_frames if total_frames - warmup_frames >= 5 else 0
+    all_grays = [
+        cv2.GaussianBlur(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY), (5, 5), 0) for f in frames
+    ]
+    all_medians = [float(np.median(g)) for g in all_grays]
+    drop = flare_settle_index(
+        all_medians, tolerance=flare_tolerance, max_fraction=max_flare_fraction
+    )
     considered = frames[drop:]
+    grays = all_grays[drop:]
+    medians = all_medians[drop:]
 
     frame_height, frame_width = considered[0].shape[:2]
     max_area = max_area_fraction * frame_height * frame_width
     min_blob_area = min_blob_area_fraction * frame_height * frame_width
 
-    grays = [
-        cv2.GaussianBlur(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY), (5, 5), 0) for f in considered
-    ]
     background = np.median(np.stack(grays), axis=0).astype(np.uint8)
     kernel = np.ones((3, 3), np.uint8)
 
-    medians = [float(np.median(g)) for g in grays]
     flares = flare_frames(medians, tolerance=flare_tolerance)
 
     detections: list[FrameDetection] = []
@@ -255,20 +260,22 @@ def extract_clip_features(
     zone: CameraZone,
     *,
     reference_row: float | None = None,
-    warmup_frames: int = 10,
     max_area_fraction: float = 0.25,
     min_blob_area_fraction: float = 0.0005,
     threshold: int = 18,
+    flare_tolerance: float = 3.0,
+    max_flare_fraction: float = 0.4,
 ) -> dict[str, float] | None:
     """Run the detector over one clip and compute features for its largest
     track. Returns None if no motion was detected.
     """
     detection = detect_clip(
         video_path,
-        warmup_frames=warmup_frames,
         max_area_fraction=max_area_fraction,
         min_blob_area_fraction=min_blob_area_fraction,
         threshold=threshold,
+        flare_tolerance=flare_tolerance,
+        max_flare_fraction=max_flare_fraction,
     )
     if detection is None:
         return None

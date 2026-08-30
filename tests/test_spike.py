@@ -115,8 +115,10 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
 
 def test_extract_clip_features_ignores_ir_warmup_brightness_swing(monkeypatch, tmp_path):
     # Mirrors the real cam15 failure: the first frames swing globally as the IR
-    # gain settles, which dwarfs the actual subject's motion.
-    warmup = [_blank_frame(value=0 if i % 2 else 220) for i in range(10)]
+    # gain settles, which dwarfs the actual subject's motion. Ramps down to the
+    # same base level (0) the subject frames sit on, so there's no artificial
+    # second step once the ramp ends -- only the opening ramp should be flagged.
+    warmup = [_blank_frame(value=v) for v in (220, 150, 80, 20, 0, 0, 0, 0, 0, 0)]
     subject = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40, 5, 12, 19, 26)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(warmup + subject))
 
@@ -129,7 +131,7 @@ def test_extract_clip_features_ignores_ir_warmup_brightness_swing(monkeypatch, t
 
 
 def test_extract_clip_features_keeps_warmup_frames_on_short_clips(monkeypatch, tmp_path):
-    # Startup clips are shorter than the warmup window; dropping it would leave nothing.
+    # A short clip with no illumination step at all should have nothing dropped.
     frames = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 

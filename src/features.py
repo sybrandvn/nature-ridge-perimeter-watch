@@ -69,6 +69,22 @@ def saturation_ratio(frame_bgr: np.ndarray, contour: np.ndarray) -> float:
     return float(pixels.mean()) / 255.0
 
 
+def green_light_mask(
+    frame_bgr: np.ndarray,
+    *,
+    hue_low: int = 35,
+    hue_high: int = 85,
+    min_saturation: int = 60,
+    min_value: int = 60,
+) -> np.ndarray:
+    """Boolean mask of pixels reading as the guard's flashlight (green, lit,
+    saturated), shared by `green_light_ratio` and any overlay that draws it so
+    the two can never disagree about what counts as "the light"."""
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    return (hue >= hue_low) & (hue <= hue_high) & (sat >= min_saturation) & (val >= min_value)
+
+
 def green_light_ratio(
     frame_bgr: np.ndarray,
     contour: np.ndarray,
@@ -86,15 +102,19 @@ def green_light_ratio(
     `saturation_ratio` alone (that also fires on any colour anomaly, e.g. a
     reddish insect glare). Hue bounds use OpenCV's 0-179 scale.
     """
-    mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
-    cv2.drawContours(mask, [contour], -1, color=255, thickness=-1)
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-    region = hsv[mask == 255]
-    if region.size == 0:
+    contour_mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+    cv2.drawContours(contour_mask, [contour], -1, color=255, thickness=-1)
+    inside = contour_mask == 255
+    if not np.any(inside):
         return 0.0
-    hue, sat, val = region[:, 0], region[:, 1], region[:, 2]
-    green = (hue >= hue_low) & (hue <= hue_high) & (sat >= min_saturation) & (val >= min_value)
-    return float(np.count_nonzero(green)) / region.shape[0]
+    green = green_light_mask(
+        frame_bgr,
+        hue_low=hue_low,
+        hue_high=hue_high,
+        min_saturation=min_saturation,
+        min_value=min_value,
+    )
+    return float(np.count_nonzero(green[inside])) / int(np.count_nonzero(inside))
 
 
 def edge_density(frame_bgr: np.ndarray, contour: np.ndarray) -> float:

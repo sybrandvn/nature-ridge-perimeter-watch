@@ -129,10 +129,11 @@ cameras:
     # top-to-bottom order, so it's excluded from the 2026-08-28 left/right flip.
     # 2026-08-30: original bottom point (0.03) was off by a wide margin -- it
     # had drifted onto the diagonal cable visible in the same frame instead of
-    # the wire mesh. Retraced by the user over data/history/cam08/7360.mp4
-    # (saved as /tmp/cam08_verify.png) and re-extracted via the standard
-    # red-trace/color-threshold recipe (linear fit through the traced pixels).
-    fence: [[0.218, 0.996], [0.471, 0.04]]
+    # the wire mesh. Retraced twice by the user over data/history/cam08/7360.mp4
+    # (both traces landed within ~0.01 of each other), re-extracted via the
+    # standard red-trace/color-threshold recipe (linear fit through the traced
+    # pixels).
+    fence: [[0.2114, 0.9969], [0.4474, 0.1604]]
     outside: right
     depth_cutoff: 0.05
   - id: cam09

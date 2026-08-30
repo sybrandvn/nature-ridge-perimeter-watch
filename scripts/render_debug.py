@@ -171,10 +171,21 @@ def _apply_zone(canvas: np.ndarray, tint: np.ndarray, ink: np.ndarray) -> None:
     canvas[drawn] = ink[drawn]
 
 
-def _draw_light_mask(canvas: np.ndarray, frame: np.ndarray) -> None:
+def _draw_light_mask(canvas: np.ndarray, frame: np.ndarray, *, daylight_gated: bool) -> None:
     """Outline pixels the detector would call flashlight, in the frame's own
     colour rather than a flat tint -- lets the operator judge hue by eye, not
-    just the pass/fail of `green_light_ratio`."""
+    just the pass/fail of `green_light_ratio`.
+
+    Suppressed on a daylight/dusk-colour clip (`daylight_gated`), same as
+    `green_light_ratio`/`green_light_flicker` are zeroed in
+    `extract_clip_features` -- real ambient colour (green foliage covering
+    much of the frame) reads the same as the guard's flashlight to a raw hue
+    mask, and drawing it anyway made every green-toned daylight clip look
+    like it was full of flashlight detections that were never actually
+    scored.
+    """
+    if daylight_gated:
+        return
     mask = green_light_mask(frame)
     if not np.any(mask):
         return
@@ -276,6 +287,7 @@ def render_clip(
         if value != DEFAULTS[name]
     ]
     tint, ink = _zone_layers(width, height, zone)
+    daylight_gated = features is not None and features["color_fraction"] > 0.15
 
     writer = Mp4Writer(out_path, fps=source_fps, width=width, height=height + hud_height)
 
@@ -328,7 +340,7 @@ def render_clip(
                 detected.frame, (width, height), interpolation=cv2.INTER_CUBIC
             )
             _apply_zone(canvas, tint, ink)
-            _draw_light_mask(canvas, detected.frame)
+            _draw_light_mask(canvas, detected.frame, daylight_gated=daylight_gated)
 
             discarded_small = 0
             discarded_large = 0

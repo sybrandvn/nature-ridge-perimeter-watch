@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
-from scripts.render_debug import DEFAULTS, render_clip
+from scripts.render_debug import DEFAULTS, _draw_light_mask, render_clip
 from scripts.spike import detect_clip
 from src.config import CameraZone
 
@@ -68,6 +68,22 @@ def test_render_clip_frame_count_matches_the_detector(tmp_path, zone):
         cap.release()
     assert detection is not None
     assert rendered == len(detection.frames)
+
+
+def test_draw_light_mask_outlines_green_pixels_when_not_daylight_gated():
+    frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    frame[:] = (0, 255, 0)  # pure green, BGR
+    canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    _draw_light_mask(canvas, frame, daylight_gated=False)
+    assert canvas.any()
+
+
+def test_draw_light_mask_is_suppressed_when_daylight_gated():
+    frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    frame[:] = (0, 255, 0)  # pure green, BGR -- would draw if not gated
+    canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    _draw_light_mask(canvas, frame, daylight_gated=True)
+    assert not canvas.any()
 
 
 def test_render_clip_returns_none_for_an_unreadable_clip(tmp_path, zone):

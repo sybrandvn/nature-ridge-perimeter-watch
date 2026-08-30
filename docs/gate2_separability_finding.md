@@ -282,3 +282,119 @@ caveat was actually those 6 resident clips (bakkie/vehicle, multiple people)
 contaminating the incident sample. `resident` itself now reads as the
 highest-motion class of all, plausibly real (vehicle + multiple people) but
 n=6 is too small to treat as anything but a first look.
+
+## Addendum 3 (2026-08-30): six new features, and why the corpus ranking still fails
+
+Re-measured every rule and feature in this document against the *live* label
+set (250 labels, 237 with detections) now that the full clip download has
+finished (16886 clips, 16558 with detections).
+
+### The documented rules had silently degraded
+
+Guard labels grew 110 -> 200 since the main body of this document was written,
+and the `scripts/backtest.py` rules got worse as they did:
+
+| rule | then | now |
+|---|---|---|
+| guard: `green_light_ratio>0.05 or green_light_flicker>0.02` | recall 0.61 | recall **0.42** |
+| animal_or_incident: `aspect_ratio<0.95 and green_light_ratio<0.05` | recall 0.75, precision 0.22 | recall **0.60**, precision **0.09** |
+
+Guard specificity held up (1 non-guard fire in 56, and it leaked only into
+`resident`), so the flashlight signal is still real -- it just no longer covers
+most of the guard population.
+
+### Six new features (implemented, tested, committed)
+
+Sixteen candidates were prototyped and scored by AUC against the labels. Six
+survived and are now in `src/features.py` / `src/zones.py` and wired into
+`scripts/spike.py` (`FEATURE_COLUMNS` is now 24 wide):
+
+| feature | what it captures | why it helps |
+|---|---|---|
+| `longest_detection_run` | longest run of *consecutive* detected frames, as a clip fraction | separates an unbroken track from scattered flicker; `persistence` alone cannot |
+| `area_stability` | coefficient of variation of the tracked blob's area | real bodies hold a silhouette; flashlight pools, foliage and insects swell and collapse |
+| `normalised_speed` | mean per-frame centroid displacement in blob-widths | scale-invariant "body lengths per frame", unlike raw `path_length` |
+| `heading_change` | mean absolute turn angle between motion steps (sub-pixel steps dropped) | purposeful travel vs erratic wandering |
+| `fence_crossed` | does the track appear on both sides of the fence polyline | **strongest new signal** (AUC 0.794 guard-vs-positive): the guard walks the fence line, animals and intruders stay on one side |
+| `median_fence_distance` | median abs. horizontal distance from the fence, frame-width fraction | fence-corridor proximity |
+
+Measured through the real pipeline (not the prototype), hand-rolled weighted
+logistic regression with leave-one-out CV, 15 positives (animal+incident) in
+237 rows:
+
+| model | LOO AUC | P@10 | P@20 | P@30 | P@50 |
+|---|---|---|---|---|---|
+| before (13 features) | 0.909 | 4/10 | 6/20 | 9/30 | 13/50 |
+| **after (19 features)** | **0.968** | 5/10 | **11/20** | **14/30** | **15/50** |
+
+All 15 positives now fall inside the top 50 of 237. Only miss above rank 30 is
+`cam05/18270 animal` at rank 31.
+
+`blob_count` -- which already existed but was used by no rule -- turns out to be
+the single best noise discriminator on its own (AUC 0.903 for `environment`
+vs real subject). `saturation_ratio` is now a marginally better guard
+identifier than `green_light_ratio` (0.765 vs 0.752).
+
+### Improved rule candidates (measured, not yet applied to backtest.py)
+
+`LIGHT = green_light_ratio>0.05 or green_light_flicker>0.02 or saturation_ratio>0.05`
+
+| rule | recall | precision | FPR | lift over 6.3% base rate |
+|---|---|---|---|---|
+| current `aspect<0.95 and grn<0.05` | 0.60 | 0.09 | 0.40 | 1.5x |
+| `not LIGHT and outside_pixel_fraction>0.9 and blob_count<=13 and motion_pixel_fraction<0.25` | **0.67** | **0.31** | 0.10 | **4.9x** |
+
+Guard rule: adding `or saturation_ratio > 0.15` lifts recall 0.43 -> 0.58 while
+still leaking into zero animal/incident clips.
+
+### Negative result: lowering the detector threshold makes accuracy worse
+
+40% of `animal` clips have a largest blob under 0.0005 of the frame (~38 px on
+320x240) -- `cam08/7360` is about 4 px, effectively undetected. The obvious fix
+is a lower threshold. It backfires:
+
+| threshold | LOO AUC | P@20 | P@30 | P@50 |
+|---|---|---|---|---|
+| 18 (current) | **0.968** | 11/20 | 14/30 | 15/50 |
+| 12 | 0.832 | 8/20 | 10/30 | 10/50 |
+| adaptive 6*MAD clipped to [6,18] | 0.759 | 4/20 | 6/30 | 9/50 |
+
+Keep `threshold=18`. Small-subject recovery has to be a **second gated pass**
+restricted to the fence corridor / depth band, never a global threshold change.
+Separately, `largest_contour()` has no minimum-area filter, so shape features
+get computed on 4-pixel specks and report `aspect_ratio=1.0, solidity=1.0`.
+That should become an explicit "motion trigger, no resolvable subject" state.
+
+### Can we find similar events in the corpus? Not yet -- and the reason matters
+
+The 19-feature model was fitted on the 237 labelled rows and used to rank all
+16558 detected clips. Every one of the 15 known positives lands between rank
+178 and 971. The top 100 contains **zero** known positives.
+
+This is not a feature problem, it is a **sampling problem**. Only 1.51% of the
+corpus is labelled, and the coverage is wildly uneven:
+
+| camera | clips | labelled | coverage |
+|---|---|---|---|
+| cam07 | 3738 | 13 | 0.35% |
+| cam04 | 2325 | 10 | 0.43% |
+| cam03 | 1159 | 2 | 0.17% |
+| cam05 | 2496 | 30 | 1.20% |
+| cam13 | 611 | 6 | 0.98% |
+| cam08 | 81 | 23 | 28.4% |
+| cam10 | 177 | 20 | 11.3% |
+
+Nearly all negatives are `guard` clips from the small, well-labelled cameras.
+The model therefore learned "not guard-like" as a proxy for positive -- and
+cam07, which has 3738 clips and almost no labels, is uniformly not-guard-like.
+cam07 takes 151 of the top 250. Standardising features per camera helps
+(top-500 recall 5/15 -> 9/15) but cannot manufacture the missing negatives.
+
+**The bottleneck is now label coverage, not feature quality.** The LOO AUC of
+0.968 is honest *within* the labelled pool and meaningless outside it.
+
+`data/reports/candidates_2026-08-30.csv` holds a per-camera stratified review
+queue (top 25 unlabelled per camera, 417 rows) with a matching
+`.message_ids` file for `scripts/label.py --message-ids-file`. Labelling that
+queue -- especially the cam07 / cam04 / cam03 / cam13 rows -- is the highest
+value next action, because it supplies the negatives those cameras lack.

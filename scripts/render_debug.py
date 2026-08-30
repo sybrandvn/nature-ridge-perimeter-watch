@@ -39,9 +39,16 @@ import numpy as np  # noqa: E402
 from scripts.spike import ClipDetection, detect_clip, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
+from src.features import green_light_mask  # noqa: E402
 from src.zones import _fence_x_at_y, side_name  # noqa: E402
 
-DEFAULTS = {"threshold": 18, "warmup": 10, "min_area": 0.0005, "max_area": 0.25}
+DEFAULTS = {
+    "threshold": 18,
+    "min_area": 0.0005,
+    "max_area": 0.25,
+    "flare_tolerance": 3.0,
+    "max_flare_fraction": 0.4,
+}
 
 COLOR_TRACKED = (255, 0, 255)
 COLOR_BLOB = (200, 200, 0)
@@ -50,6 +57,7 @@ COLOR_OUTSIDE = (0, 0, 255)
 COLOR_INSIDE = (0, 255, 0)
 COLOR_IGNORE = (110, 110, 110)
 COLOR_FLARE = (0, 90, 255)
+COLOR_LIGHT = (0, 255, 140)
 HUD_BG = (24, 24, 24)
 TRAIL_LENGTH = 12
 
@@ -141,6 +149,20 @@ def _apply_zone(canvas: np.ndarray, tint: np.ndarray, ink: np.ndarray) -> None:
     canvas[drawn] = ink[drawn]
 
 
+def _draw_light_mask(canvas: np.ndarray, frame: np.ndarray) -> None:
+    """Outline pixels the detector would call flashlight, in the frame's own
+    colour rather than a flat tint -- lets the operator judge hue by eye, not
+    just the pass/fail of `green_light_ratio`."""
+    mask = green_light_mask(frame)
+    if not np.any(mask):
+        return
+    mask_scaled = cv2.resize(
+        mask.astype(np.uint8), (canvas.shape[1], canvas.shape[0]), interpolation=cv2.INTER_NEAREST
+    )
+    contours, _ = cv2.findContours(mask_scaled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(canvas, contours, -1, COLOR_LIGHT, 1)
+
+
 def _draw_trail(canvas: np.ndarray, history: list[tuple[np.ndarray, tuple[float, float]]]) -> None:
     """Past boxes and centroid path, older = closer to the background colour."""
     recent = history[-TRAIL_LENGTH:]
@@ -182,18 +204,20 @@ def render_clip(
     title: str = "",
     scale: int = 2,
     threshold: int = DEFAULTS["threshold"],
-    warmup_frames: int = DEFAULTS["warmup"],
     min_blob_area_fraction: float = DEFAULTS["min_area"],
     max_area_fraction: float = DEFAULTS["max_area"],
+    flare_tolerance: float = DEFAULTS["flare_tolerance"],
+    max_flare_fraction: float = DEFAULTS["max_flare_fraction"],
 ) -> str | None:
     """Write an annotated mp4 for one clip. Returns the path, or None if the
     clip has no readable frames."""
     detection: ClipDetection | None = detect_clip(
         video_path,
-        warmup_frames=warmup_frames,
         max_area_fraction=max_area_fraction,
         min_blob_area_fraction=min_blob_area_fraction,
         threshold=threshold,
+        flare_tolerance=flare_tolerance,
+        max_flare_fraction=max_flare_fraction,
     )
     if detection is None:
         return None
@@ -201,22 +225,24 @@ def render_clip(
     features = extract_clip_features(
         video_path,
         zone,
-        warmup_frames=warmup_frames,
         max_area_fraction=max_area_fraction,
         min_blob_area_fraction=min_blob_area_fraction,
         threshold=threshold,
+        flare_tolerance=flare_tolerance,
+        max_flare_fraction=max_flare_fraction,
     )
 
     source_fps = cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS) or 10.0
     width, height = detection.frame_width * scale, detection.frame_height * scale
-    hud_height = 150
+    hud_height = 165
     overrides = [
         f"{name}={value}"
         for name, value in (
             ("threshold", threshold),
-            ("warmup", warmup_frames),
             ("min_area", min_blob_area_fraction),
             ("max_area", max_area_fraction),
+            ("flare_tolerance", flare_tolerance),
+            ("max_flare_fraction", max_flare_fraction),
         )
         if value != DEFAULTS[name]
     ]
@@ -231,18 +257,22 @@ def render_clip(
 
     history: list[tuple[np.ndarray, tuple[float, float]]] = []
     flare_total = sum(1 for f in detection.frames if f.is_flare)
+    prev_centroid: tuple[float, float] | None = None
     try:
         for detected in detection.frames:
             canvas = cv2.resize(
                 detected.frame, (width, height), interpolation=cv2.INTER_NEAREST
             )
             _apply_zone(canvas, tint, ink)
+            _draw_light_mask(canvas, detected.frame)
 
             for contour in detected.blobs:
                 scaled = (contour * scale).astype(np.int32)
                 x, y, w, h = cv2.boundingRect(scaled)
                 cv2.rectangle(canvas, (x, y), (x + w, y + h), COLOR_BLOB, 1)
 
+            instant_speed = None
+            blob_width_px = 0.0
             if detected.largest is not None and detected.centroid is not None:
                 scaled = (detected.largest * scale).astype(np.int32)
                 history.append(
@@ -253,6 +283,14 @@ def render_clip(
                 cv2.rectangle(canvas, (x, y), (x + w, y + h), COLOR_TRACKED, 2)
                 cv2.drawContours(canvas, [scaled], -1, COLOR_TRACKED, 1)
                 _text(canvas, "TRACKED", (x, max(11, y - 4)), color=COLOR_TRACKED, scale=0.4)
+                blob_width_px = float(cv2.boundingRect(detected.largest)[2])
+                if prev_centroid is not None and blob_width_px > 0:
+                    step = np.hypot(
+                        detected.centroid[0] - prev_centroid[0],
+                        detected.centroid[1] - prev_centroid[1],
+                    )
+                    instant_speed = step / blob_width_px
+                prev_centroid = detected.centroid
 
             if detected.is_flare:
                 cv2.rectangle(canvas, (0, 0), (width - 1, height - 1), COLOR_FLARE, 4)
@@ -269,16 +307,24 @@ def render_clip(
             panel[:height] = canvas
             area = 0.0 if detected.largest is None else cv2.contourArea(detected.largest)
             grey = f"{detected.median_grey:.1f}" + ("   FLARE" if detected.is_flare else "")
+            light_frac = float(np.count_nonzero(green_light_mask(detected.frame))) / (
+                detected.frame.shape[0] * detected.frame.shape[1]
+            )
             live = [
                 (title, ""),
                 (
                     "frame",
                     f"{detected.index + 1}/{len(detection.frames)}"
-                    f"  (+{detection.warmup_dropped} warmup dropped)",
+                    f"  (+{detection.warmup_dropped} flare frames dropped)",
                 ),
                 ("median grey", grey),
                 ("blobs this frame", f"{len(detected.blobs)}"),
                 ("tracked blob area", f"{area:.0f} px" if area else "none"),
+                (
+                    "instant speed (body/frame)",
+                    f"{instant_speed:.2f}" if instant_speed is not None else "n/a",
+                ),
+                ("frame light_ratio", f"{light_frac:.4f}"),
                 ("motion px fraction", f"{detected.motion_pixel_fraction:.4f}"),
                 ("flare frames", f"{flare_total}/{len(detection.frames)}"),
             ]
@@ -376,9 +422,10 @@ def main(argv: list[str] | None = None) -> int:
 
     tuning = parser.add_argument_group("detector tuning (defaults match scripts/spike.py)")
     tuning.add_argument("--threshold", type=int, default=DEFAULTS["threshold"])
-    tuning.add_argument("--warmup", type=int, default=DEFAULTS["warmup"])
     tuning.add_argument("--min-area", type=float, default=DEFAULTS["min_area"])
     tuning.add_argument("--max-area", type=float, default=DEFAULTS["max_area"])
+    tuning.add_argument("--flare-tolerance", type=float, default=DEFAULTS["flare_tolerance"])
+    tuning.add_argument("--max-flare-fraction", type=float, default=DEFAULTS["max_flare_fraction"])
     args = parser.parse_args(argv)
 
     if args.clip and not args.camera:
@@ -414,9 +461,10 @@ def main(argv: list[str] | None = None) -> int:
             title=title,
             scale=args.scale,
             threshold=args.threshold,
-            warmup_frames=args.warmup,
             min_blob_area_fraction=args.min_area,
             max_area_fraction=args.max_area,
+            flare_tolerance=args.flare_tolerance,
+            max_flare_fraction=args.max_flare_fraction,
         )
         if result is None:
             print(f"  skip {title}: no readable frames")

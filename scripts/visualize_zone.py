@@ -2,10 +2,13 @@
 labels, and the detector's bounding box overlaid -- a visual sanity check of
 what src/zones.py actually classifies, not just a features.csv row.
 
-Uses the exact same throwaway detector as scripts/spike.py's
-extract_clip_features (background = per-pixel median of non-warmup frames,
-largest contour under max_area_fraction), so the box shown here is what that
-detector would have fed into outside_pixel_fraction.
+For a full per-frame video with a live HUD instead of a single still, use
+scripts/render_debug.py -- it draws every blob, the tracked blob's trail, and
+IR flare frames, not just the clearest one.
+
+Uses `scripts.spike.detect_clip`, the same detector `extract_clip_features`
+feeds on, so the box shown here is what actually produced
+`outside_pixel_fraction` for this clip.
 
 Run:
     uv run python scripts/visualize_zone.py data/history/cam06/21520.mp4 cam06 \
@@ -21,58 +24,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cv2  # noqa: E402
-import numpy as np  # noqa: E402
 
-from scripts.spike import contour_centroid, largest_contour  # noqa: E402
+from scripts.spike import detect_clip  # noqa: E402
 from src.config import CameraZone, load_cameras_config  # noqa: E402
 from src.zones import outside_pixel_fraction, side_name  # noqa: E402
-
-
-def _detect_best_frame(
-    video_path: str,
-    *,
-    warmup_frames: int = 10,
-    max_area_fraction: float = 0.25,
-    threshold: int = 18,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Same background-subtraction pass as spike.extract_clip_features, but
-    returning the best (frame, contour) pair instead of derived features."""
-    cap = cv2.VideoCapture(video_path)
-    try:
-        frames = []
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            frames.append(frame)
-    finally:
-        cap.release()
-
-    if not frames:
-        return None
-    considered = frames[warmup_frames:] if len(frames) - warmup_frames >= 5 else frames
-    height, width = considered[0].shape[:2]
-    max_area = max_area_fraction * height * width
-
-    grays = [cv2.GaussianBlur(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY), (5, 5), 0) for f in considered]
-    background = np.median(np.stack(grays), axis=0).astype(np.uint8)
-    kernel = np.ones((3, 3), np.uint8)
-
-    best_contour, best_frame, best_area = None, None, -1.0
-    for frame, gray in zip(considered, grays, strict=True):
-        diff = cv2.absdiff(gray, background)
-        _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        contour = largest_contour(mask, max_area=max_area)
-        if contour is None:
-            continue
-        area = cv2.contourArea(contour)
-        if area > best_area:
-            best_area, best_contour, best_frame = area, contour, frame
-
-    if best_contour is None or best_frame is None:
-        return None
-    return best_frame, best_contour
 
 
 def _to_px(point: tuple[float, float], width: int, height: int) -> tuple[int, int]:
@@ -81,10 +36,17 @@ def _to_px(point: tuple[float, float], width: int, height: int) -> tuple[int, in
 
 
 def render(video_path: str, zone: CameraZone, *, out_path: str) -> str:
-    detection = _detect_best_frame(video_path)
+    detection = detect_clip(video_path)
     if detection is None:
+        raise ValueError(f"No readable frames in {video_path}")
+    best = max(
+        (f for f in detection.frames if f.largest is not None),
+        key=lambda f: cv2.contourArea(f.largest),
+        default=None,
+    )
+    if best is None:
         raise ValueError(f"No motion detected in {video_path}")
-    frame, contour = detection
+    frame, contour = best.frame, best.largest
     height, width = frame.shape[:2]
     canvas = frame.copy()
 
@@ -112,7 +74,7 @@ def render(video_path: str, zone: CameraZone, *, out_path: str) -> str:
 
     x, y, w, h = cv2.boundingRect(contour)
     cv2.rectangle(canvas, (x, y), (x + w, y + h), (255, 0, 255), 2)
-    centroid = contour_centroid(contour)
+    centroid = best.centroid
     frac = None
     if centroid is not None and zone.fence is not None and zone.outside is not None:
         frac = outside_pixel_fraction([(centroid[0] / width, centroid[1] / height)], zone)

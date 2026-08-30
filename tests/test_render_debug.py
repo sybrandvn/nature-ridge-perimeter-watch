@@ -37,7 +37,7 @@ def _write_clip(path, *, frames: int = 12, flare_at: int | None = None) -> str:
 
 def test_render_clip_writes_a_readable_video_taller_than_the_source(tmp_path, zone):
     clip = _write_clip(tmp_path / "in.mp4")
-    out = render_clip(clip, zone, out_path=str(tmp_path / "out.mp4"), warmup_frames=0)
+    out = render_clip(clip, zone, out_path=str(tmp_path / "out.mp4"))
 
     assert out is not None
     cap = cv2.VideoCapture(out)
@@ -54,8 +54,8 @@ def test_render_clip_writes_a_readable_video_taller_than_the_source(tmp_path, zo
 
 def test_render_clip_frame_count_matches_the_detector(tmp_path, zone):
     clip = _write_clip(tmp_path / "in.mp4", frames=14)
-    out = render_clip(clip, zone, out_path=str(tmp_path / "out.mp4"), warmup_frames=0)
-    detection = detect_clip(clip, warmup_frames=0)
+    out = render_clip(clip, zone, out_path=str(tmp_path / "out.mp4"))
+    detection = detect_clip(clip)
 
     cap = cv2.VideoCapture(out)
     try:
@@ -76,9 +76,7 @@ def test_render_clip_returns_none_for_an_unreadable_clip(tmp_path, zone):
 
 def test_render_clip_honours_scale(tmp_path, zone):
     clip = _write_clip(tmp_path / "in.mp4")
-    out = render_clip(
-        clip, zone, out_path=str(tmp_path / "out.mp4"), scale=3, warmup_frames=0
-    )
+    out = render_clip(clip, zone, out_path=str(tmp_path / "out.mp4"), scale=3)
     cap = cv2.VideoCapture(out)
     try:
         assert int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) == WIDTH * 3
@@ -89,7 +87,7 @@ def test_render_clip_honours_scale(tmp_path, zone):
 def test_render_clip_creates_missing_output_directories(tmp_path, zone):
     clip = _write_clip(tmp_path / "in.mp4")
     out_path = tmp_path / "nested" / "deeper" / "out.mp4"
-    assert render_clip(clip, zone, out_path=str(out_path), warmup_frames=0) is not None
+    assert render_clip(clip, zone, out_path=str(out_path)) is not None
     assert out_path.exists()
 
 
@@ -102,22 +100,46 @@ def test_detector_defaults_match_the_spike():
 
     params = inspect.signature(extract_clip_features).parameters
     assert DEFAULTS["threshold"] == params["threshold"].default
-    assert DEFAULTS["warmup"] == params["warmup_frames"].default
     assert DEFAULTS["min_area"] == params["min_blob_area_fraction"].default
     assert DEFAULTS["max_area"] == params["max_area_fraction"].default
+    assert DEFAULTS["flare_tolerance"] == params["flare_tolerance"].default
+    assert DEFAULTS["max_flare_fraction"] == params["max_flare_fraction"].default
 
 
-def test_detect_clip_flags_flare_frames(tmp_path, zone):
-    clip = _write_clip(tmp_path / "flare.mp4", frames=12, flare_at=4)
-    detection = detect_clip(clip, warmup_frames=0)
+def test_detect_clip_marks_flare_frames_left_by_the_cap(tmp_path, zone):
+    # detect_clip drops everything through the *last* flare-flagged frame, so
+    # a clip that settles cleanly never has is_flare=True left in what's kept
+    # -- only a clip whose brightness never fully settles within
+    # max_flare_fraction should still show flagged frames, as a warning that
+    # the kept footage wasn't fully clean.
+    values = [min(v, 255) for v in range(0, 320, 20)] + [255] * 4  # ramps for 16 frames of 20
+    path = tmp_path / "long_flare.mp4"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (WIDTH, HEIGHT))
+    for v in values:
+        writer.write(np.full((HEIGHT, WIDTH, 3), v, dtype=np.uint8))
+    writer.release()
+
+    detection = detect_clip(str(path))
 
     assert detection is not None
+    assert 0 < detection.warmup_dropped < len(values)
     assert any(f.is_flare for f in detection.frames)
 
 
 def test_detect_clip_reports_no_flare_on_steady_illumination(tmp_path, zone):
     clip = _write_clip(tmp_path / "steady.mp4", frames=12)
-    detection = detect_clip(clip, warmup_frames=0)
+    detection = detect_clip(clip)
 
     assert detection is not None
     assert not any(f.is_flare for f in detection.frames)
+
+
+def test_detect_clip_computes_the_cutoff_per_clip_not_a_fixed_window(tmp_path, zone):
+    # A clip that flares should drop those frames; a clip that never flares
+    # should drop none -- neither is a hardcoded frame count.
+    flaring = detect_clip(_write_clip(tmp_path / "flare.mp4", frames=12, flare_at=6))
+    steady = detect_clip(_write_clip(tmp_path / "steady.mp4", frames=12))
+
+    assert flaring is not None and steady is not None
+    assert flaring.warmup_dropped > 0
+    assert steady.warmup_dropped == 0

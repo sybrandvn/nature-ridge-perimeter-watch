@@ -127,7 +127,12 @@ cameras:
     # the right of that line walking from the first point to the second. Points
     # are ordered bottom-to-top here, opposite of every other camera's
     # top-to-bottom order, so it's excluded from the 2026-08-28 left/right flip.
-    fence: [[0.03, 0.96], [0.47, 0.06]]
+    # 2026-08-30: original bottom point (0.03) was off by a wide margin -- it
+    # had drifted onto the diagonal cable visible in the same frame instead of
+    # the wire mesh. Retraced by the user over data/history/cam08/7360.mp4
+    # (saved as /tmp/cam08_verify.png) and re-extracted via the standard
+    # red-trace/color-threshold recipe (linear fit through the traced pixels).
+    fence: [[0.218, 0.996], [0.471, 0.04]]
     outside: right
     depth_cutoff: 0.05
   - id: cam09

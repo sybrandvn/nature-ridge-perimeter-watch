@@ -18,13 +18,14 @@ Detection comes from `scripts.spike.detect_clip`, the same function that feeds
 `extract_clip_features`, so what is drawn is what scored the clip. The tuning
 flags default to the spike's own values and the HUD marks them when overridden.
 
-Output is .webm (VP8) so it plays in VS Code's built-in preview and any
-browser -- this OpenCV build can't write a Chromium-playable H.264 mp4.
+Output is a real H.264 .mp4 (via `src.video_encode.Mp4Writer`, not
+`cv2.VideoWriter`) so it plays in VS Code's built-in preview, Telegram, and
+ntfy-viewing clients alike -- this OpenCV build's own FFmpeg has no libx264.
 
 Run:
-    uv run python scripts/render_debug.py --message-id 21520 --out out.webm
+    uv run python scripts/render_debug.py --message-id 21520 --out out.mp4
     uv run python scripts/render_debug.py --clip data/history/cam06/21520.mp4 \
-        --camera cam06 --out out.webm
+        --camera cam06 --out out.mp4
     uv run python scripts/render_debug.py --label incident --label animal \
         --out data/reports/debug
     uv run python scripts/render_debug.py \
@@ -46,6 +47,7 @@ from scripts.spike import ClipDetection, detect_clip, extract_clip_features  # n
 from src import db  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import green_light_mask  # noqa: E402
+from src.video_encode import Mp4Writer  # noqa: E402
 from src.zones import _fence_x_at_y, side_name  # noqa: E402
 
 DEFAULTS = {
@@ -215,16 +217,15 @@ def render_clip(
     flare_tolerance: float = DEFAULTS["flare_tolerance"],
     max_flare_fraction: float = DEFAULTS["max_flare_fraction"],
 ) -> str | None:
-    """Write an annotated .webm (VP8) video for one clip. Returns the path, or
+    """Write an annotated H.264 .mp4 video for one clip. Returns the path, or
     None if the clip has no readable frames.
 
-    VP8/webm, not H.264/mp4: this OpenCV build only has FFmpeg's hardware
-    h264_v4l2m2m encoder (no libx264), which fails without a v4l2 device, and
-    Chromium (VS Code's built-in preview) can't play the mp4v codec this repo
-    used to write. webm+VP8 is natively decodable by both cv2.VideoCapture and
-    VS Code's preview, so out_path is always coerced to a .webm suffix.
+    Real H.264, not this OpenCV build's mp4v/VP8 fallbacks: those play in
+    VS Code's own preview but Telegram and ntfy-viewing clients treat them as
+    a generic file, not an inline video. `Mp4Writer` pipes frames to a bundled
+    ffmpeg with a genuine libx264, so out_path is always coerced to .mp4.
     """
-    out_path = str(Path(out_path).with_suffix(".webm"))
+    out_path = str(Path(out_path).with_suffix(".mp4"))
     detection: ClipDetection | None = detect_clip(
         video_path,
         max_area_fraction=max_area_fraction,
@@ -262,12 +263,7 @@ def render_clip(
     ]
     tint, ink = _zone_layers(width, height, zone)
 
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(
-        out_path, cv2.VideoWriter_fourcc(*"VP80"), source_fps, (width, height + hud_height)
-    )
-    if not writer.isOpened():
-        raise RuntimeError(f"could not open video writer for {out_path}")
+    writer = Mp4Writer(out_path, fps=source_fps, width=width, height=height + hud_height)
 
     history: list[tuple[np.ndarray, tuple[float, float]]] = []
     flare_total = sum(1 for f in detection.frames if f.is_flare)
@@ -466,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.out and len(clips) == 1:
             out_path = args.out
         else:
-            out_path = str(out_dir / f"{clip['camera_id']}_{clip['message_id']}.webm")
+            out_path = str(out_dir / f"{clip['camera_id']}_{clip['message_id']}.mp4")
         title = f"{clip['camera_id']}/{clip['message_id']} {clip['label']}".strip()
         result = render_clip(
             clip["file_path"],

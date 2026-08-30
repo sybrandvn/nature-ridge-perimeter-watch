@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Motion-based perimeter fence monitoring from a Telegram security camera feed."
 requires-python = ">=3.12"
 dependencies = [
+    "imageio-ffmpeg>=0.6.0",
     "numpy>=2.5.2",
     "opencv-python-headless>=5.0.0.93",
     "python-dotenv>=1.2.3",

@@ -53,7 +53,12 @@ import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
 from scripts.label import _event_key  # noqa: E402
-from scripts.spike import ClipDetection, detect_clip, extract_clip_features  # noqa: E402
+from scripts.spike import (  # noqa: E402
+    ClipDetection,
+    TrackedObject,
+    detect_clip,
+    extract_clip_features,
+)
 from src import db  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import green_light_mask  # noqa: E402
@@ -213,6 +218,63 @@ def _draw_trail(canvas: np.ndarray, history: list[tuple[np.ndarray, tuple[float,
         cv2.circle(canvas, a, 2, color, -1)
 
 
+MULTI_TRACK_PALETTE = (
+    (255, 0, 0),
+    (0, 220, 0),
+    (0, 128, 255),
+    (255, 0, 200),
+    (0, 220, 220),
+    (180, 100, 255),
+    (255, 140, 0),
+    (120, 255, 120),
+)
+
+
+def _track_color(track_id: int) -> tuple[int, int, int]:
+    """Stable colour per persistent track id, cycling through a fixed palette
+    rather than hashing -- keeps low ids (the common case, few simultaneous
+    subjects) visually distinct instead of relying on hash luck."""
+    return MULTI_TRACK_PALETTE[track_id % len(MULTI_TRACK_PALETTE)]
+
+
+def _draw_multi_tracks(
+    canvas: np.ndarray,
+    tracks: list[TrackedObject],
+    *,
+    scale: int,
+    multi_track_history: dict[int, list[tuple[int, int]]],
+) -> None:
+    """Outline every persistently-identified subject from
+    `ClipDetection.multi_tracks` in its own stable colour, plus a short fading
+    trail of past centroids per id -- lets multiple simultaneous subjects (e.g.
+    two people) be told apart across the whole clip, not just the single
+    `largest`/tracked blob `_draw_trail` already shows.
+
+    Purely additive: drawn UNDER the single-track box/trail/label so the
+    feature-scoring track (still the operator's primary reference) stays on
+    top and unobscured.
+    """
+    for track in tracks:
+        color = _track_color(track.track_id)
+        x0, y0, x1, y1 = (c * scale for c in track.bbox)
+        centroid = (int((x0 + x1) / 2), int((y0 + y1) / 2))
+        history = multi_track_history.setdefault(track.track_id, [])
+        history.append(centroid)
+        del history[:-TRAIL_LENGTH]
+
+        points = history[-TRAIL_LENGTH:]
+        for age, (a, b) in enumerate(zip(points, points[1:], strict=False)):
+            weight = (age + 1) / max(len(points), 1)
+            faded = tuple(int(c * weight + 40 * (1 - weight)) for c in color)
+            cv2.line(canvas, a, b, faded, 1)
+
+        cv2.rectangle(canvas, (x0, y0), (x1, y1), color, 1)
+        label = f"#{track.track_id}"
+        if track.merged_ids:
+            label += "+" + "+".join(f"#{i}" for i in track.merged_ids)
+        _text(canvas, label, (x0, min(canvas.shape[0] - 2, y1 + 12)), color=color, scale=0.35)
+
+
 def _draw_hud(
     canvas: np.ndarray,
     *,
@@ -332,6 +394,7 @@ def render_clip(
         writer.write(panel)
 
     history: list[tuple[np.ndarray, tuple[float, float]]] = []
+    multi_track_history: dict[int, list[tuple[int, int]]] = {}
     flare_total = sum(1 for f in detection.frames if f.is_flare)
     prev_centroid: tuple[float, float] | None = None
     try:
@@ -360,6 +423,14 @@ def render_clip(
                 scaled = (contour * scale).astype(np.int32)
                 x, y, w, h = cv2.boundingRect(scaled)
                 cv2.rectangle(canvas, (x, y), (x + w, y + h), COLOR_BLOB, 1)
+
+            if detection.multi_tracks:
+                _draw_multi_tracks(
+                    canvas,
+                    detection.multi_tracks[detected.index],
+                    scale=scale,
+                    multi_track_history=multi_track_history,
+                )
 
             instant_speed = None
             blob_width_px = 0.0
@@ -445,6 +516,12 @@ def render_clip(
                 ("flare frames", f"{flare_total}/{len(detection.frames)}"),
                 ("recovered frames (appearance)", f"{recovered_total}/{len(detection.frames)}"),
                 ("reverse-filled frames", f"{reverse_total}/{len(detection.frames)}"),
+                (
+                    "multi-tracks (this frame)",
+                    str(len(detection.multi_tracks[detected.index]))
+                    if detection.multi_tracks
+                    else "n/a",
+                ),
             ]
             if features is not None:
                 live += [

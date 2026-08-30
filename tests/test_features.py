@@ -3,11 +3,15 @@ import numpy as np
 import pytest
 
 from src.features import (
+    area_stability,
     aspect_ratio,
     edge_density,
     green_light_flicker,
     green_light_ratio,
+    heading_change,
     jitter,
+    longest_detection_run,
+    normalised_speed,
     path_length,
     persistence,
     row_normalised_area,
@@ -140,6 +144,64 @@ def test_persistence_fraction():
 
 def test_persistence_zero_total_frames_is_zero():
     assert persistence(0, 0) == 0.0
+
+
+def test_longest_detection_run_prefers_unbroken_detections():
+    scattered = longest_detection_run([0, 2, 4, 6, 8, 10], 12)
+    unbroken = longest_detection_run([0, 1, 2, 3, 4, 5], 12)
+    assert scattered == pytest.approx(1 / 12)
+    assert unbroken == pytest.approx(0.5)
+
+
+def test_longest_detection_run_empty_is_zero():
+    assert longest_detection_run([], 10) == 0.0
+    assert longest_detection_run([0, 1], 0) == 0.0
+
+
+def test_area_stability_zero_for_constant_area():
+    assert area_stability([100.0, 100.0, 100.0]) == pytest.approx(0.0)
+
+
+def test_area_stability_higher_for_pulsing_blob():
+    steady = area_stability([100.0, 105.0, 98.0, 102.0])
+    pulsing = area_stability([10.0, 400.0, 20.0, 350.0])
+    assert pulsing > steady
+
+
+def test_area_stability_degenerate_inputs_are_zero():
+    assert area_stability([]) == 0.0
+    assert area_stability([50.0]) == 0.0
+    assert area_stability([0.0, 0.0]) == 0.0
+
+
+def test_normalised_speed_is_scale_invariant():
+    # Same motion-to-size ratio at two different apparent sizes.
+    small = normalised_speed([(0.0, 0.0), (2.0, 0.0), (4.0, 0.0)], blob_width=4.0)
+    large = normalised_speed([(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)], blob_width=20.0)
+    assert small == pytest.approx(large)
+    assert small == pytest.approx(0.5)
+
+
+def test_normalised_speed_degenerate_inputs_are_zero():
+    assert normalised_speed([(0.0, 0.0)], blob_width=10.0) == 0.0
+    assert normalised_speed([(0.0, 0.0), (5.0, 0.0)], blob_width=0.0) == 0.0
+
+
+def test_heading_change_zero_for_straight_track():
+    straight = [(float(i), 0.0) for i in range(6)]
+    assert heading_change(straight) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_heading_change_near_pi_for_reversing_track():
+    zigzag = [(0.0, 0.0), (10.0, 0.0), (0.0, 0.0), (10.0, 0.0), (0.0, 0.0)]
+    assert heading_change(zigzag) == pytest.approx(np.pi, abs=1e-6)
+
+
+def test_heading_change_ignores_sub_pixel_steps():
+    # Steps below min_step carry no meaningful direction, so a jittering but
+    # stationary blob must not read as a turning track.
+    jittering = [(0.0, 0.0), (0.1, 0.0), (0.0, 0.1), (0.1, 0.1)]
+    assert heading_change(jittering) == 0.0
 
 
 def test_time_of_day_deep_night_utc_is_night():

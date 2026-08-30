@@ -5,9 +5,11 @@ from src.zones import (
     classify_zone,
     in_ignore_region,
     is_beyond_depth_cutoff,
+    median_fence_distance,
     outside_pixel_fraction,
     side_name,
     signed_side,
+    track_crosses_fence,
 )
 
 # Vertical fence at x=0.5, spanning the frame top to bottom -- the typical shape
@@ -120,3 +122,34 @@ def test_outside_pixel_fraction_excludes_ignored_and_ambiguous():
 def test_outside_pixel_fraction_empty_relevant_set_is_zero():
     zone = CameraZone(fence=None, outside=None, depth_cutoff=0.0, ignore=())
     assert outside_pixel_fraction([(0.5, 0.5)], zone) == 0.0
+
+
+def test_track_crosses_fence_detects_side_change():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    crossing = [(0.2, 0.4), (0.4, 0.5), (0.7, 0.6)]
+    assert track_crosses_fence(crossing, zone) is True
+
+
+def test_track_crosses_fence_false_when_track_stays_one_side():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    assert track_crosses_fence([(0.2, 0.4), (0.3, 0.5), (0.1, 0.6)], zone) is False
+
+
+def test_track_crosses_fence_needs_fence_and_two_points():
+    with_fence = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    without_fence = CameraZone(fence=None, outside=None, depth_cutoff=0.0, ignore=())
+    assert track_crosses_fence([(0.2, 0.5)], with_fence) is False
+    assert track_crosses_fence([(0.2, 0.5), (0.8, 0.5)], without_fence) is False
+
+
+def test_median_fence_distance_even_and_odd_lengths():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    assert median_fence_distance([(0.6, 0.5), (0.9, 0.5), (0.7, 0.5)], zone) == pytest.approx(0.2)
+    assert median_fence_distance([(0.6, 0.5), (0.9, 0.5)], zone) == pytest.approx(0.25)
+
+
+def test_median_fence_distance_without_fence_or_track_is_zero():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    no_fence = CameraZone(fence=None, outside=None, depth_cutoff=0.0, ignore=())
+    assert median_fence_distance([], zone) == 0.0
+    assert median_fence_distance([(0.9, 0.5)], no_fence) == 0.0

@@ -46,11 +46,15 @@ import numpy as np  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
+    area_stability,
     aspect_ratio,
     edge_density,
     green_light_flicker,
     green_light_ratio,
+    heading_change,
     jitter,
+    longest_detection_run,
+    normalised_speed,
     path_length,
     persistence,
     row_normalised_area,
@@ -58,7 +62,11 @@ from src.features import (  # noqa: E402
     solidity,
     time_of_day,
 )
-from src.zones import outside_pixel_fraction  # noqa: E402
+from src.zones import (  # noqa: E402
+    median_fence_distance,
+    outside_pixel_fraction,
+    track_crosses_fence,
+)
 
 FEATURE_COLUMNS = (
     "channel_id",
@@ -79,6 +87,12 @@ FEATURE_COLUMNS = (
     "persistence",
     "motion_pixel_fraction",
     "blob_count",
+    "longest_detection_run",
+    "area_stability",
+    "normalised_speed",
+    "heading_change",
+    "fence_crossed",
+    "median_fence_distance",
 )
 
 
@@ -168,6 +182,8 @@ def extract_clip_features(
     kernel = np.ones((3, 3), np.uint8)
 
     centroids: list[tuple[float, float]] = []
+    blob_areas: list[float] = []
+    detected_indices: list[int] = []
     whole_frame_green_ratios: list[float] = []
     frames_detected = 0
     best_contour: np.ndarray | None = None
@@ -177,7 +193,7 @@ def extract_clip_features(
     motion_pixel_fraction = 0.0
     blob_count = 0
 
-    for frame, gray in zip(considered, grays, strict=True):
+    for frame_index, (frame, gray) in enumerate(zip(considered, grays, strict=True)):
         whole_frame_green_ratios.append(green_light_ratio(frame, whole_frame))
         diff = cv2.absdiff(gray, background)
         _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
@@ -200,6 +216,8 @@ def extract_clip_features(
         if area <= 0:
             continue
         frames_detected += 1
+        detected_indices.append(frame_index)
+        blob_areas.append(area)
         # Shape features describe the subject at its clearest, not whichever
         # frame happened to be last -- tracks often end on a fading speck.
         if area > best_area:
@@ -215,6 +233,8 @@ def extract_clip_features(
 
     ref_row = reference_row if reference_row is not None else float(frame_height)
     points = normalized_contour_points(best_contour, frame_width, frame_height)
+    track = [(x / frame_width, y / frame_height) for x, y in centroids]
+    best_width = float(cv2.boundingRect(best_contour)[2])
 
     return {
         "outside_pixel_fraction": outside_pixel_fraction(points, zone),
@@ -230,6 +250,12 @@ def extract_clip_features(
         "persistence": persistence(frames_detected, len(considered)),
         "motion_pixel_fraction": motion_pixel_fraction,
         "blob_count": float(blob_count),
+        "longest_detection_run": longest_detection_run(detected_indices, len(considered)),
+        "area_stability": area_stability(blob_areas),
+        "normalised_speed": normalised_speed(centroids, best_width),
+        "heading_change": heading_change(centroids),
+        "fence_crossed": float(track_crosses_fence(track, zone)),
+        "median_fence_distance": median_fence_distance(track, zone),
     }
 
 

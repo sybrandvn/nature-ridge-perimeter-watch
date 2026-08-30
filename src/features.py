@@ -140,6 +140,80 @@ def persistence(frames_detected: int, total_frames: int) -> float:
     return frames_detected / total_frames
 
 
+def longest_detection_run(detected_frame_indices: Sequence[int], total_frames: int) -> float:
+    """Longest run of *consecutive* detected frames, as a fraction of the clip.
+
+    Complements `persistence`, which counts detected frames wherever they fall:
+    a blob seen in 60% of frames scattered one at a time is flicker, the same
+    60% in one unbroken run is a subject moving through frame.
+    """
+    if total_frames == 0 or not detected_frame_indices:
+        return 0.0
+    longest = current = 1
+    for previous, index in zip(
+        detected_frame_indices, detected_frame_indices[1:], strict=False
+    ):
+        current = current + 1 if index == previous + 1 else 1
+        longest = max(longest, current)
+    return longest / total_frames
+
+
+def area_stability(areas: Sequence[float]) -> float:
+    """Coefficient of variation (std / mean) of the tracked blob's area.
+
+    A real body keeps roughly the same silhouette between frames; a flashlight
+    pool, wind-shaken foliage or a near-lens insect swells and collapses. Lower
+    is more subject-like.
+    """
+    if len(areas) < 2:
+        return 0.0
+    mean = sum(areas) / len(areas)
+    if mean <= 0:
+        return 0.0
+    variance = sum((a - mean) ** 2 for a in areas) / len(areas)
+    return math.sqrt(variance) / mean
+
+
+def normalised_speed(centroids: Sequence[tuple[float, float]], blob_width: float) -> float:
+    """Mean per-frame centroid displacement in blob-widths ("body lengths").
+
+    Raw pixel speed conflates a distant subject with a slow one; dividing by
+    the blob's own width makes it scale-invariant, so a near insect crossing
+    the lens and a distant person walking are directly comparable.
+    """
+    if len(centroids) < 2 or blob_width <= 0:
+        return 0.0
+    steps = [
+        math.hypot(x2 - x1, y2 - y1)
+        for (x1, y1), (x2, y2) in zip(centroids, centroids[1:], strict=False)
+    ]
+    return (sum(steps) / len(steps)) / blob_width
+
+
+def heading_change(
+    centroids: Sequence[tuple[float, float]], *, min_step: float = 0.5
+) -> float:
+    """Mean absolute turn angle (radians, 0..pi) between successive motion steps.
+
+    Near-zero means a straight, deliberate track; near pi means the blob
+    reverses direction every frame, which is what insects, foliage and beam
+    flicker do. Steps shorter than `min_step` pixels are dropped -- their
+    direction is quantisation noise, not heading.
+    """
+    angles = [
+        math.atan2(y2 - y1, x2 - x1)
+        for (x1, y1), (x2, y2) in zip(centroids, centroids[1:], strict=False)
+        if math.hypot(x2 - x1, y2 - y1) >= min_step
+    ]
+    if len(angles) < 2:
+        return 0.0
+    turns = [
+        abs(((b - a + math.pi) % (2 * math.pi)) - math.pi)
+        for a, b in zip(angles, angles[1:], strict=False)
+    ]
+    return sum(turns) / len(turns)
+
+
 def green_light_flicker(whole_frame_green_ratios: Sequence[float]) -> float:
     """Std deviation of the whole-frame green-hue ratio across a clip's frames.
 

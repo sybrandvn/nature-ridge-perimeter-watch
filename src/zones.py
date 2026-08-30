@@ -124,3 +124,33 @@ def outside_pixel_fraction(points: Sequence[Point], zone: CameraZone) -> float:
     if not relevant:
         return 0.0
     return sum(1 for c in relevant if c == "outside") / len(relevant)
+
+
+def track_crosses_fence(track: Sequence[Point], zone: CameraZone) -> bool:
+    """True if a track's centroids appear on both sides of the fence line.
+
+    Track-level, unlike `outside_pixel_fraction`, which reads one frame's blob.
+    Empirically this is the strongest single separator between the guard (who
+    walks along and across the fence line, and whose beam sweeps over it) and
+    animal/incident subjects (which stay on one side for the whole clip).
+    """
+    if zone.fence is None or len(track) < 2:
+        return False
+    sides = [signed_side(p, zone.fence) for p in track]
+    return any(s > 0 for s in sides) and any(s < 0 for s in sides)
+
+
+def median_fence_distance(track: Sequence[Point], zone: CameraZone) -> float:
+    """Median absolute horizontal distance (frame-width fraction) from the fence.
+
+    Subjects that matter approach or follow the fence; sensor noise, insects
+    near the lens and wind-shaken foliage sit wherever they happen to be, which
+    on this footage is typically much farther from the fence line.
+    """
+    if zone.fence is None or not track:
+        return 0.0
+    distances = sorted(abs(signed_side(p, zone.fence)) for p in track)
+    mid = len(distances) // 2
+    if len(distances) % 2:
+        return distances[mid]
+    return (distances[mid - 1] + distances[mid]) / 2

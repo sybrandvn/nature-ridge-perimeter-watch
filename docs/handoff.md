@@ -1,13 +1,14 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
 Written 2026-08-28, updated 2026-08-29, updated again 2026-08-30 for an agent picking this up
-fresh. `docs/plan.md` is the full plan and stays authoritative; this is the short version of
-where things actually stand and what to do next.
+fresh, updated again 2026-08-31 (detection exploratory tools, see below). `docs/plan.md` is the
+full plan and stays authoritative; this is the short version of where things actually stand and
+what to do next.
 
 ## Where the project is
 
 On branch `feat/phase1-foundation` (branched off `main` at the `phase0-checkpoint` tag;
-`feat/phase0-foundations` is retired but kept). Working tree clean, 203 tests passing
+`feat/phase0-foundations` is retired but kept). Working tree clean, 305 tests passing
 (`uv run ruff check . && uv run pytest -q`).
 
 Phase 0 is merged to `main` as a checkpoint, not a clean sign-off — see `docs/plan.md`'s
@@ -176,6 +177,39 @@ the Phase 0 spike, so there was nothing to add there. What was actually built:
 Next up is Phase 2 (corpus and CV: camera-ID parsing hardening, resumable full backfill, cached
 blob tracks, zone application, rule-engine classifier) — still gated on the user's gate 2
 pass/fail call for anything threshold-dependent.
+
+## Detection exploratory tools (2026-08-30/31)
+
+Off the phased plan — a debugging/tuning pass on the spike-2 detector prompted by specific hard
+clips (a camouflaged rooikat, a man whose accomplice's hand was drowning him out, a barely-visible
+dassie). `scripts/motion_heatmap.py` (new) and `scripts/spike.py` both changed; 305 tests passing.
+
+- **`scripts/motion_heatmap.py`** — standalone CLI, not wired into `spike.py`. Accumulates a
+  per-pixel change signal across a whole clip and colorizes it, for judging where a marginal
+  subject moved when per-frame detection only shows a dot. Normalises by the 90th percentile of
+  *active* pixels, not the frame max — on the two-person clip a hand near the camera peaked ~4x
+  the second man's whole body, so max-normalisation discarded 85% of the body's genuinely
+  detected signal under the final display gate.
+- **`detect_clip` anchor exemplar pass** (`_anchor_exemplar_index`/`_anchor_trace`, on by default
+  via `anchor_refine=True`) — picks the real (non-appearance-recovered) detection closest to the
+  clip's median tracked size and sweeps that one fixed crop forward and backward, filling frames
+  the existing forward/backward passes leave with no box at all. 60 labelled clips: boxless
+  frames 36 → 12, box-size jitter and centre-path smoothness unchanged.
+- **Checked and rejected, with numbers recorded in the code so they aren't retried:**
+  multi-scale template matching (box flickers between per-frame best scales); overwriting
+  already-recovered boxes with the anchor exemplar (worse than leaving the drifting per-frame
+  template alone); using the motion heatmap as a detection search prior (60-68% of frame lights
+  up on vegetation-heavy clips — it's real wind motion, not signal); growing the tracked contour
+  via a sliding-window "corroborated by neighbouring frames" test (only 2.2% of motion pixels sit
+  within 20px of the tracked box across 60 clips, 47.3% sit >60px away — the existing
+  `fragment_close_kernel_size` MORPH_CLOSE already recovers what's reachable).
+- Debug clips re-rendered via `scripts/render_debug.py` after all of the above (2026-08-31):
+  cam08/7360 (rooikat) and cam08/4053 (man) both track correctly; cam05/18270 (dassie) still only
+  a 9px recovered box, expected given how faint its signal is; cam10/4042 correctly shows an IR
+  flare frame with 12 spurious multi-tracks scattered across a bush, not a real subject — this is
+  the same clip that lit up the motion heatmap and is why it was rejected as a prior.
+- Full findings and every rejected variant's measurements: `/memories/repo/nature-ridge-
+  conventions.md`.
 
 ## Conventions
 

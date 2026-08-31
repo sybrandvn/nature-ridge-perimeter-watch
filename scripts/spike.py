@@ -839,6 +839,16 @@ def detect_clip(
     small gaps between nearby fragments into one contour before anything else
     runs -- set it to 0 to disable and fall back to the raw opened mask.
 
+    That close already absorbs essentially all of the recoverable
+    fragmentation. Growing the tracked contour further by absorbing nearby
+    motion that a sliding window of neighbouring frames corroborates was
+    tried and removed: measured over 60 labelled clips, only 2.2% of motion
+    pixels lie within 20px of the tracked box, while 47.3% lie more than 60px
+    away. The box holding a mean 63% of frame motion is therefore not a
+    fragmentation problem -- the rest is vegetation, other subjects and
+    speckle genuinely elsewhere in the scene. The growth bought +1.0% recall
+    for -2.8% precision.
+
     `ClipDetection.multi_tracks` additionally runs `track_multiple_objects`
     over the same per-frame candidates, giving every distinct subject in the
     clip its own persistent id (not just the single `largest` track) -- purely

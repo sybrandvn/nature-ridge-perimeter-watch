@@ -8,7 +8,7 @@ what to do next.
 ## Where the project is
 
 On branch `feat/phase1-foundation` (branched off `main` at the `phase0-checkpoint` tag;
-`feat/phase0-foundations` is retired but kept). Working tree clean, 305 tests passing
+`feat/phase0-foundations` is retired but kept). Working tree clean, 306 tests passing
 (`uv run ruff check . && uv run pytest -q`).
 
 Phase 0 is merged to `main` as a checkpoint, not a clean sign-off — see `docs/plan.md`'s
@@ -182,7 +182,7 @@ pass/fail call for anything threshold-dependent.
 
 Off the phased plan — a debugging/tuning pass on the spike-2 detector prompted by specific hard
 clips (a camouflaged rooikat, a man whose accomplice's hand was drowning him out, a barely-visible
-dassie). `scripts/motion_heatmap.py` (new) and `scripts/spike.py` both changed; 305 tests passing.
+dassie). `scripts/motion_heatmap.py` (new) and `scripts/spike.py` both changed; 306 tests passing.
 
 - **`scripts/motion_heatmap.py`** — standalone CLI, not wired into `spike.py`. Accumulates a
   per-pixel change signal across a whole clip and colorizes it, for judging where a marginal
@@ -210,6 +210,26 @@ dassie). `scripts/motion_heatmap.py` (new) and `scripts/spike.py` both changed; 
   the same clip that lit up the motion heatmap and is why it was rejected as a prior.
 - Full findings and every rejected variant's measurements: `/memories/repo/nature-ridge-
   conventions.md`.
+
+**Anchor sweep runaway lock, fixed (2026-08-31).** User feedback after watching re-rendered debug
+clips: cam08/7360 (rooikat) tracking is acceptable given the noisy footage; cam15/15454
+(porcupine) recovery lingers slightly past when the subject is actually gone (mild); cam10/21524
+(two men exiting frame) was the real bug — after they leave, the recovery locked onto a static
+background patch and held it, unmoving, for the last 16 of 43 frames, having jumped there via a
+fast, wrong-direction leap first. Root cause: `_anchor_trace` (added earlier this session) had no
+cap on consecutive matches, unlike `_run_track_pass`'s existing `max_recovered_streak` — once the
+real subject leaves the search window for good, nothing stops the fixed exemplar from matching an
+unrelated static patch that merely resembles it, and because that patch never moves it keeps
+re-matching itself at high confidence indefinitely. Fixed with a new required `max_streak` param
+on `_anchor_trace` and a `detect_clip` kwarg `max_anchor_streak` (default 4). Verified on
+cam10/21524: the false-locked frames are now correctly `None` (no box) instead of a confident
+wrong answer. Measured on 60 labelled clips: geometry proxies are flat to slightly better than
+baseline at this cap (jitter .2226→.2190, jerk 12.17→12.01) — capping the rare runaway case costs
+nothing in the general population. Tried reducing `max_recovered_streak` itself first (12→4) —
+rejected, it made general-population tracking measurably worse (jitter .2226→.320, jerk
+12.17→18.70) because a shorter forward-pass streak more often hands off to the backward pass
+instead, and that handoff discontinuity is itself worse than a longer single streak. Full
+measurements: `/memories/repo/nature-ridge-conventions.md`.
 
 ## Conventions
 

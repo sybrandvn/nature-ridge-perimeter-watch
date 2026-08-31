@@ -13,6 +13,7 @@ from src.features import (
     green_light_mask,
     green_light_ratio,
     heading_change,
+    ignore_region_mask,
     jitter,
     longest_detection_run,
     normalised_speed,
@@ -137,6 +138,49 @@ def test_green_light_ratio_ignores_dim_green():
 def test_green_light_flicker_high_for_swinging_beam():
     # on/off/on/off, like a flashlight beam swinging in and out of frame
     assert green_light_flicker([0.0, 0.8, 0.0, 0.7, 0.0]) > 0.3
+
+
+def test_ignore_region_mask_flags_only_the_configured_polygon():
+    # Normalised top-left quarter of a 100x100 frame.
+    polygon = [((0.0, 0.0), (0.5, 0.0), (0.5, 0.5), (0.0, 0.5))]
+    mask = ignore_region_mask(100, 100, polygon)
+    assert mask[10, 10]  # inside the polygon
+    assert not mask[90, 90]  # outside the polygon
+
+
+def test_ignore_region_mask_empty_when_no_polygons():
+    mask = ignore_region_mask(100, 100, [])
+    assert not np.any(mask)
+
+
+def test_ignore_region_mask_skips_degenerate_polygons():
+    # A polygon with fewer than 3 points can't enclose an area -- should be
+    # silently skipped rather than raising or filling the whole frame.
+    mask = ignore_region_mask(100, 100, [((0.0, 0.0), (0.5, 0.5))])
+    assert not np.any(mask)
+
+
+def test_green_light_ratio_exclude_mask_ignores_a_known_light_region():
+    # A stationary light (or lens edge/vignette artifact) sitting inside a
+    # configured exclude region should not count towards the ratio, even
+    # though it reads exactly like the guard's flashlight to the hue check.
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (29, 29), (0, 255, 0), thickness=-1)  # solid green (BGR)
+    contour = _rect_contour(10, 10, 20, 20)
+    exclude_mask = np.zeros((50, 50), dtype=bool)
+    exclude_mask[10:30, 10:30] = True  # covers the whole green region
+
+    assert green_light_ratio(frame, contour, exclude_mask=exclude_mask) == pytest.approx(0.0)
+
+
+def test_green_light_ratio_exclude_mask_leaves_other_green_pixels_intact():
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (29, 29), (0, 255, 0), thickness=-1)  # solid green (BGR)
+    contour = _rect_contour(10, 10, 20, 20)
+    exclude_mask = np.zeros((50, 50), dtype=bool)
+    exclude_mask[0:5, 0:5] = True  # nowhere near the green region
+
+    assert green_light_ratio(frame, contour, exclude_mask=exclude_mask) > 0.9
 
 
 def test_green_light_flicker_zero_for_steady_signal():

@@ -966,6 +966,69 @@ def test_extract_clip_features_zeroes_green_light_in_broad_daylight_colour(monke
     assert result["green_light_flicker"] == 0.0
 
 
+def test_detect_clip_ignore_polygons_mask_out_a_stationary_light(monkeypatch, tmp_path):
+    # A stationary "light" that flickers slightly frame-to-frame (like a real
+    # IR-lit fixture left in view, not perfectly static) still diffs against
+    # the median background and would otherwise count as its own blob every
+    # frame, alongside the real tracked subject.
+    def _frame_with_subject_and_light(pos: int, light_on: bool) -> np.ndarray:
+        frame = _frame_with_square(pos)
+        if light_on:
+            cv2.rectangle(frame, (2, 2), (10, 10), (0, 255, 0), thickness=-1)
+        return frame
+
+    positions = (5, 12, 19, 26, 33, 40)
+    frames = [
+        _frame_with_subject_and_light(pos, light_on=i % 2 == 0) for i, pos in enumerate(positions)
+    ]
+
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    unmasked = spike.detect_clip(str(tmp_path / "clip.mp4"), threshold=18)
+    assert unmasked is not None
+    assert any(len(d.blobs) >= 2 for d in unmasked.frames)  # subject + flickering light
+
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    ignore_polygons = (((0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)),)
+    masked = spike.detect_clip(
+        str(tmp_path / "clip.mp4"), threshold=18, ignore_polygons=ignore_polygons
+    )
+    assert masked is not None
+    assert all(len(d.blobs) <= 1 for d in masked.frames)  # light masked out, subject left
+
+
+def test_extract_clip_features_ignore_region_suppresses_light_blob_count_and_flicker(
+    monkeypatch, tmp_path
+):
+    def _frame_with_subject_and_light(pos: int, light_on: bool) -> np.ndarray:
+        frame = _frame_with_square(pos)
+        if light_on:
+            cv2.rectangle(frame, (2, 2), (10, 10), (0, 255, 0), thickness=-1)
+        return frame
+
+    positions = (5, 12, 19, 26, 33, 40)
+    frames = [
+        _frame_with_subject_and_light(pos, light_on=i % 2 == 0) for i, pos in enumerate(positions)
+    ]
+
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result_unmasked = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    ignore_zone = CameraZone(
+        fence=_ZONE.fence,
+        outside=_ZONE.outside,
+        depth_cutoff=_ZONE.depth_cutoff,
+        ignore=(((0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)),),
+    )
+    result_masked = spike.extract_clip_features(str(tmp_path / "clip.mp4"), ignore_zone)
+
+    assert result_unmasked is not None
+    assert result_masked is not None
+    assert result_masked["blob_count"] < result_unmasked["blob_count"]
+    assert result_unmasked["green_light_flicker"] > 0.005
+    assert result_masked["green_light_flicker"] == pytest.approx(0.0)
+
+
 def test_iter_labelled_clips_with_files_requires_both_file_and_label(tmp_path: Path):
     conn = db.connect(tmp_path / "t.db")
     db.upsert_clip(

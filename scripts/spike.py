@@ -56,6 +56,7 @@ from src.features import (  # noqa: E402
     green_light_flicker,
     green_light_ratio,
     heading_change,
+    ignore_region_mask,
     jitter,
     longest_detection_run,
     normalised_speed,
@@ -782,9 +783,16 @@ def detect_clip(
     max_size_change_ratio: float = 4.0,
     anchor_refine: bool = True,
     max_anchor_streak: int = 4,
+    ignore_polygons: tuple[tuple[tuple[float, float], ...], ...] = (),
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
+
+    `ignore_polygons` (normalised [0, 1] points, `CameraZone.ignore`) are
+    masked out of every frame's motion diff before contour-finding, so a known
+    fixed artifact -- a stationary light left in view, or a lens edge/vignette
+    colour-fringing band -- can never itself become a tracked blob or inflate
+    `blob_count`, regardless of how much it moves/flickers in IR.
 
     Consecutive-frame differencing was tried first and failed on the real
     footage: these cameras change IR gain/illuminator state as a global
@@ -950,6 +958,9 @@ def detect_clip(
 
     flares = flare_frames(medians, tolerance=flare_tolerance)
     max_jump_distance = max_track_jump_fraction * (frame_width**2 + frame_height**2) ** 0.5
+    ignore_mask = (
+        ignore_region_mask(frame_width, frame_height, ignore_polygons) if ignore_polygons else None
+    )
 
     masks: list[np.ndarray] = []
     per_frame_contours: list[list[np.ndarray]] = []
@@ -962,6 +973,8 @@ def detect_clip(
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         if close_kernel is not None:
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
+        if ignore_mask is not None:
+            mask[ignore_mask] = 0
         frame_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         masks.append(mask)
         per_frame_contours.append(list(frame_contours))
@@ -1149,12 +1162,16 @@ def extract_clip_features(
         flare_tolerance=flare_tolerance,
         max_flare_fraction=max_flare_fraction,
         template_match_threshold=template_match_threshold,
+        ignore_polygons=zone.ignore,
     )
     if detection is None:
         return None
 
     frame_width, frame_height = detection.frame_width, detection.frame_height
     considered = detection.frames
+    ignore_mask = (
+        ignore_region_mask(frame_width, frame_height, zone.ignore) if zone.ignore else None
+    )
 
     centroids: list[tuple[float, float]] = []
     # Genuine bg-diff hits only (excludes recovered/filled_by_reverse frames) --
@@ -1181,7 +1198,9 @@ def extract_clip_features(
     blob_count = 0
 
     for detected in considered:
-        whole_frame_green_ratios.append(green_light_ratio(detected.frame, whole_frame))
+        whole_frame_green_ratios.append(
+            green_light_ratio(detected.frame, whole_frame, exclude_mask=ignore_mask)
+        )
         color_fractions.append(color_saturation_fraction(detected.frame))
         # Peak-frame readings, not an average -- a storm/wind frame with motion
         # scattered across many small blobs (bushes, branches) reads very
@@ -1238,7 +1257,9 @@ def extract_clip_features(
         "saturation_ratio": saturation_ratio(best_frame, best_contour),
         "color_fraction": color_fraction,
         "green_light_ratio": (
-            0.0 if is_daylight_color else green_light_ratio(best_frame, best_contour)
+            0.0
+            if is_daylight_color
+            else green_light_ratio(best_frame, best_contour, exclude_mask=ignore_mask)
         ),
         "green_light_flicker": (
             0.0 if is_daylight_color else green_light_flicker(whole_frame_green_ratios)
@@ -1294,7 +1315,7 @@ def run_spike(
 
     rows: list[dict[str, Any]] = []
     for clip in iter_labelled_clips_with_files(conn, camera_id=camera_id):
-        features = extract_clip_features(clip["file_path"], camera.zone)
+        features = extract_clip_features(clip["file_path"], camera.zone_at(clip["timestamp"]))
         if features is None:
             continue
         rows.append(

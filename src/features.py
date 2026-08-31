@@ -108,6 +108,7 @@ def green_light_ratio(
     hue_high: int = 85,
     min_saturation: int = 60,
     min_value: int = 60,
+    exclude_mask: np.ndarray | None = None,
 ) -> float:
     """Fraction of contour pixels whose HSV hue falls in the green band with
     enough saturation/brightness to be a real light source rather than IR noise.
@@ -116,10 +117,18 @@ def green_light_ratio(
     clips, which is a narrower and likely more reliable signal than
     `saturation_ratio` alone (that also fires on any colour anomaly, e.g. a
     reddish insect glare). Hue bounds use OpenCV's 0-179 scale.
+
+    `exclude_mask`, when given (see `ignore_region_mask`), removes pixels from
+    both the numerator and denominator -- a known per-camera artifact region
+    (a stationary light left permanently in frame, or lens edge/vignette
+    colour fringing) would otherwise read identically to the guard's flashlight
+    to this hue check alone.
     """
     contour_mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
     cv2.drawContours(contour_mask, [contour], -1, color=255, thickness=-1)
     inside = contour_mask == 255
+    if exclude_mask is not None:
+        inside &= ~exclude_mask
     if not np.any(inside):
         return 0.0
     green = green_light_mask(
@@ -130,6 +139,29 @@ def green_light_ratio(
         min_value=min_value,
     )
     return float(np.count_nonzero(green[inside])) / int(np.count_nonzero(inside))
+
+
+def ignore_region_mask(
+    frame_width: int, frame_height: int, ignore_polygons: Sequence[Sequence[tuple[float, float]]]
+) -> np.ndarray:
+    """Boolean pixel mask, True inside any configured ignore polygon.
+
+    `ignore_polygons` are normalised (x, y) in [0, 1] (`CameraZone.ignore`),
+    same convention as `src.zones`. Used to keep a known, fixed camera-specific
+    artifact region -- a stationary light left in view, or a lens edge/vignette
+    colour-fringing band -- out of both motion contour detection and the
+    green-light hue check, without it needing to look like a real subject or
+    flashlight to either.
+    """
+    mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
+    for polygon in ignore_polygons:
+        if len(polygon) < 3:
+            continue
+        points = np.array(
+            [(x * frame_width, y * frame_height) for x, y in polygon], dtype=np.int32
+        )
+        cv2.fillPoly(mask, [points], 1)
+    return mask.astype(bool)
 
 
 def edge_density(frame_bgr: np.ndarray, contour: np.ndarray) -> float:

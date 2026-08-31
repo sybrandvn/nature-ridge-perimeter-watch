@@ -52,7 +52,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from scripts.label import _event_key  # noqa: E402
+from scripts.label import (
+    _EVENT_TS_RE,  # noqa: E402
+    _event_key,  # noqa: E402
+)
 from scripts.spike import (  # noqa: E402
     ClipDetection,
     TrackedObject,
@@ -645,6 +648,7 @@ def _resolve_clips(args, conn) -> list[dict]:
                 "file_path": args.clip,
                 "label": "",
                 "startup_state": None,
+                "timestamp": None,
             }
         ]
 
@@ -674,6 +678,7 @@ def _resolve_clips(args, conn) -> list[dict]:
                 "file_path": row["file_path"],
                 "label": label,
                 "startup_state": label_row["startup_state"] if label_row is not None else None,
+                "timestamp": row["timestamp"],
             }
         )
 
@@ -743,11 +748,14 @@ def main(argv: list[str] | None = None) -> int:
         else:
             out_path = str(out_dir / f"{clip['camera_id']}_{clip['message_id']}.mp4")
         title = f"{clip['camera_id']}/{clip['message_id']} {clip['label']}".strip()
+        ts_match = _EVENT_TS_RE.search(clip.get("caption") or "")
+        if ts_match:
+            title += f" @ {ts_match.group(1)}"  # embedded camera time, site-local (SAST)
         if clip.get("startup_state"):
             title += f" [startup_state={clip['startup_state']}]"
         result = render_clip(
             clip["file_path"],
-            camera.zone,
+            camera.zone_at(clip.get("timestamp")),
             out_path=out_path,
             title=title,
             scale=args.scale,

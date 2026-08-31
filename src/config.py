@@ -12,7 +12,8 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -185,6 +186,33 @@ class Camera:
     order: int | None
     zone: CameraZone
     threshold_overrides: Mapping[str, Any]
+    # Dated geometry history for cameras that were re-aimed/re-mounted, sorted
+    # ascending by effective_from (None sorts first: "applies from the start").
+    # Empty for every camera with only ever one geometry (the common case) --
+    # `zone` is then always returned regardless of timestamp. See docs/plan.md
+    # "Geometry model".
+    zone_history: tuple[tuple[datetime | None, CameraZone], ...] = field(default=())
+
+    def zone_at(self, timestamp: datetime | str | None) -> CameraZone:
+        """The geometry in effect at `timestamp` (a clip's timestamp), falling
+        back to `zone` (the most recent geometry) if there's no dated history
+        or the timestamp can't be resolved.
+        """
+        if not self.zone_history or timestamp is None:
+            return self.zone
+        if isinstance(timestamp, str):
+            try:
+                ts = _parse_iso_timestamp(timestamp)
+            except ValueError:
+                return self.zone
+        else:
+            ts = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)
+        applicable = [
+            zone
+            for effective_from, zone in self.zone_history
+            if effective_from is None or effective_from <= ts
+        ]
+        return applicable[-1] if applicable else self.zone_history[0][1]
 
 
 @dataclass(frozen=True)
@@ -257,7 +285,7 @@ def load_cameras_config(path: str | Path) -> CamerasConfig:
                 )
             seen_orders[order] = camera_id
 
-        zone = _parse_zone(camera_id, entry)
+        zone, zone_history = _parse_camera_zones(camera_id, entry)
 
         overrides = entry.get("threshold_overrides") or {}
         if not isinstance(overrides, dict):
@@ -271,10 +299,69 @@ def load_cameras_config(path: str | Path) -> CamerasConfig:
                 order=order,
                 zone=zone,
                 threshold_overrides=overrides,
+                zone_history=zone_history,
             )
         )
 
     return CamerasConfig(cameras=tuple(cameras), unknown_camera_id=str(unknown_camera_id))
+
+
+_ZONE_FIELDS = ("fence", "outside", "depth_cutoff", "ignore")
+
+
+def _parse_camera_zones(
+    camera_id: str, entry: dict[str, Any]
+) -> tuple[CameraZone, tuple[tuple[datetime | None, CameraZone], ...]]:
+    """Parse a camera's geometry: either a single flat zone (the common case),
+    or -- for a camera that was re-aimed/re-mounted -- a `zones` list of dated
+    entries. `zone` is always the current (most recent) geometry; `zone_history`
+    is empty unless `zones` was used. See docs/plan.md "Geometry model".
+    """
+    raw_zones = entry.get("zones")
+    if raw_zones is None:
+        return _parse_zone(camera_id, entry), ()
+
+    if any(field_name in entry for field_name in _ZONE_FIELDS):
+        raise ConfigError(
+            f"cameras.yaml: {camera_id!r} must not mix top-level fence/outside/"
+            f"depth_cutoff/ignore with a 'zones' list"
+        )
+    if not isinstance(raw_zones, list) or not raw_zones:
+        raise ConfigError(f"cameras.yaml: {camera_id!r} zones must be a non-empty list")
+
+    parsed: list[tuple[datetime | None, CameraZone]] = []
+    seen_effective_from: set[datetime | None] = set()
+    for item in raw_zones:
+        if not isinstance(item, dict):
+            raise ConfigError(f"cameras.yaml: {camera_id!r} each zones entry must be a mapping")
+        effective_from = _parse_effective_from(camera_id, item.get("effective_from"))
+        if effective_from in seen_effective_from:
+            raise ConfigError(
+                f"cameras.yaml: {camera_id!r} duplicate zones effective_from {effective_from}"
+            )
+        seen_effective_from.add(effective_from)
+        parsed.append((effective_from, _parse_zone(camera_id, item)))
+
+    parsed.sort(key=lambda pair: pair[0] or datetime.min.replace(tzinfo=UTC))
+    return parsed[-1][1], tuple(parsed)
+
+
+def _parse_iso_timestamp(value: str) -> datetime:
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _parse_effective_from(camera_id: str, value: Any) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return _parse_iso_timestamp(str(value))
+    except ValueError as exc:
+        raise ConfigError(
+            f"cameras.yaml: {camera_id!r} zones effective_from invalid: {value!r}"
+        ) from exc
 
 
 def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:

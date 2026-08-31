@@ -53,10 +53,21 @@ cameras:
   - id: cam01a
     aliases: ["MOTIONVIEWER 1A"]
     order: 1
-    # Same red-trace/color-threshold method as cam01 (same physical mount).
-    fence: [[0.3975, 0.1823], [0.3285, 0.3844], [0.2582, 0.5865], [0.188, 0.7885], [0.1191, 0.9906]]
-    outside: right
-    depth_cutoff: 0.05
+    # 2026-08-31: confirmed remounted between message_id 21980 (2026-08-05
+    # 17:18:31Z, old framing intact) and 21981 (2026-08-05 17:22:15Z, new
+    # framing already in place) -- a ~4-minute window, bisected via
+    # scripts/visualize_zone.py over a spread of historical clips. Old fence
+    # traced by the same red-trace/color-threshold method as cam01 (same
+    # physical mount); new fence traced by the user over the middle frame of
+    # data/history/cam01a/22635.mp4 (post-remount, daylight).
+    zones:
+      - fence: [[0.3975, 0.1823], [0.3285, 0.3844], [0.2582, 0.5865], [0.188, 0.7885], [0.1191, 0.9906]]
+        outside: right
+        depth_cutoff: 0.05
+      - effective_from: "2026-08-05T17:22:15Z"
+        fence: [[0.4365, 0.1052], [0.1135, 0.999]]
+        outside: right
+        depth_cutoff: 0.05
   # Confirmed by the user 2026-08-28: faces the OPPOSITE way to most perimeter
   # cameras -- open ground in frame is the interior side, not exterior.
   - id: cam01b
@@ -133,7 +144,12 @@ cameras:
     # (both traces landed within ~0.01 of each other), re-extracted via the
     # standard red-trace/color-threshold recipe (linear fit through the traced
     # pixels).
-    fence: [[0.2114, 0.9969], [0.4474, 0.1604]]
+    # 2026-08-31: re-traced a third time over data/history/cam08/4292.mp4
+    # (clearer fence-top visibility per the user) -- bottom point moved further
+    # left again (0.21 -> 0.13), top point unchanged within noise (~0.006).
+    # Verified via scripts/visualize_zone.py over the same frame: line tracks
+    # the mesh post edge, not the diagonal cable distractor to its left.
+    fence: [[0.1282, 0.9958], [0.4409, 0.1854]]
     outside: right
     depth_cutoff: 0.05
   - id: cam09

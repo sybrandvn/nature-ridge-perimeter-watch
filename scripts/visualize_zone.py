@@ -98,13 +98,19 @@ def main() -> None:  # pragma: no cover - thin CLI wrapper
     parser.add_argument("video_path")
     parser.add_argument("camera_id")
     parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "--timestamp",
+        default=None,
+        help="Clip timestamp (ISO 8601), to pick the dated geometry in effect then. "
+        "Defaults to the camera's current (most recent) geometry.",
+    )
     args = parser.parse_args()
 
     cameras_cfg = load_cameras_config("config/cameras.yaml")
     camera = cameras_cfg.by_id(args.camera_id)
     if camera is None:
         raise ValueError(f"Unknown camera id {args.camera_id!r}")
-    out = render(args.video_path, camera.zone, out_path=args.out)
+    out = render(args.video_path, camera.zone_at(args.timestamp), out_path=args.out)
     print(f"Wrote {out}")
 
 

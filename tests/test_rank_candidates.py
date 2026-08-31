@@ -126,6 +126,9 @@ def test_collect_features_uses_injected_extract_fn(tmp_path: Path):
     class _Camera:
         zone = CameraZone(fence=None, outside=None, depth_cutoff=0.0, ignore=())
 
+        def zone_at(self, timestamp):
+            return self.zone
+
     def fake_extract(file_path, zone):
         return {"aspect_ratio": 1.0}
 

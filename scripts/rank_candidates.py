@@ -97,7 +97,7 @@ def collect_features(
         if camera is None:
             unknown_cameras.add(clip["camera_id"])
             continue
-        features = extract_fn(clip["file_path"], camera.zone)
+        features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]))
         row = {
             "channel_id": clip["channel_id"],
             "message_id": clip["message_id"],
@@ -134,7 +134,7 @@ def _extract_worker(clip: dict[str, Any]) -> dict[str, Any]:
     features = None
     if camera is not None:
         try:
-            features = extract_clip_features(clip["file_path"], camera.zone)
+            features = extract_clip_features(clip["file_path"], camera.zone_at(clip["timestamp"]))
         except Exception:
             features = None
     row["detected"] = features is not None

@@ -116,6 +116,7 @@ def iter_clips_with_files(conn: Any, *, camera_id: str | None = None) -> Iterato
             "channel_id": row["channel_id"],
             "message_id": row["message_id"],
             "camera_id": row["camera_id"],
+            "timestamp": row["timestamp"],
             "file_path": row["file_path"],
             "label": label_row["label"] if label_row is not None else None,
         }
@@ -134,7 +135,7 @@ def run_backtest(
         if camera is None:
             unknown_cameras.add(clip["camera_id"])
             continue
-        features = extract_fn(clip["file_path"], camera.zone)
+        features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]))
         row = {
             "channel_id": clip["channel_id"],
             "message_id": clip["message_id"],

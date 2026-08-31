@@ -139,6 +139,90 @@ def test_load_cameras_config_valid_with_zone(tmp_path):
     assert cfg.by_id("cam01") is cam
 
 
+def test_zones_dated_history_picks_geometry_by_timestamp(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        """
+        cameras:
+          - id: cam01a
+            zones:
+              - fence: [[0.1, 0.9], [0.6, 0.2]]
+                outside: right
+                depth_cutoff: 0.05
+              - effective_from: "2026-08-05T17:22:15Z"
+                fence: [[0.4, 0.1], [0.1, 0.99]]
+                outside: right
+                depth_cutoff: 0.05
+        """,
+    )
+    cam = load_cameras_config(path).by_id("cam01a")
+    # zone (no history awareness) is always the most recent entry.
+    assert cam.zone.fence == ((0.4, 0.1), (0.1, 0.99))
+    # before the remount: old geometry.
+    assert cam.zone_at("2026-08-05T17:00:00Z").fence == ((0.1, 0.9), (0.6, 0.2))
+    # exactly at / after the remount: new geometry.
+    assert cam.zone_at("2026-08-05T17:22:15Z").fence == ((0.4, 0.1), (0.1, 0.99))
+    assert cam.zone_at("2026-08-26T21:39:41Z").fence == ((0.4, 0.1), (0.1, 0.99))
+    # no timestamp / unparseable timestamp falls back to the current geometry.
+    assert cam.zone_at(None).fence == ((0.4, 0.1), (0.1, 0.99))
+    assert cam.zone_at("not-a-timestamp").fence == ((0.4, 0.1), (0.1, 0.99))
+
+
+def test_zones_and_flat_fields_together_raises(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        """
+        cameras:
+          - id: cam01a
+            fence: [[0.1, 0.9], [0.6, 0.2]]
+            outside: right
+            zones:
+              - fence: [[0.1, 0.9], [0.6, 0.2]]
+                outside: right
+        """,
+    )
+    with pytest.raises(ConfigError, match="must not mix"):
+        load_cameras_config(path)
+
+
+def test_zones_duplicate_effective_from_raises(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        """
+        cameras:
+          - id: cam01a
+            zones:
+              - effective_from: "2026-08-05T17:22:15Z"
+                fence: [[0.1, 0.9], [0.6, 0.2]]
+                outside: right
+              - effective_from: "2026-08-05T17:22:15Z"
+                fence: [[0.4, 0.1], [0.1, 0.99]]
+                outside: right
+        """,
+    )
+    with pytest.raises(ConfigError, match="duplicate zones effective_from"):
+        load_cameras_config(path)
+
+
+def test_zones_empty_list_raises(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01a\n    zones: []\n",
+    )
+    with pytest.raises(ConfigError, match="non-empty list"):
+        load_cameras_config(path)
+
+
+def test_no_zones_history_is_empty_and_zone_at_ignores_timestamp(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    fence: [[0.1, 0.9], [0.6, 0.2]]\n    outside: right\n",
+    )
+    cam = load_cameras_config(path).by_id("cam01")
+    assert cam.zone_history == ()
+    assert cam.zone_at("2020-01-01T00:00:00Z") is cam.zone
+
+
 def test_duplicate_camera_id_raises(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",

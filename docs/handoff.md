@@ -233,7 +233,37 @@ rejected, it made general-population tracking measurably worse (jitter .2226→.
 instead, and that handoff discontinuity is itself worse than a longer single streak. Full
 measurements: `/memories/repo/nature-ridge-conventions.md`.
 
-## Next up: storm and guard identification (session closed 2026-08-31)
+## Guard/environment separation: environment_candidate rule added (2026-08-31)
+
+Picked up the "next up" item below. Ground truth re-checked unchanged (guard 200, environment 22,
+incident 10, animal 5, resident 6, unknown 15, 96 pending). Full detail and every rejected
+alternative's measurements: `/memories/repo/nature-ridge-conventions.md`.
+
+- The actual problem wasn't "environment reads as guard" — `guard_candidate` never fired on any
+  environment clip. It was that neither class had a working positive identifier under the current
+  tracker (`guard_candidate` recall only 8.5%, `insect_candidate` now fires on 0/22 environment
+  clips — dead, the persistent-tracking work smoothed out the jitter it used to key on), so both
+  landed mostly in `unclassified`, and 7/22 environment clips were polluting
+  `animal_or_incident_candidate` on top of that.
+- Also found (not fixed): `animal_or_incident_candidate`'s `aspect_ratio < 0.95` premise has
+  inverted under the current tracker — animal+incident median aspect_ratio is now 1.24-1.41,
+  higher than guard's 1.05, the opposite of the original gate-2 doc. Still fires on 74/200 (37%)
+  of guard clips. Flagged in `scripts/backtest.py`'s docstring, not re-derived this pass.
+- Fix shipped: new `environment_candidate` category in `scripts/backtest.py::classify`,
+  `blob_count > 10` (max simultaneous motion blobs in a frame — the strongest univariate
+  discriminator found, AUC 0.933 environment-vs-guard). Checked after `guard_candidate` but before
+  the shape-based rules. Measured: 59% environment recall, 4.5% guard false-fire, **0/15 leak**
+  against the full labelled animal+incident set (hard constraint held) — verified both via the
+  sweep and a direct re-check against animal/incident alone. 3 spot-checked debug renders
+  (`scripts/render_debug.py`) confirm the rule behaves as expected, including its known limit (a
+  near-blank clip too short to accumulate the blob_count signal).
+- 309 tests passing (was 306), committed on `feat/phase1-finalisation`.
+- **Next natural step, not done this pass:** re-derive `animal_or_incident_candidate` now that its
+  aspect_ratio premise is known-inverted — the 37% guard contamination of that candidate pool is a
+  bigger unresolved problem than the guard/environment split was. Same measured-not-guessed
+  discipline as this pass; re-check against the full incident+animal set before adopting anything.
+
+## Next up: storm and guard identification (session closed 2026-08-31, picked up above)
 
 This session's tracking work (anchor sweep + its streak-cap fix, above) is done and committed.
 The next session's focus, per the user: separating `environment` false-triggers (storm/wind/rain

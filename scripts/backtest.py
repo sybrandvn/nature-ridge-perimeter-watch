@@ -6,28 +6,45 @@ real labelled footage, not invented for this script.
 
 Rules:
   - guard_candidate: green_light_ratio > 0.05 or green_light_flicker > 0.02
-    (61% recall / 2% false-fire / 0 animal+incident leakage on the labelled sample)
+    (measured 2026-08-31 against the current tracker/detector on 200 labelled
+    guard clips: 8.7% recall, degraded from the doc's original 61% -- see
+    "DAYLIGHT GATE IS SELF-DEFEATING" in repo memory. Left unchanged anyway:
+    every alternative gate design tried and rejected 2026-08-30, see
+    "Daylight-gate fix investigated and ABANDONED" in repo memory.)
+  - environment_candidate: blob_count > 10 (added 2026-08-31, checked before
+    animal_or_incident_candidate/insect_candidate so a stormy/windy clip's
+    scattered foliage blobs don't get read as a shape signal. Measured against
+    222 labelled guard+environment clips: 59% environment recall (13/22), 4.5%
+    guard false-fire (9/200), 0/15 leak against the full labelled animal+incident
+    set -- blob_count is the strongest single discriminator found for this pair,
+    AUC 0.933. Higher thresholds trade recall for guard false-fire; 10 is the
+    highest threshold with zero animal+incident leak (cam15/15454's porcupine
+    sits at exactly blob_count=10).)
   - animal_or_incident_candidate: aspect_ratio < 0.95 and green_light_ratio < 0.05
-    (75% recall / 22% precision on 12 labelled positives -- a screening signal,
-    not a verdict; guard_candidate wins if both match, since the green-light
-    exclusion is what raises this rule's precision). This category doesn't split
-    animal vs incident -- there's no validated rule for that. The finding doc's
-    median table (jitter 2.1 vs 38.1, path_length 25 vs 281, animal vs incident)
-    is included as a soft hint on candidate rows, not a rule, since it's only
-    4 vs 8 clips.
+    (measured 2026-08-31 on the current tracker: this rule's own premise has
+    inverted -- animal+incident median aspect_ratio is now 1.24-1.41, HIGHER
+    than guard's 1.05, not lower as the original finding doc assumed. Left
+    unchanged pending a real re-derivation of this rule, not touched this pass;
+    still fires on 74/200 guard clips, a known contamination of this candidate
+    pool -- do not trust its precision without re-measuring.) This category
+    doesn't split animal vs incident -- there's no validated rule for that.
   - insect_candidate: jitter > 50 and solidity < 0.85
-    (55% of labelled `environment` clips)
+    (measured 2026-08-31: 0/22 environment clips now reach jitter>50 under the
+    current tracker -- this rule is effectively dead, the persistent-tracking
+    work from 2026-08-30 smooths out the erratic jitter it used to key on.
+    Left in place, not removed, pending a decision on a replacement.)
   - no_motion: extract_clip_features found nothing to track
   - unclassified: motion detected but none of the above rules fired
 
 Known limits (read before trusting a "storm" claim from this tool -- there
-isn't one): no validated storm/rain/wind feature exists yet. An ad-hoc
-"whole-frame motion fraction" idea was tried 2026-08-29 against the 4 clips
-the user's notes flagged as storms (cam15/9944, 9954, 9956, 18948) and did
-NOT separate them from guard/environment clips (some guard/environment clips
-scored higher on the same metric). Storm clips fall into `unclassified` here,
-not a dedicated category -- inventing one without a validated feature would
-be a guess dressed up as a result. Every rule above also comes from a sample
+isn't one): there is no separate `storm` label and none should be added --
+a storm/wind/rain trigger is just one cause of an `environment` clip (user
+confirmed 2026-08-31). `environment_candidate` above identifies `environment`
+clips generally (via scattered-blob-count, not a storm-specific signal); an
+earlier ad-hoc "whole-frame motion fraction" idea was tried 2026-08-29
+specifically as a storm discriminator against the 4 clips the user's notes
+flagged as storms (cam15/9944, 9954, 9956, 18948) and did NOT separate them
+from guard/environment clips on that metric. Every rule above also comes from a sample
 of only 4-12 positive clips per class; treat every count this script produces
 as a triage pointer, never as ground truth.
 
@@ -66,6 +83,7 @@ REPORT_COLUMNS = (
     "persistence",
     "outside_pixel_fraction",
     "path_length",
+    "blob_count",
 )
 
 
@@ -73,11 +91,15 @@ def classify(features: dict[str, float] | None) -> str:
     """Pure rule lookup -- see the module docstring for what each rule means and
     where its thresholds come from. `guard_candidate` is checked first: the
     green-light exclusion in `animal_or_incident_candidate` is what raises that
-    rule's precision, so a clip matching both is a guard, not a double-count."""
+    rule's precision, so a clip matching both is a guard, not a double-count.
+    `environment_candidate` is checked next, before the shape-based rules, so a
+    stormy/windy clip's scattered blobs don't get read as a shape signal."""
     if features is None:
         return "no_motion"
     if features["green_light_ratio"] > 0.05 or features["green_light_flicker"] > 0.02:
         return "guard_candidate"
+    if features["blob_count"] > 10:
+        return "environment_candidate"
     if features["aspect_ratio"] < 0.95 and features["green_light_ratio"] < 0.05:
         return "animal_or_incident_candidate"
     if features["jitter"] > 50 and features["solidity"] < 0.85:

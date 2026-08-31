@@ -18,6 +18,7 @@ def _features(**overrides) -> dict[str, float]:
         "jitter": 1.0,
         "persistence": 0.5,
         "outside_pixel_fraction": 0.0,
+        "blob_count": 1,
     }
     base.update(overrides)
     return base
@@ -33,6 +34,21 @@ def test_classify_guard_candidate_on_green_light_ratio():
 
 def test_classify_guard_candidate_on_flicker():
     assert backtest.classify(_features(green_light_flicker=0.05)) == "guard_candidate"
+
+
+def test_classify_environment_candidate_on_blob_count():
+    assert backtest.classify(_features(blob_count=11)) == "environment_candidate"
+
+
+def test_classify_guard_wins_over_environment_blob_count():
+    features = _features(blob_count=11, green_light_ratio=0.2)
+    assert backtest.classify(features) == "guard_candidate"
+
+
+def test_classify_environment_wins_over_animal_incident_shape():
+    # high blob_count AND low aspect ratio -- environment_candidate takes priority
+    features = _features(blob_count=11, aspect_ratio=0.7)
+    assert backtest.classify(features) == "environment_candidate"
 
 
 def test_classify_animal_or_incident_candidate():

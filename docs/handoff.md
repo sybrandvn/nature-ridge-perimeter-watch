@@ -263,6 +263,98 @@ alternative's measurements: `/memories/repo/nature-ridge-conventions.md`.
   bigger unresolved problem than the guard/environment split was. Same measured-not-guessed
   discipline as this pass; re-check against the full incident+animal set before adopting anything.
 
+## HUD timestamp, more debug clips, ignore-region wiring (2026-08-31, later same session)
+
+Follow-on from the environment_candidate work above, picked up directly from the user reviewing
+those debug renders. 316 tests passing.
+
+- `scripts/render_debug.py`'s HUD title now includes the clip's embedded local (SAST) camera
+  timestamp, reusing `scripts.label._EVENT_TS_RE` (already used for event-sibling grouping) rather
+  than a new regex, e.g. `cam08/4292 guard @ 24-03-24 18:39:45`.
+- 12 more guard/environment debug clips rendered across cameras not previously spot-checked
+  (`data/reports/debug_render/guard_env_batch2/`), sampled across env_TP/env_FN/guard_TP/
+  guard_unclassified/guard_FP_env categories for variety.
+- **cam12/4033's edge-of-frame green, investigated**: measured (not guessed) via a per-pixel
+  green-hue hit-frequency heatmap across all frames of the clip. 63-75% of green-hue pixels sit
+  within 10px of the frame's top/bottom border (median edge distance 6-8px), concentrated in a
+  band across the top and bottom edges of the right two-thirds of the frame — while the visually
+  identical foliage filling the middle two-thirds of that same half of the frame shows almost no
+  green hits at all. Cross-checked against a second cam12 clip (4032), same pattern. This is
+  consistent with lens edge/vignette colour fringing (chromatic aberration, worse at the frame
+  periphery regardless of scene content), not the guard's flashlight and not real foliage colour.
+  Candidate ignore region (normalised): roughly `y < 0.30` and `y > 0.85`, `x > 0.35` — not yet
+  written to `config/cameras.yaml`, pending user confirmation.
+- **cam10's stationary light, investigated**: an attempted automated cross-clip photometric-
+  persistence sweep (which pixel is bright in >50% of frames across 40 cam10 clips) was too broad
+  to be useful (peak only 62%, huge bbox — picks up "generally lit foliage", not a specific
+  fixture). Falling back to the clip the user actually flagged (cam10/4030) worked much better: a
+  green glow just above the fence post, present in 12/13 frames, tight bbox normalised
+  x:[0.37,0.50] y:[0.0,0.26]. Cross-checked against two more cam10 clips (4034, 4049) — same
+  position each time (x:[0.37,0.50], y:[0.03,0.26]), confirming it's a genuinely fixed light, not
+  a one-off. Candidate ignore region: normalised x:[0.35,0.52] y:[0.0,0.30] (padded) — not yet
+  written to `config/cameras.yaml`, pending user confirmation.
+- **`CameraZone.ignore` wired into detection for the first time.** It existed in `src/config.py`
+  and `src/zones.py` (`in_ignore_region`/`classify_zone`, built for the future zone-classification
+  pipeline) but `scripts/spike.py`'s actual blob-detection/feature-extraction loop never consumed
+  it — confirmed zero references in `scripts/spike.py` before this change. Now:
+  - `src/features.py::ignore_region_mask(frame_width, frame_height, ignore_polygons)` rasterises
+    normalised ignore polygons to a boolean pixel mask (`cv2.fillPoly`).
+  - `scripts/spike.py::detect_clip` takes `ignore_polygons=()`; when non-empty, the mask is zeroed
+    out of every frame's motion diff before `cv2.findContours`, so a known fixed artifact region
+    can never itself become a tracked blob or inflate `blob_count`/`motion_pixel_fraction`.
+  - `src/features.py::green_light_ratio` takes `exclude_mask=None`; `extract_clip_features` builds
+    the mask once from `zone.ignore` and passes it to both the whole-frame check (feeds
+    `green_light_flicker`) and the tracked-subject check.
+  - No camera currently has any `ignore` polygons configured, so this is a no-op today — all 309
+    pre-existing tests still passed unchanged. New tests added in `tests/test_features.py` and
+    `tests/test_spike.py` cover the mask rasterisation and the end-to-end suppression.
+- **Not yet resolved: dusk/dawn/night time-of-day design.** User asked whether to use camera
+  saturation or a seasonal sunrise/sunset curve to identify dusk/dawn/night. Saturation-only is
+  likely a poor choice — already disproven by the "Daylight-gate fix investigated and ABANDONED"
+  finding (2026-08-30): the guard's own flashlight raises whole-frame saturation the same way real
+  ambient dusk/daylight colour does, and four saturation-based discriminators were all tried and
+  failed to separate the two. A seasonal sunrise/sunset curve would sidestep this (doesn't depend
+  on image content at all) but needs the site's actual latitude/longitude, which isn't stored
+  anywhere in the repo (only the UTC+2/SAST offset is known) — needs to be asked for before
+  implementing.
+- **cam08 fence re-trace: done.** User traced clip 4292's fence-top over the 4x-upscaled reference
+  frame; re-extracted via the standard red-trace/color-threshold recipe and verified with
+  `scripts/visualize_zone.py` — line tracks the mesh post edge, not the diagonal cable distractor.
+  `config/cameras.yaml`'s cam08 entry already reflects this.
+
+## Camera mount drift confirmed + dated fence-history feature (2026-08-31, later same session)
+
+User noticed cam01a's fence looked "way off" on clip 18124 but correct on clip 22635, and asked to
+find where the camera moved. Bisected both cam01a and cam06 via `scripts/visualize_zone.py` over a
+spread of historical clips (message_id + real DB timestamp), comparing scene framing frame by frame.
+
+- **cam01a: confirmed hard remount**, precisely bounded: old framing (fence post on the left,
+  vertical white plant/cable clutter) holds through message_id 21980 (2026-08-05T17:18:31Z); new
+  framing (diagonal wall/roof edge, zoomed in) is already in place by message_id 21981
+  (2026-08-05T17:22:15Z) — a ~4-minute window, same session, not gradual drift. User traced the
+  new fence over the middle frame of clip 22635 (post-remount, daylight); extracted via the
+  standard recipe: `[[0.4365, 0.1052], [0.1135, 0.999]]`.
+- **cam06: inconclusive.** Sampled framing across message_ids spanning 2024-04-15 through
+  2026-07-21 — post position/size looked broadly consistent, no obvious jump like cam01a's. Either
+  there's no real remount, or the drift is too subtle to judge from compressed thumbnails (this is
+  exactly why the repo's rule is "never read fence coordinates off a frame by eye" — turns out it
+  applies to *verifying* alignment, not just tracing it). Not resolved; needs either a sharper
+  quantitative method or the user's own side-by-side comparison.
+- **Dated fence-history schema implemented** (`docs/plan.md`'s "Geometry model" open item, now
+  built): `config/cameras.yaml` camera entries can use a `zones:` list of
+  `{effective_from, fence, outside, depth_cutoff, ignore}` entries instead of flat top-level
+  fields — mixing both on the same camera is a `ConfigError`. `effective_from` (ISO 8601, `Z` or
+  offset) is optional on the first/oldest entry (`None` sorts first, "applies from the start").
+  `Camera.zone` stays the current/most-recent geometry (every existing call site not yet updated
+  keeps working unchanged); new `Camera.zone_at(timestamp)` picks the latest entry whose
+  `effective_from` is at or before `timestamp`, falling back to `zone` if there's no history or the
+  timestamp is `None`/unparseable. `scripts/backtest.py`, `scripts/rank_candidates.py`,
+  `scripts/render_debug.py`, `scripts/spike.py` and `scripts/visualize_zone.py` (new `--timestamp`
+  flag) all updated to call `zone_at(clip["timestamp"])` instead of the static `.zone`. cam01a is
+  the first (and so far only) camera using `zones:`. 321 tests passing.
+- **Not yet done:** cam06's drift is still unresolved (no dated entry added — would need a second
+  reference trace once/if a boundary is found). No other camera has been checked for drift yet.
+
 ## Next up: storm and guard identification (session closed 2026-08-31, picked up above)
 
 This session's tracking work (anchor sweep + its streak-cap fix, above) is done and committed.

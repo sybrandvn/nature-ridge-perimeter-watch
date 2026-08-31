@@ -444,6 +444,7 @@ def test_anchor_trace_fills_frames_on_both_sides_of_the_anchor():
         anchor_template,
         search_margin=10,
         match_threshold=0.5,
+        max_streak=10,
     )
 
     assert [None if b is None else b[0] for b in boxes] == [10, 12, 14, 16, 18]
@@ -461,13 +462,39 @@ def test_anchor_trace_stops_at_first_unmatched_frame():
     anchor_template = grays[1][10:18, 10:18]
 
     boxes = spike._anchor_trace(
-        grays, 1, (10, 10, 18, 18), anchor_template, search_margin=6, match_threshold=0.9
+        grays, 1, (10, 10, 18, 18), anchor_template, search_margin=6, match_threshold=0.9,
+        max_streak=10,
     )
 
     assert boxes[0] is not None
     assert boxes[2] is not None
     assert boxes[3] is None
     assert boxes[4] is None
+
+
+def test_anchor_trace_stops_after_max_streak_even_while_still_matching():
+    # Every frame holds the same unmoving patch, so the match never fails on
+    # its own -- exactly what a static background feature that happens to
+    # resemble the exemplar looks like once the real subject has left frame.
+    # Without a cap this would sweep the whole clip.
+    grays = []
+    for _ in range(6):
+        frame = np.zeros((40, 60), dtype=np.uint8)
+        _draw_textured_patch(frame, 10, 10, 200, 100)
+        grays.append(frame)
+    anchor_template = grays[0][10:18, 10:18]
+
+    boxes = spike._anchor_trace(
+        grays, 0, (10, 10, 18, 18), anchor_template, search_margin=6, match_threshold=0.5,
+        max_streak=2,
+    )
+
+    assert boxes[0] is not None
+    assert boxes[1] is not None
+    assert boxes[2] is not None
+    assert boxes[3] is None
+    assert boxes[4] is None
+    assert boxes[5] is None
 
 
 def test_run_track_pass_drops_track_stuck_on_static_texture_after_recovered_streak():

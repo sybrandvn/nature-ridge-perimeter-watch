@@ -642,6 +642,7 @@ def _anchor_trace(
     *,
     search_margin: float,
     match_threshold: float,
+    max_streak: int,
     search_margin_fraction: float = 0.75,
     min_search_margin: float = 6.0,
 ) -> list[tuple[int, int, int, int] | None]:
@@ -655,8 +656,16 @@ def _anchor_trace(
     into background over a run of frames. Matching against a single
     never-updated crop of the clip's best-evidenced frame cannot drift.
 
-    Each direction stops at the first frame that fails to match rather than
-    guessing on past a cold trail.
+    Each direction stops at the first frame that fails to match, or after
+    `max_streak` consecutive matches, rather than guessing on past a cold
+    trail. The cap matters even though this exemplar can't drift the way a
+    refreshed template can: once the real subject has left the search window
+    for good (walked out of frame), nothing stops the exemplar from matching
+    some unrelated static background patch that merely resembles it -- and
+    because that patch never moves, it keeps re-matching itself at high
+    confidence indefinitely. Observed on a real clip where the subjects exit
+    through the frame edge: uncapped, the sweep locked onto a static patch
+    and held it, unmoving, for the remaining 16 frames of a 43-frame clip.
     """
     boxes: list[tuple[int, int, int, int] | None] = [None] * len(grays)
     boxes[anchor_index] = anchor_bbox
@@ -664,7 +673,8 @@ def _anchor_trace(
         bbox = anchor_bbox
         velocity = (0.0, 0.0)
         index = anchor_index + direction
-        while 0 <= index < len(grays):
+        steps = 0
+        while 0 <= index < len(grays) and steps < max_streak:
             margin = min(
                 search_margin,
                 _size_relative_margin(
@@ -685,6 +695,7 @@ def _anchor_trace(
             velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
             boxes[index] = match
             bbox = match
+            steps += 1
             index += direction
     return boxes
 
@@ -770,6 +781,7 @@ def detect_clip(
     max_recovered_streak: int = 12,
     max_size_change_ratio: float = 4.0,
     anchor_refine: bool = True,
+    max_anchor_streak: int = 4,
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
@@ -1028,6 +1040,7 @@ def detect_clip(
                     anchor_template,
                     search_margin=max_jump_distance,
                     match_threshold=template_match_threshold,
+                    max_streak=max_anchor_streak,
                     search_margin_fraction=track_search_margin_fraction,
                     min_search_margin=min_track_search_margin,
                 )

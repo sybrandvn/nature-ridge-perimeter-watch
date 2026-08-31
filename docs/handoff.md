@@ -1,7 +1,9 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
 Written 2026-08-28, updated 2026-08-29, updated again 2026-08-30 for an agent picking this up
-fresh, updated again 2026-08-31 (detection exploratory tools, see below). `docs/plan.md` is the
+fresh, updated again 2026-08-31 (detection exploratory tools + anchor sweep streak cap, see
+below). Session closed out 2026-08-31 with next focus set to storm/guard identification — see
+"Next up: storm and guard identification" below before starting new work. `docs/plan.md` is the
 full plan and stays authoritative; this is the short version of where things actually stand and
 what to do next.
 
@@ -230,6 +232,34 @@ rejected, it made general-population tracking measurably worse (jitter .2226→.
 12.17→18.70) because a shorter forward-pass streak more often hands off to the backward pass
 instead, and that handoff discontinuity is itself worse than a longer single streak. Full
 measurements: `/memories/repo/nature-ridge-conventions.md`.
+
+## Next up: storm and guard identification (session closed 2026-08-31)
+
+This session's tracking work (anchor sweep + its streak-cap fix, above) is done and committed.
+The next session's focus, per the user: separating `environment` false-triggers (storm/wind/rain
+shaking foliage or the camera) from real `guard` sightings — these are the two most confusable
+classes on this corpus (see the "DAYLIGHT GATE IS SELF-DEFEATING" and "Daylight-gate fix
+investigated and ABANDONED" findings in `/memories/repo/nature-ridge-conventions.md`, both about
+this exact confusion, both worth reading before proposing a new discriminator).
+
+- **There is no separate `storm` label.** User confirmed 2026-08-31: a storm trigger is just a
+  cause of an `environment` clip, not its own `VALID_LABELS` entry — do not add one. A prior
+  attempt at a storm-specific metric (fraction of frames with whole-frame-ish motion, tried
+  against 4 user-flagged storm clips: cam15/9944, 9954, 9956, 18948) failed to separate them from
+  ordinary guard/environment clips; see the `scripts/backtest.py` note in
+  `/memories/repo/nature-ridge-conventions.md` before retrying that specific approach.
+- **Plan for next session:** add more debug clips (`scripts/render_debug.py`) covering
+  guard/environment cases, especially ones the current rules misclassify, and iterate on
+  detector/feature/rule changes against them.
+- **Hard constraint: do not regress incidents or animals while tuning guard/environment.** As of
+  the last full count (`/memories/repo/nature-ridge-conventions.md`, 2026-08-30 section), ground
+  truth had 10 `incident` rows and 5 `animal` rows against 200 `guard` / 22 `environment` — re-run
+  the count at the start of the next session, don't trust this number as still current. User does
+  not expect more incidents to turn up, but does expect the backtest (`scripts/backtest.py` /
+  `scripts/rank_candidates.py`) to surface additional animal sightings over time — any
+  guard/environment rule change should be checked against the full labelled incident+animal set
+  (not just guard/environment precision) before being adopted, same discipline as the gate-2 and
+  daylight-gate investigations already in memory.
 
 ## Conventions
 

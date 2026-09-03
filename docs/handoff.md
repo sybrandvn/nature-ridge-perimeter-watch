@@ -383,6 +383,97 @@ this exact confusion, both worth reading before proposing a new discriminator).
   (not just guard/environment precision) before being adopted, same discipline as the gate-2 and
   daylight-gate investigations already in memory.
 
+## QA pass over guard_recent_long/guard_batch2, wrap-up (2026-09-03)
+
+User did two full passes watching through the debug-render reference clips (`guard_recent_long/`
+and a rebuilt `guard_batch2/`, both under `data/reports/debug_render/`, gitignored/local-only) and
+reported one issue per clip. Full findings are in
+`/memories/repo/nature-ridge-conventions.md` under "QA pass, cont. (2026-09-03)" (and the section
+above it, "Wide QA pass ... (2026-08-31, cont.)" from the prior session) — read both before
+picking this back up. One config fix landed this session (see below); everything else is a
+confirmed finding or an open design question, not yet implemented.
+
+**Only code/config change made:** `config/cameras.yaml` cam08 gained a SECOND `ignore` polygon
+(a second stationary light found on the same camera, different clip than the one already
+excluded). Verified via `uv run ruff check . --fix && uv run pytest -q` (334 passed).
+
+**Recurring theme worth prioritizing next:** `max_recovered_streak=12` forcing a track reset,
+followed by unconstrained re-acquisition onto whatever tiny or textured blob is nearby, hit 3
+separate clips in one sitting (a mounting pole, a literal spider web strand, and a 3x3px noise
+speck). No shared fix implemented yet — the single highest-value open item from this pass.
+
+**Two design questions raised by the user, not yet designed or implemented:**
+1. A per-camera `expect_illumination` config flag (verify a known light is actually visible in a
+   given clip).
+2. Auto-detecting stationary lights ("green + no movement") instead of hand-tracing an `ignore`
+   polygon per light per camera — the robust version of this needs stability checked ACROSS MANY
+   clips on the same camera over time, not just within one clip (a guard holding a flashlight
+   steady for a short clip looks identical to a fixed light within that single clip alone).
+
+Both connect to the same open background-model-architecture question raised again this session
+for cam01/16167 and cam05/4822 (dwelling/slow-drift subjects the median-background diff can't
+see) — worth one shared design conversation rather than three separate patches.
+
+**Not investigated further, treated as already-resolved or user-confirmed:** cam01a/22635
+(matches a prior R/G-ratio finding), cam03/21536, cam07/4097 (both user-confirmed-correct),
+cam06/4875 (already-documented dilution finding from the prior pass), cam11/4310 (hue collision
+checked, confirmed not a problem).
+
+## Continued QA pass: dashed-box marking, hue fix, min_reacquire_area fix, new labels (2026-09-03, later same session)
+
+Full technical detail is in `/memories/repo/nature-ridge-conventions.md` (search for the dated
+subsections named below) — this is the short version. Validated throughout with
+`uv run ruff check . --fix && uv run pytest -q`, which stayed green the whole way
+(334 -> 345 passed by the end). All 51 clips across every standing `data/reports/debug_render/`
+sample folder were re-rendered at the end, more than once, against the final code.
+
+**Implemented and shipped:**
+1. **"Mark instead of ignore" + auto-detect stationary lights.** `FrameDetection` gained an
+   additive `suppressed_light_box` field (motion inside an ignore region, captured before it's
+   zeroed for real tracking) — `render_debug.py` now draws this as a dashed box labelled
+   "IGNORED (stationary light region)" instead of showing nothing. New
+   `src.features.detect_stationary_light_mask()` auto-detects a fixed light per-clip (pixel
+   green-lit in >=80% of frames, excluding the tracked subject's own region) and feeds both the
+   render and `extract_clip_features`'s exclude_mask — a new light no longer needs a hand-traced
+   `zone.ignore` polygon first. The existing STATIONARY LIGHT marker changed from a solid contour
+   outline to a dashed box, matching the same "mark, don't hide" principle.
+2. **cam01/16167 flashlight hue miss** — `green_light_mask`/`green_light_ratio`'s `hue_low`
+   35 -> 33 (cam01's flashlight measured 34-35, one unit under the old cutoff). Validated against
+   3 reference/false-positive clips, no measurable change.
+3. **cam01/16167 light-drift fix — tried twice, both REJECTED.** Global brightness-shift
+   compensation didn't reduce noise at all. High-pass illumination filtering did clean up the
+   pole artifact but devastated real small-subject detection on 3 known-fragile animal clips
+   (rooikat -80% hit pixels, porcupine below its area gate entirely, dassie -30-50%) — rejected,
+   not shipped. cam01/16167's drift issue and the related cam05/4822 / cam11/4310
+   wrong-artifact-tracked family remain open; the only still-credible direction is a real
+   cross-clip/per-camera reference-background architecture change, deliberately not attempted
+   without explicit sign-off given its corpus-wide blast radius.
+4. **cam13/4101 min_reacquire_area fix.** New floor on `track_contour`'s fresh/unconstrained
+   reacquisition path (clip start, or right after a `max_recovered_streak` force-drop) stops a
+   dropped track from landing on a noise-speck-sized contour. This went through **two rounds of
+   correction after a full-corpus reassessment caught real regressions** a narrow reference-clip
+   validation missed (cam10's genuinely tiny, single-digit-pixel real animals were losing
+   detection entirely, or worse, locking onto a wrong static artifact) — fixed by (a) only
+   applying the floor once a real track was already established once, and (b) threading
+   chronological knowledge from the forward pass into the backward pass so a trailing noise
+   speck can't look like a legitimate "first-ever" pickup from the backward scan's own reversed
+   point of view. Final default: `min_reacquire_area=20.0`. **Lesson recorded in repo memory:
+   always sweep the full standing sample set (old vs new, all 51 clips) before trusting a
+   `detect_clip`-level change, not just a handful of reference clips.**
+5. **New/corrected labels** (channel -510921049): cam10/17146 (bird on fence), cam10/7632 (animal
+   in flare region), cam10/9405 (animal, rocky wall), cam10/4308 (guard, added to
+   `guard_batch2/`), cam10/18786+18787 (animal, event pair). cam03/9273 was briefly mislabeled
+   `animal` then corrected to `guard` per user review — also confirmed a render-only false
+   FLASHLIGHT overlay on that clip from dawn foliage sitting just under the 0.15 daylight gate
+   (matches the already-documented, already-abandoned cam03 daylight-gate confound — not a new
+   bug, not re-attempted). Confirmed-animal clips moved from `animal_check/` into
+   `animal_recent_long/`; `animal_check/` now only holds the 2 still-`unknown` cam03 clips.
+
+**Still open / not started this session:** cam05/4822 and cam11/4310 real fixes (both need the
+bigger reference-image/background-model architecture work above), cam01/16167's drift beyond the
+hue fix. See `/memories/repo/nature-ridge-conventions.md`'s newest sections for full blow-by-blow
+detail, including the exact regressions found and how each was diagnosed.
+
 ## Conventions
 
 - `uv` for everything: `uv run ruff check . --fix && uv run pytest -q` after every module change

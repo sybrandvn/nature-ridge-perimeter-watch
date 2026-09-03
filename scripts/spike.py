@@ -47,16 +47,20 @@ import numpy as np  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
+    FLASHLIGHT_SUBJECT_THRESHOLD,
     area_stability,
     aspect_ratio,
     color_saturation_fraction,
+    detect_stationary_light_mask,
     edge_density,
     flare_frames,
     flare_settle_index,
+    flashlight_bbox_overlap,
     green_light_flicker,
     green_light_ratio,
     heading_change,
     ignore_region_mask,
+    is_daylight,
     jitter,
     longest_detection_run,
     normalised_speed,
@@ -79,6 +83,7 @@ FEATURE_COLUMNS = (
     "camera_id",
     "label",
     "time_of_day",
+    "is_daylight",
     "outside_pixel_fraction",
     "aspect_ratio",
     "solidity",
@@ -86,6 +91,7 @@ FEATURE_COLUMNS = (
     "color_fraction",
     "green_light_ratio",
     "green_light_flicker",
+    "flashlight_subject_fraction",
     "row_normalised_area",
     "edge_density",
     "path_length",
@@ -184,6 +190,7 @@ def track_contour(
     size_margin_fraction: float = 0.75,
     min_size_margin: float = 6.0,
     max_size_change_ratio: float = 4.0,
+    min_reacquire_area: float = 20.0,
 ) -> np.ndarray | None:
     """Pick the candidate contour that continues an existing track, instead of
     always re-selecting the frame's largest blob independently.
@@ -217,11 +224,22 @@ def track_contour(
     caller's miss-tolerance / appearance-recovery machinery gets a chance to
     reacquire first, and only a track that's fully dropped (track_bbox is
     None again) starts fresh unconstrained.
+
+    A fresh/unconstrained start (`track_bbox is None`) still requires at least
+    `min_reacquire_area` -- without a floor here, a track force-dropped after
+    `max_recovered_streak` (or one that was never established) latches onto
+    whatever tiny contour happens to be the largest AVAILABLE one that frame,
+    which on a quiet clip can be a single noise-speck/sensor-grain contour a
+    few pixels across (observed on cam13/4101: a 9-16px contour tracked for 16
+    frames after the real subject left). Below this floor, no candidate
+    counts as plausible and this reports a miss instead, same as an active
+    track with nothing to continue onto.
     """
     if not candidates:
         return None
     if track_bbox is None:
-        return max(candidates, key=cv2.contourArea)
+        eligible = [c for c in candidates if cv2.contourArea(c) >= min_reacquire_area]
+        return max(eligible, key=cv2.contourArea) if eligible else None
 
     boxes = [_contour_bbox(c) for c in candidates]
     track_area = _bbox_area(track_bbox)
@@ -342,6 +360,8 @@ def _run_track_pass(
     min_search_margin: float = 6.0,
     max_recovered_streak: int = 12,
     max_size_change_ratio: float = 4.0,
+    min_reacquire_area: float = 20.0,
+    enforce_min_area: list[bool] | None = None,
 ) -> list[tuple[np.ndarray | None, bool]]:
     """Run the track_contour + reacquire_by_template state machine once over a
     sequence of frames, in whatever order they're given -- forward, or
@@ -375,6 +395,33 @@ def _run_track_pass(
     `max_size_change_ratio` (see `track_contour`) rejects a continuation whose
     area balloons or collapses by more than that factor from the track's own
     last size, both growing and shrinking.
+
+    `min_reacquire_area` (see `track_contour`) applies once a track has been
+    established at least once in this pass, then dropped and needs a fresh
+    re-acquisition -- e.g. right after the `max_recovered_streak` force-drop
+    above -- keeping that reset from landing on a noise-speck-sized contour
+    just because it's the largest one present. It deliberately does NOT apply
+    to a track's very first-ever acquisition (nothing established yet to drop
+    from): several confirmed real subjects in this corpus are only ever a
+    handful of pixels from their first frame onward (e.g. cam10/9405's
+    genuine animal starts at 8px) -- gating a clip's very first pickup on a
+    size floor would silently erase those rather than protect anything, since
+    there's no prior real track it could be wrongly replacing yet.
+
+    That "nothing established yet" check is only accurate in chronological
+    (forward) order -- a backward scan starts at the END of the clip, so its
+    own first pickup can be chronologically AFTER a real subject came and
+    went (e.g. cam13/4101: guard leaves, then a noise speck appears for the
+    rest of the clip) and still look like a first-ever acquisition from the
+    backward scan's own point of view, defeating the floor entirely for
+    exactly the frames it exists to protect. `enforce_min_area`, one bool per
+    frame in THIS call's own order, lets a caller supply chronological
+    knowledge the scan direction itself can't derive (see `detect_clip`, which
+    runs the forward pass first and tells the backward pass which of its
+    frames already had a real subject established somewhere earlier in real
+    time). The floor applies if EITHER this scan's own `ever_tracked` or the
+    supplied flag says so -- whichever direction learned about a real subject
+    first still protects every frame after it.
     """
     results: list[tuple[np.ndarray | None, bool]] = []
     track_bbox: tuple[int, int, int, int] | None = None
@@ -382,7 +429,10 @@ def _run_track_pass(
     recovered_streak = 0
     template: np.ndarray | None = None
     velocity = (0.0, 0.0)
-    for gray, candidates in zip(grays, candidates_per_frame, strict=True):
+    ever_tracked = False
+    for index, (gray, candidates) in enumerate(zip(grays, candidates_per_frame, strict=True)):
+        externally_enforced = enforce_min_area is not None and enforce_min_area[index]
+        floor_active = ever_tracked or bool(externally_enforced)
         contour = track_contour(
             candidates,
             track_bbox,
@@ -390,6 +440,7 @@ def _run_track_pass(
             size_margin_fraction=search_margin_fraction,
             min_size_margin=min_search_margin,
             max_size_change_ratio=max_size_change_ratio,
+            min_reacquire_area=min_reacquire_area if floor_active else 0.0,
         )
         recovered = False
         if contour is None and track_bbox is not None and template is not None:
@@ -418,6 +469,7 @@ def _run_track_pass(
                 template = None
                 velocity = (0.0, 0.0)
         else:
+            ever_tracked = True
             new_bbox = _contour_bbox(contour)
             if track_bbox is not None:
                 old_center, new_center = _bbox_center(track_bbox), _bbox_center(new_bbox)
@@ -743,6 +795,11 @@ class FrameDetection:
     recovered: bool = False  # track continued via appearance match, not a real bg-diff blob
     filled_by_reverse: bool = False  # forward pass found nothing here; a backward scan did
     filled_by_anchor: bool = False  # box came from the fixed best-frame exemplar sweep
+    # Motion this frame that would have formed a contour if not for `ignore_polygons` --
+    # None if there was none, or no ignore region at all. Never fed into tracking or
+    # feature scoring, purely so a render can show something (e.g. a swaying branch in
+    # front of a known stationary light) was suppressed there rather than nothing.
+    suppressed_light_box: tuple[int, int, int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -783,6 +840,7 @@ def detect_clip(
     max_size_change_ratio: float = 4.0,
     anchor_refine: bool = True,
     max_anchor_streak: int = 4,
+    min_reacquire_area: float = 20.0,
     ignore_polygons: tuple[tuple[tuple[float, float], ...], ...] = (),
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
@@ -900,6 +958,19 @@ def detect_clip(
     frame whose size is plausible, and traces backward through the
     intervening frames too, not just the true warmup/flare ones.
 
+    A fresh/unconstrained start (no active track, whether that's the very
+    first frame or right after a `max_recovered_streak` force-drop) requires
+    the candidate to clear `min_reacquire_area` -- without this floor, that
+    "pick whatever's largest" fallback can latch onto a single noise-speck/
+    sensor-grain contour a few pixels across just because nothing bigger is
+    present that frame (observed on cam13/4101: a real guard track was
+    followed, after he left frame, by 16 frames confidently tracking a 9-16px
+    speck drifting across the scene). Validated against the smallest known
+    genuine subjects in this corpus (a 4px-area dassie frame, a 34px porcupine
+    frame) at `min_reacquire_area=20` -- both keep tracking unaffected, while
+    cam13/4101's post-exit frames correctly report no detection instead of a
+    confident wrong one.
+
     Both passes above refresh their appearance template on every real
     detection, which is what lets them follow a genuinely changing subject.
     They can still both come up empty on a frame, so `anchor_refine` adds a
@@ -966,6 +1037,7 @@ def detect_clip(
     per_frame_contours: list[list[np.ndarray]] = []
     per_frame_blobs: list[list[np.ndarray]] = []
     per_frame_candidates: list[list[np.ndarray]] = []
+    per_frame_suppressed_boxes: list[tuple[int, int, int, int] | None] = []
     motion_fracs: list[float] = []
     for gray in grays:
         diff = cv2.absdiff(gray, background)
@@ -973,8 +1045,20 @@ def detect_clip(
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         if close_kernel is not None:
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
+        suppressed_box: tuple[int, int, int, int] | None = None
         if ignore_mask is not None:
+            suppressed = mask.copy()
+            suppressed[~ignore_mask] = 0
             mask[ignore_mask] = 0
+            if np.any(suppressed):
+                suppressed_contours, _ = cv2.findContours(
+                    suppressed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                if suppressed_contours:
+                    largest_suppressed = max(suppressed_contours, key=cv2.contourArea)
+                    if cv2.contourArea(largest_suppressed) >= min_blob_area:
+                        suppressed_box = cv2.boundingRect(largest_suppressed)
+        per_frame_suppressed_boxes.append(suppressed_box)
         frame_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         masks.append(mask)
         per_frame_contours.append(list(frame_contours))
@@ -994,12 +1078,25 @@ def detect_clip(
         "min_search_margin": min_track_search_margin,
         "max_recovered_streak": max_recovered_streak,
         "max_size_change_ratio": max_size_change_ratio,
+        "min_reacquire_area": min_reacquire_area,
     }
     forward = _run_track_pass(grays, per_frame_candidates, **track_kwargs)
+    # Tell the backward pass which original frames already had a real subject
+    # established somewhere earlier in actual time -- its own reverse
+    # traversal can't know this on its own (see _run_track_pass docstring).
+    forward_established = False
+    forward_established_by_index: list[bool] = []
+    for contour, _recovered in forward:
+        if contour is not None:
+            forward_established = True
+        forward_established_by_index.append(forward_established)
     backward = list(
         reversed(
             _run_track_pass(
-                list(reversed(grays)), list(reversed(per_frame_candidates)), **track_kwargs
+                list(reversed(grays)),
+                list(reversed(per_frame_candidates)),
+                enforce_min_area=list(reversed(forward_established_by_index)),
+                **track_kwargs,
             )
         )
     )
@@ -1033,6 +1130,7 @@ def detect_clip(
                 recovered=recovered,
                 filled_by_reverse=filled_by_reverse,
                 is_flare=flares[frame_index],
+                suppressed_light_box=per_frame_suppressed_boxes[frame_index],
             )
         )
 
@@ -1172,6 +1270,27 @@ def extract_clip_features(
     ignore_mask = (
         ignore_region_mask(frame_width, frame_height, zone.ignore) if zone.ignore else None
     )
+    # Auto-detected stationary lights (see `detect_stationary_light_mask`) supplement
+    # any hand-traced `zone.ignore` polygon -- combined into one exclude_mask so a new
+    # fixed light on a camera doesn't need its own polygon before it stops reading as
+    # the guard's flashlight. `tracked_region` (every frame's own tracked box, however
+    # it was found) is carved out first so a guard who dwells in one spot with the
+    # flashlight held steady doesn't get auto-classified as a fixed light and excluded
+    # from their own flashlight scoring.
+    tracked_region = np.zeros((frame_height, frame_width), dtype=bool)
+    for detected in considered:
+        if detected.largest is None:
+            continue
+        x, y, w, h = cv2.boundingRect(detected.largest)
+        pad = 4
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1, y1 = min(frame_width, x + w + pad), min(frame_height, y + h + pad)
+        tracked_region[y0:y1, x0:x1] = True
+    auto_light_mask = detect_stationary_light_mask(
+        [d.frame for d in considered], exclude_region=tracked_region
+    )
+    if np.any(auto_light_mask):
+        ignore_mask = auto_light_mask if ignore_mask is None else (ignore_mask | auto_light_mask)
 
     centroids: list[tuple[float, float]] = []
     # Genuine bg-diff hits only (excludes recovered/filled_by_reverse frames) --
@@ -1196,6 +1315,8 @@ def extract_clip_features(
     whole_frame = _whole_frame_contour(frame_width, frame_height)
     motion_pixel_fraction = 0.0
     blob_count = 0
+    frames_with_box = 0
+    flashlight_bbox_frames = 0
 
     for detected in considered:
         whole_frame_green_ratios.append(
@@ -1212,6 +1333,14 @@ def extract_clip_features(
         contour = detected.largest
         if contour is None:
             continue
+        frames_with_box += 1
+        if (
+            flashlight_bbox_overlap(
+                detected.frame, cv2.boundingRect(contour), exclude_mask=ignore_mask
+            )
+            > FLASHLIGHT_SUBJECT_THRESHOLD
+        ):
+            flashlight_bbox_frames += 1
         area = cv2.contourArea(contour)
         # Shape features describe the subject at its clearest, not whichever
         # frame happened to be last -- tracks often end on a fading speck. Any
@@ -1263,6 +1392,11 @@ def extract_clip_features(
         ),
         "green_light_flicker": (
             0.0 if is_daylight_color else green_light_flicker(whole_frame_green_ratios)
+        ),
+        "flashlight_subject_fraction": (
+            0.0
+            if is_daylight_color or not frames_with_box
+            else flashlight_bbox_frames / frames_with_box
         ),
         "row_normalised_area": row_normalised_area(best_contour, ref_row),
         "edge_density": edge_density(best_frame, best_contour),
@@ -1329,6 +1463,7 @@ def run_spike(
                     window_start=operating_window_start,
                     window_end=operating_window_end,
                 ),
+                "is_daylight": is_daylight(clip["timestamp"]),
                 **features,
             }
         )

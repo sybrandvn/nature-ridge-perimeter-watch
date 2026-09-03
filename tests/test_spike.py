@@ -194,6 +194,40 @@ def test_track_contour_accepts_overlapping_candidate_within_size_change_cap():
     assert result is modest_shrink
 
 
+def test_track_contour_fresh_start_rejects_candidates_below_min_reacquire_area():
+    # No active track (track_bbox=None) and every candidate is a noise-speck
+    # size -- report a miss instead of picking the "largest" tiny speck, same
+    # family as the size/distance implausibility checks above but for a fresh
+    # (re)acquisition with nothing established yet to compare against.
+    speck = _square_contour(10, 10, 3)  # area 9
+    other_speck = _square_contour(50, 50, 4)  # area 16
+    result = spike.track_contour(
+        [speck, other_speck], None, max_jump_distance=100, min_reacquire_area=20.0
+    )
+    assert result is None
+
+
+def test_track_contour_fresh_start_still_picks_largest_candidate_clearing_the_floor():
+    speck = _square_contour(10, 10, 3)  # area 9, below floor
+    real = _square_contour(50, 50, 10)  # area 100, clears floor
+    result = spike.track_contour(
+        [speck, real], None, max_jump_distance=100, min_reacquire_area=20.0
+    )
+    assert result is real
+
+
+def test_track_contour_min_reacquire_area_defaults_on_for_fresh_starts():
+    # track_contour's own default (20.0) applies even when callers don't pass
+    # it explicitly -- a lone noise-speck candidate with no active track is a
+    # miss, not a pick, unless a caller explicitly opts out with 0.0.
+    speck = _square_contour(10, 10, 3)  # area 9
+    assert spike.track_contour([speck], None, max_jump_distance=100) is None
+    assert (
+        spike.track_contour([speck], None, max_jump_distance=100, min_reacquire_area=0.0)
+        is speck
+    )
+
+
 def test_track_multiple_objects_assigns_stable_ids_to_two_independent_subjects():
     # Two subjects, far enough apart to never share a candidate, should each
     # keep the same id across every frame they appear in.
@@ -548,6 +582,46 @@ def test_run_track_pass_drops_track_stuck_on_static_texture_after_recovered_stre
     assert spike._contour_bbox(last_contour) == spike._contour_bbox(big)
 
 
+def test_run_track_pass_min_reacquire_area_blocks_noise_speck_after_track_drop():
+    # Real subject tracked for 2 frames, then leaves for good (its pixels stop
+    # being present at all, so appearance-recovery can't find anything either
+    # -- a genuine drop, not a recovery streak). Once dropped, only a
+    # noise-speck-sized candidate is available -- the default floor should
+    # report a miss instead of confidently latching onto the speck, matching
+    # the cam13/4101 "guard leaves, tracker locks onto a 9-16px speck" finding.
+    real = _square_contour(10, 10, 20)  # area 400
+    speck = _square_contour(60, 60, 3)  # area 9
+
+    def _gray(i):
+        g = np.zeros((80, 80), dtype=np.uint8)
+        if i < 2:
+            _draw_textured_patch(g, 10, 10, 200, 100)  # real subject's pixels, frames 0-1 only
+        return g
+
+    grays = [_gray(i) for i in range(6)]
+    candidates_per_frame = [[real], [real], [], [], [speck], [speck]]
+
+    default_results = spike._run_track_pass(
+        grays,
+        candidates_per_frame,
+        max_jump_distance=200,
+        max_track_miss_frames=1,
+        template_match_threshold=0.5,
+    )
+    assert default_results[4][0] is None
+    assert default_results[5][0] is None
+
+    permissive_results = spike._run_track_pass(
+        grays,
+        candidates_per_frame,
+        max_jump_distance=200,
+        max_track_miss_frames=1,
+        template_match_threshold=0.5,
+        min_reacquire_area=0.0,
+    )
+    assert permissive_results[4][0] is speck
+
+
 def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(monkeypatch):
     # A single textured subject moves across frame, well-detected by
     # background-subtraction everywhere except one frame where it's drawn at
@@ -879,6 +953,7 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
         "solidity",
         "saturation_ratio",
         "green_light_flicker",
+        "flashlight_subject_fraction",
         "row_normalised_area",
         "edge_density",
         "path_length",
@@ -966,6 +1041,61 @@ def test_extract_clip_features_zeroes_green_light_in_broad_daylight_colour(monke
     assert result["green_light_flicker"] == 0.0
 
 
+def test_extract_clip_features_flags_the_tracked_box_itself_as_the_flashlight(
+    monkeypatch, tmp_path
+):
+    # The tracked square IS the beam here (solid green), not a separate blob
+    # elsewhere in frame -- distinct from `green_light_ratio`, which only
+    # checks the single clearest frame; this should catch it persisting
+    # across most of the clip.
+    def _green_square(pos: int) -> np.ndarray:
+        frame = _blank_frame()
+        cv2.rectangle(frame, (pos, pos), (pos + 8, pos + 8), (0, 255, 0), thickness=-1)
+        return frame
+
+    positions = (5, 12, 19, 26, 33, 40)
+    frames = [_green_square(pos) for pos in positions]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
+    assert result["flashlight_subject_fraction"] > 0.5
+
+
+def test_extract_clip_features_flashlight_subject_fraction_zero_for_real_subject(
+    monkeypatch, tmp_path
+):
+    frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
+    assert result["flashlight_subject_fraction"] == pytest.approx(0.0)
+
+
+def test_extract_clip_features_flashlight_subject_fraction_zeroed_in_daylight(
+    monkeypatch, tmp_path
+):
+    # Same broad-frame daylight-colour gate as green_light_ratio/flicker --
+    # ambient green foliage covering the frame shouldn't get tagged FLASHLIGHT.
+    def _frame_with_green_square(pos: int, size: int = 60) -> np.ndarray:
+        frame = np.zeros((size, size, 3), dtype=np.uint8)
+        frame[:, :] = (0, 150, 0)  # broad saturated ambient green background
+        cv2.rectangle(frame, (pos, pos), (pos + 8, pos + 8), (0, 220, 0), thickness=-1)
+        return frame
+
+    positions = (5, 12, 19, 26, 33, 40)
+    frames = [_frame_with_green_square(pos) for pos in positions]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
+    assert result["flashlight_subject_fraction"] == 0.0
+
+
 def test_detect_clip_ignore_polygons_mask_out_a_stationary_light(monkeypatch, tmp_path):
     # A stationary "light" that flickers slightly frame-to-frame (like a real
     # IR-lit fixture left in view, not perfectly static) still diffs against
@@ -1027,6 +1157,66 @@ def test_extract_clip_features_ignore_region_suppresses_light_blob_count_and_fli
     assert result_masked["blob_count"] < result_unmasked["blob_count"]
     assert result_unmasked["green_light_flicker"] > 0.005
     assert result_masked["green_light_flicker"] == pytest.approx(0.0)
+
+
+def test_detect_clip_records_a_suppressed_light_box_instead_of_nothing(monkeypatch, tmp_path):
+    # A stationary light masked out by an ignore polygon shouldn't just vanish
+    # without a trace -- FrameDetection.suppressed_light_box is the additive,
+    # non-scoring diagnostic a render can use to show something was there.
+    def _frame_with_subject_and_light(pos: int, light_on: bool) -> np.ndarray:
+        frame = _frame_with_square(pos)
+        if light_on:
+            cv2.rectangle(frame, (2, 2), (10, 10), (0, 255, 0), thickness=-1)
+        return frame
+
+    positions = (5, 12, 19, 26, 33, 40)
+    frames = [
+        _frame_with_subject_and_light(pos, light_on=i % 2 == 0) for i, pos in enumerate(positions)
+    ]
+
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    ignore_polygons = (((0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)),)
+    masked = spike.detect_clip(
+        str(tmp_path / "clip.mp4"), threshold=18, ignore_polygons=ignore_polygons
+    )
+
+    assert masked is not None
+    # The light was on for the even-indexed frames -- those should carry a box;
+    # the tracked subject itself is untouched (still has its own `largest`).
+    assert any(d.suppressed_light_box is not None for d in masked.frames)
+    assert all(d.largest is not None for d in masked.frames)
+
+
+def test_detect_clip_suppressed_light_box_is_none_without_an_ignore_region(monkeypatch, tmp_path):
+    positions = (5, 12, 19, 26, 33, 40)
+    frames = [_frame_with_square(pos) for pos in positions]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    detection = spike.detect_clip(str(tmp_path / "clip.mp4"), threshold=18)
+
+    assert detection is not None
+    assert all(d.suppressed_light_box is None for d in detection.frames)
+
+
+def test_extract_clip_features_auto_detects_a_stationary_light_without_zone_ignore(
+    monkeypatch, tmp_path
+):
+    # No hand-traced zone.ignore configured at all -- a light that's on in
+    # every frame at a fixed spot away from the tracked subject should still
+    # get excluded from flashlight scoring via auto-detection.
+    def _frame_with_subject_and_fixed_light(pos: int) -> np.ndarray:
+        frame = _frame_with_square(pos)
+        cv2.rectangle(frame, (2, 2), (10, 10), (0, 255, 0), thickness=-1)
+        return frame
+
+    positions = (5, 12, 19, 26, 33, 40)
+    frames = [_frame_with_subject_and_fixed_light(pos) for pos in positions]
+
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
+    assert result["green_light_flicker"] == pytest.approx(0.0)
 
 
 def test_iter_labelled_clips_with_files_requires_both_file_and_label(tmp_path: Path):

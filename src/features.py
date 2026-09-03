@@ -87,14 +87,22 @@ def color_saturation_fraction(frame_bgr: np.ndarray, *, saturation_threshold: in
 def green_light_mask(
     frame_bgr: np.ndarray,
     *,
-    hue_low: int = 35,
+    hue_low: int = 33,
     hue_high: int = 85,
     min_saturation: int = 60,
     min_value: int = 60,
 ) -> np.ndarray:
     """Boolean mask of pixels reading as the guard's flashlight (green, lit,
     saturated), shared by `green_light_ratio` and any overlay that draws it so
-    the two can never disagree about what counts as "the light"."""
+    the two can never disagree about what counts as "the light".
+
+    hue_low was 35 until 2026-09-03: cam01's flashlight measured hue 34-35
+    (camera-to-camera sensor/white-balance variance), missing the old bound by
+    a single unit. Lowering to 33 recovers it (raw green-pixel fraction on
+    cam01/16167's real flashlight frames +19%) with no measurable change on
+    known foliage false-positive references (cam03/9066, cam03/8767) or the
+    cam08/4306 true-flashlight reference.
+    """
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
     return (hue >= hue_low) & (hue <= hue_high) & (sat >= min_saturation) & (val >= min_value)
@@ -104,7 +112,7 @@ def green_light_ratio(
     frame_bgr: np.ndarray,
     contour: np.ndarray,
     *,
-    hue_low: int = 35,
+    hue_low: int = 33,
     hue_high: int = 85,
     min_saturation: int = 60,
     min_value: int = 60,
@@ -141,6 +149,39 @@ def green_light_ratio(
     return float(np.count_nonzero(green[inside])) / int(np.count_nonzero(inside))
 
 
+# If this much of a tracked box's own area is flashlight-hue pixels, the
+# tracked subject is the beam itself, not a person -- shared by the render
+# (relabels the box) and the model (a feature) so they never disagree.
+FLASHLIGHT_SUBJECT_THRESHOLD = 0.5
+
+
+def flashlight_bbox_overlap(
+    frame_bgr: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    *,
+    exclude_mask: np.ndarray | None = None,
+) -> float:
+    """Fraction of a tracked box's own pixels (not just its best-frame
+    contour, see `green_light_ratio`) that read as the guard's flashlight.
+
+    Shared by `scripts.render_debug` (marks a box as the flashlight itself,
+    not a subject) and `scripts.spike.extract_clip_features` (so the render
+    and the model score the same signal the same way) -- checked per tracked
+    frame, so a beam that only fills the box briefly still gets counted.
+
+    `exclude_mask` removes a known stationary light (`ignore_region_mask`)
+    from the count, same reasoning as `green_light_ratio`.
+    """
+    x, y, w, h = bbox
+    if w <= 0 or h <= 0:
+        return 0.0
+    mask = green_light_mask(frame_bgr)
+    if exclude_mask is not None:
+        mask = mask & ~exclude_mask
+    region = mask[y : y + h, x : x + w]
+    return float(np.count_nonzero(region)) / region.size if region.size else 0.0
+
+
 def ignore_region_mask(
     frame_width: int, frame_height: int, ignore_polygons: Sequence[Sequence[tuple[float, float]]]
 ) -> np.ndarray:
@@ -162,6 +203,46 @@ def ignore_region_mask(
         )
         cv2.fillPoly(mask, [points], 1)
     return mask.astype(bool)
+
+
+def detect_stationary_light_mask(
+    frames: Sequence[np.ndarray],
+    *,
+    min_stable_fraction: float = 0.8,
+    exclude_region: np.ndarray | None = None,
+) -> np.ndarray:
+    """Boolean pixel mask, auto-detecting a fixed light left in view for a whole
+    clip -- the per-clip alternative to hand-tracing a `zone.ignore` polygon
+    for every new stationary light a camera happens to have.
+
+    A pixel counts as a stationary light if it reads as `green_light_mask` in
+    at least `min_stable_fraction` of the given frames: a fixed light stays
+    lit (and stays in the same place) for the whole clip, while the guard's
+    own moving flashlight only lights up wherever it's currently pointed for
+    a handful of frames at a time.
+
+    `exclude_region` (e.g. the union of every frame's tracked subject box,
+    dilated a little) is subtracted from the result before returning it --
+    without this, a guard who stands still pointing a flashlight at one spot
+    for most of a short clip would read exactly like a fixed light and get
+    incorrectly excluded from its own flashlight scoring. Callers that track
+    a subject should always pass this.
+
+    Meaningful mainly on already-dark (non-daylight) footage: daytime foliage
+    reads within the same hue band and can be "stable" too, but callers don't
+    need to gate on daylight themselves -- every feature this feeds
+    (`green_light_ratio`, `flashlight_bbox_overlap`) is already zeroed on a
+    daylight clip regardless of what this mask excludes.
+    """
+    if not frames:
+        return np.zeros((0, 0), dtype=bool)
+    count = np.zeros(frames[0].shape[:2], dtype=np.int32)
+    for frame in frames:
+        count += green_light_mask(frame)
+    stable = count >= max(1, round(min_stable_fraction * len(frames)))
+    if exclude_region is not None:
+        stable &= ~exclude_region
+    return stable
 
 
 def edge_density(frame_bgr: np.ndarray, contour: np.ndarray) -> float:
@@ -378,3 +459,39 @@ def time_of_day(
     else:
         in_window = local_minutes >= start_minutes or local_minutes < end_minutes
     return "night" if in_window else "day"
+
+
+# Approximate Pretoria (site is on the Highveld, ~25.75S 28.19E) local sunrise/sunset
+# by month, rounded to 5 minutes. Not astronomically precise -- good enough to flag the
+# cases the fixed 18:00-06:00 window gets wrong at the height of southern-hemisphere
+# summer (Nov-Feb), where real dusk/dawn daylight extends well past those clock times.
+_PRETORIA_SUN_TIMES_BY_MONTH = {
+    1: ("05:30", "18:55"),
+    2: ("05:50", "18:35"),
+    3: ("06:05", "18:05"),
+    4: ("06:20", "17:35"),
+    5: ("06:35", "17:15"),
+    6: ("06:50", "17:10"),
+    7: ("06:50", "17:20"),
+    8: ("06:30", "17:40"),
+    9: ("05:55", "17:55"),
+    10: ("05:25", "18:10"),
+    11: ("05:05", "18:30"),
+    12: ("05:00", "18:55"),
+}
+
+
+def is_daylight(timestamp_utc: str, *, utc_offset_hours: float = 2.0) -> bool:
+    """Whether the clip's local time falls between approximate sunrise and sunset
+    for the given month, per `_PRETORIA_SUN_TIMES_BY_MONTH`.
+
+    A rough, sun-aware companion to `time_of_day()`'s fixed window -- use it as an
+    extra filter/eyeball column (e.g. in spike CSVs) to catch dusk/dawn clips that
+    the fixed window mislabels as "night" during summer, not as a replacement for
+    the operating-window logic itself.
+    """
+    dt = datetime.fromisoformat(timestamp_utc.replace("Z", "+00:00"))
+    local = dt + timedelta(hours=utc_offset_hours)
+    sunrise, sunset = _PRETORIA_SUN_TIMES_BY_MONTH[local.month]
+    local_minutes = local.hour * 60 + local.minute
+    return _hhmm_to_minutes(sunrise) <= local_minutes < _hhmm_to_minutes(sunset)

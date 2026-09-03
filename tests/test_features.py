@@ -6,14 +6,17 @@ from src.features import (
     area_stability,
     aspect_ratio,
     color_saturation_fraction,
+    detect_stationary_light_mask,
     edge_density,
     flare_frames,
     flare_settle_index,
+    flashlight_bbox_overlap,
     green_light_flicker,
     green_light_mask,
     green_light_ratio,
     heading_change,
     ignore_region_mask,
+    is_daylight,
     jitter,
     longest_detection_run,
     normalised_speed,
@@ -187,9 +190,69 @@ def test_green_light_flicker_zero_for_steady_signal():
     assert green_light_flicker([0.2, 0.2, 0.2, 0.2]) == pytest.approx(0.0)
 
 
+def test_flashlight_bbox_overlap_high_when_box_is_mostly_the_beam():
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (29, 29), (0, 255, 0), thickness=-1)  # solid green (BGR)
+    assert flashlight_bbox_overlap(frame, (10, 10, 20, 20)) > 0.9
+
+
+def test_flashlight_bbox_overlap_zero_for_non_green_box():
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (29, 29), (200, 200, 200), thickness=-1)  # bright white
+    assert flashlight_bbox_overlap(frame, (10, 10, 20, 20)) == pytest.approx(0.0)
+
+
+def test_flashlight_bbox_overlap_excludes_a_known_stationary_light():
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (29, 29), (0, 255, 0), thickness=-1)  # solid green (BGR)
+    exclude_mask = np.zeros((50, 50), dtype=bool)
+    exclude_mask[10:30, 10:30] = True  # covers the whole green region
+    assert flashlight_bbox_overlap(frame, (10, 10, 20, 20), exclude_mask=exclude_mask) == (
+        pytest.approx(0.0)
+    )
+
+
 def test_green_light_flicker_zero_for_fewer_than_two_values():
     assert green_light_flicker([]) == 0.0
     assert green_light_flicker([0.5]) == 0.0
+
+
+def _frame_with_green_patch(x: int, y: int, w: int, h: int) -> np.ndarray:
+    frame = np.zeros((50, 50, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (x, y), (x + w - 1, y + h - 1), (0, 255, 0), thickness=-1)
+    return frame
+
+
+def test_detect_stationary_light_mask_flags_a_light_fixed_across_every_frame():
+    frames = [_frame_with_green_patch(5, 5, 6, 6) for _ in range(10)]
+    mask = detect_stationary_light_mask(frames)
+    assert mask[5:11, 5:11].all()
+
+
+def test_detect_stationary_light_mask_ignores_a_light_that_only_appears_briefly():
+    # The guard's flashlight lighting up a different spot almost every frame --
+    # never stable enough at any one pixel to count as a fixed light.
+    frames = [np.zeros((50, 50, 3), dtype=np.uint8) for _ in range(10)]
+    for i, frame in enumerate(frames):
+        cv2.rectangle(frame, (i, i), (i + 3, i + 3), (0, 255, 0), thickness=-1)
+    mask = detect_stationary_light_mask(frames)
+    assert not np.any(mask)
+
+
+def test_detect_stationary_light_mask_respects_exclude_region():
+    # A guard standing still with the flashlight held on one spot for the whole
+    # clip reads exactly like a fixed light -- exclude_region (the tracked
+    # subject's own box) must protect it from being auto-classified as one.
+    frames = [_frame_with_green_patch(5, 5, 6, 6) for _ in range(10)]
+    exclude_region = np.zeros((50, 50), dtype=bool)
+    exclude_region[0:20, 0:20] = True
+    mask = detect_stationary_light_mask(frames, exclude_region=exclude_region)
+    assert not np.any(mask)
+
+
+def test_detect_stationary_light_mask_empty_frames_returns_empty_mask():
+    mask = detect_stationary_light_mask([])
+    assert mask.shape == (0, 0)
 
 
 def test_edge_density_higher_for_textured_region():
@@ -311,6 +374,31 @@ def test_time_of_day_at_window_start_boundary_is_night():
 def test_time_of_day_at_window_end_boundary_is_day():
     # 04:00 UTC + 2h offset = 06:00 local, exactly the window end (exclusive).
     assert time_of_day("2026-01-01T04:00:00Z") == "day"
+
+
+def test_is_daylight_true_for_confirmed_january_dawn_clip():
+    # cam03/18574: 03:57 UTC = 05:57 local on 2026-01-25, frame is full-colour daylight.
+    assert is_daylight("2026-01-25T03:57:32Z") is True
+
+
+def test_is_daylight_true_for_confirmed_december_dawn_clip():
+    # cam05/9430: 03:46 UTC = 05:46 local on 2024-12-02, frame is full-colour daylight.
+    assert is_daylight("2024-12-02T03:46:55Z") is True
+
+
+def test_is_daylight_true_for_confirmed_december_dusk_clip():
+    # cam05/9690: 16:05 UTC = 18:05 local on 2024-12-08, frame is full-colour daylight.
+    assert is_daylight("2024-12-08T16:05:20Z") is True
+
+
+def test_is_daylight_false_for_deep_night():
+    # 22:00 UTC + 2h offset = 00:00 local, well outside any month's sunrise-sunset span.
+    assert is_daylight("2026-01-01T22:00:00Z") is False
+
+
+def test_is_daylight_false_for_pre_sunrise_winter_morning():
+    # 03:30 UTC + 2h offset = 05:30 local in June, before the ~06:50 winter sunrise.
+    assert is_daylight("2026-06-15T03:30:00Z") is False
 
 
 def test_flare_frames_marks_both_sides_of_a_gain_step():

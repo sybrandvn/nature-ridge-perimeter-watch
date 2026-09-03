@@ -86,6 +86,30 @@ def test_draw_light_mask_is_suppressed_when_daylight_gated():
     assert not canvas.any()
 
 
+def test_draw_light_mask_splits_stationary_from_moving_by_ignore_mask():
+    # Left half is a "known stationary light" (inside ignore_mask), right half
+    # is the guard's moving flashlight (outside it) -- both green, but only
+    # the right half should come back as the returned moving-light mask.
+    frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    frame[:] = (0, 255, 0)  # pure green, BGR
+    ignore_mask = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    ignore_mask[:, : WIDTH // 2] = True
+    canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+    moving = _draw_light_mask(canvas, frame, daylight_gated=False, ignore_mask=ignore_mask)
+
+    assert canvas.any()  # both regions still drawn (in different colours)
+    assert not moving[:, : WIDTH // 2].any()  # stationary half excluded
+    assert moving[:, WIDTH // 2 :].any()  # moving half included
+
+
+def test_draw_light_mask_returns_empty_moving_mask_when_daylight_gated():
+    frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    frame[:] = (0, 255, 0)
+    moving = _draw_light_mask(canvas=np.zeros_like(frame), frame=frame, daylight_gated=True)
+    assert not moving.any()
+
+
 def test_draw_dashed_rect_draws_fewer_pixels_than_a_solid_rectangle():
     # The whole point of the dashed style is that an inferred (recovered /
     # reverse-filled) box reads as visually less certain than a genuine

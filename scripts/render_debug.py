@@ -64,7 +64,13 @@ from scripts.spike import (  # noqa: E402
 )
 from src import db  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
-from src.features import green_light_mask  # noqa: E402
+from src.features import (  # noqa: E402
+    FLASHLIGHT_SUBJECT_THRESHOLD,
+    detect_stationary_light_mask,
+    flashlight_bbox_overlap,
+    green_light_mask,
+    ignore_region_mask,
+)
 from src.video_encode import Mp4Writer  # noqa: E402
 from src.zones import _fence_x_at_y, side_name  # noqa: E402
 
@@ -88,6 +94,7 @@ COLOR_IGNORE = (110, 110, 110)
 COLOR_FLARE = (0, 90, 255)
 COLOR_WARMUP = (0, 200, 255)
 COLOR_LIGHT = (0, 255, 140)
+COLOR_STATIONARY_LIGHT = (0, 140, 0)
 HUD_BG = (24, 24, 24)
 TRAIL_LENGTH = 12
 
@@ -180,18 +187,16 @@ def _zone_layers(width: int, height: int, zone: CameraZone) -> tuple[np.ndarray,
                 thickness=2,
             )
 
-    for region in zone.ignore:
-        pts = np.array([_to_px(p, width, height) for p in region], dtype=np.int32)
-        x, y, w, h = cv2.boundingRect(pts)
-        hatch = np.zeros_like(ink)
-        for offset in range(0, w + h, 8):
-            cv2.line(hatch, (x + offset, y), (x + offset - h, y + h), COLOR_IGNORE, 1)
-        region_mask = np.zeros((height, width), dtype=np.uint8)
-        cv2.fillPoly(region_mask, [pts], 255)
-        hatch[region_mask == 0] = 0
-        ink[hatch > 0] = COLOR_IGNORE[0]
-        cv2.polylines(ink, [pts], True, COLOR_IGNORE, 1)
-        _text(ink, "IGNORE", (x + 2, y + 11), color=COLOR_IGNORE, scale=0.35)
+    # zone.ignore regions are deliberately NOT drawn here as a static hatch --
+    # every configured ignore region so far exists because of a stationary
+    # light (see config/cameras.yaml comments), and a permanent box baked into
+    # this per-clip layer drew on every frame regardless of whether the light
+    # was actually lit, including in broad daylight where it never is. The
+    # region is still masked out of detection/scoring exactly as before; it's
+    # only VISUALLY represented when something real is happening there --
+    # `_draw_light_mask`'s STATIONARY LIGHT marker (lit) and the
+    # `suppressed_light_box` "IGNORED" marker (real motion suppressed there),
+    # both already gated per-frame, not a permanent overlay.
 
     if zone.depth_cutoff > 0:
         y = int(round(zone.depth_cutoff * height))
@@ -209,10 +214,37 @@ def _apply_zone(canvas: np.ndarray, tint: np.ndarray, ink: np.ndarray) -> None:
     canvas[drawn] = ink[drawn]
 
 
-def _draw_light_mask(canvas: np.ndarray, frame: np.ndarray, *, daylight_gated: bool) -> None:
-    """Outline pixels the detector would call flashlight, in the frame's own
-    colour rather than a flat tint -- lets the operator judge hue by eye, not
-    just the pass/fail of `green_light_ratio`.
+def _light_masks(
+    frame: np.ndarray, ignore_mask: np.ndarray | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split the raw green-light hue mask into (stationary, moving) pixels.
+
+    `ignore_mask` (same shape as the frame, from `zone.ignore` -- a known
+    fixed light left permanently in view, e.g. cam10) marks the stationary
+    half; everything else that reads as the flashlight hue is the guard's
+    actual moving beam. This never changes what `detect_clip`/
+    `extract_clip_features` track or score -- it only labels the same pixels
+    for the render.
+    """
+    mask = green_light_mask(frame)
+    if ignore_mask is None:
+        return np.zeros_like(mask), mask
+    return mask & ignore_mask, mask & ~ignore_mask
+
+
+def _draw_light_mask(
+    canvas: np.ndarray,
+    frame: np.ndarray,
+    *,
+    daylight_gated: bool,
+    ignore_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Outline pixels the detector would call flashlight, split into a known
+    STATIONARY light (dim green, e.g. a fixed porch/security light already
+    fenced off by `zone.ignore`) and the guard's actual MOVING flashlight
+    (bright green, same trace as before) -- so a viewer doesn't have to guess
+    which one they're looking at. Returns the moving-light mask (raw frame
+    resolution) so the caller can check the tracked box against it.
 
     Suppressed on a daylight/dusk-colour clip (`daylight_gated`), same as
     `green_light_ratio`/`green_light_flicker` are zeroed in
@@ -222,16 +254,42 @@ def _draw_light_mask(canvas: np.ndarray, frame: np.ndarray, *, daylight_gated: b
     like it was full of flashlight detections that were never actually
     scored.
     """
+    empty = np.zeros(frame.shape[:2], dtype=bool)
     if daylight_gated:
-        return
-    mask = green_light_mask(frame)
-    if not np.any(mask):
-        return
-    mask_scaled = cv2.resize(
-        mask.astype(np.uint8), (canvas.shape[1], canvas.shape[0]), interpolation=cv2.INTER_NEAREST
-    )
-    contours, _ = cv2.findContours(mask_scaled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(canvas, contours, -1, COLOR_LIGHT, 1)
+        return empty
+    stationary, moving = _light_masks(frame, ignore_mask)
+    if np.any(stationary):
+        # Dashed box, not a solid contour outline -- marked as a known fixed
+        # light rather than drawn as if it were nothing, but still visually
+        # distinct from a genuine tracked/flashlight detection (solid boxes).
+        mask_scaled = cv2.resize(
+            stationary.astype(np.uint8),
+            (canvas.shape[1], canvas.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        )
+        contours, _ = cv2.findContours(mask_scaled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        x, y, w, h = cv2.boundingRect(np.concatenate(contours))
+        _draw_dashed_rect(
+            canvas, (x, y), (x + w, y + h), COLOR_STATIONARY_LIGHT, thickness=1
+        )
+        _text(
+            canvas,
+            "STATIONARY LIGHT",
+            (x, max(11, y - 4)),
+            color=COLOR_STATIONARY_LIGHT,
+            scale=0.35,
+        )
+    if np.any(moving):
+        mask_scaled = cv2.resize(
+            moving.astype(np.uint8),
+            (canvas.shape[1], canvas.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        )
+        contours, _ = cv2.findContours(mask_scaled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(canvas, contours, -1, COLOR_LIGHT, 1)
+        x, y, w, h = cv2.boundingRect(np.concatenate(contours))
+        _text(canvas, "FLASHLIGHT", (x, max(11, y - 4)), color=COLOR_LIGHT, scale=0.35)
+    return moving
 
 
 def _draw_trail(canvas: np.ndarray, history: list[tuple[np.ndarray, tuple[float, float]]]) -> None:
@@ -383,6 +441,31 @@ def render_clip(
     ]
     tint, ink = _zone_layers(width, height, zone)
     daylight_gated = features is not None and features["color_fraction"] > 0.15
+    ignore_mask = (
+        ignore_region_mask(detection.frame_width, detection.frame_height, zone.ignore)
+        if zone.ignore
+        else None
+    )
+    # Auto-detected stationary lights, same reasoning/mask combination as
+    # `extract_clip_features` -- so a fixed light with no hand-traced
+    # `zone.ignore` polygon still renders as STATIONARY LIGHT rather than
+    # FLASHLIGHT, and the render never disagrees with what was scored.
+    tracked_region = np.zeros((detection.frame_height, detection.frame_width), dtype=bool)
+    for detected in detection.frames:
+        if detected.largest is None:
+            continue
+        x, y, w, h = cv2.boundingRect(detected.largest)
+        pad = 4
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1, y1 = min(detection.frame_width, x + w + pad), min(
+            detection.frame_height, y + h + pad
+        )
+        tracked_region[y0:y1, x0:x1] = True
+    auto_light_mask = detect_stationary_light_mask(
+        [d.frame for d in detection.frames], exclude_region=tracked_region
+    )
+    if np.any(auto_light_mask):
+        ignore_mask = auto_light_mask if ignore_mask is None else (ignore_mask | auto_light_mask)
 
     writer = Mp4Writer(out_path, fps=source_fps, width=width, height=height + hud_height)
 
@@ -436,7 +519,9 @@ def render_clip(
                 detected.frame, (width, height), interpolation=cv2.INTER_CUBIC
             )
             _apply_zone(canvas, tint, ink)
-            _draw_light_mask(canvas, detected.frame, daylight_gated=daylight_gated)
+            _draw_light_mask(
+                canvas, detected.frame, daylight_gated=daylight_gated, ignore_mask=ignore_mask
+            )
 
             discarded_small = 0
             discarded_large = 0
@@ -467,6 +552,7 @@ def render_clip(
 
             instant_speed = None
             blob_width_px = 0.0
+            light_overlap: float | None = None
             if detected.largest is not None and detected.centroid is not None:
                 scaled = (detected.largest * scale).astype(np.int32)
                 history.append(
@@ -474,8 +560,21 @@ def render_clip(
                 )
                 _draw_trail(canvas, history)
                 x, y, w, h = cv2.boundingRect(scaled)
+                light_overlap = (
+                    0.0
+                    if daylight_gated
+                    else flashlight_bbox_overlap(
+                        detected.frame,
+                        cv2.boundingRect(detected.largest),
+                        exclude_mask=ignore_mask,
+                    )
+                )
+                is_flashlight = light_overlap > FLASHLIGHT_SUBJECT_THRESHOLD
                 inferred = detected.filled_by_reverse or detected.recovered
-                if detected.filled_by_reverse:
+                if is_flashlight:
+                    box_color = COLOR_LIGHT
+                    label = "FLASHLIGHT"
+                elif detected.filled_by_reverse:
                     box_color = COLOR_REVERSE
                     label = (
                         "RECOVERED (reverse fill)"
@@ -488,7 +587,7 @@ def render_clip(
                 else:
                     box_color = COLOR_TRACKED
                     label = "TRACKED"
-                if inferred:
+                if inferred and not is_flashlight:
                     # Dashed, not solid -- this box is a fixed-size template
                     # dragged along, not a fresh measurement of the subject.
                     _draw_dashed_rect(canvas, (x, y), (x + w, y + h), box_color, thickness=2)
@@ -505,6 +604,22 @@ def render_clip(
                     )
                     instant_speed = step / blob_width_px
                 prev_centroid = detected.centroid
+
+            if detected.suppressed_light_box is not None:
+                # Real motion inside a stationary-light region that would
+                # otherwise render as nothing -- marked instead of hidden, per
+                # the "mark instead of ignore" ask. Independent of the main
+                # tracked box above: this is whatever the ignore mask ate,
+                # not the subject the tracker is currently following.
+                sx, sy, sw, sh = (c * scale for c in detected.suppressed_light_box)
+                _draw_dashed_rect(canvas, (sx, sy), (sx + sw, sy + sh), COLOR_IGNORE, thickness=1)
+                _text(
+                    canvas,
+                    "IGNORED (stationary light region)",
+                    (sx, max(11, sy - 4)),
+                    color=COLOR_IGNORE,
+                    scale=0.35,
+                )
 
             if detected.is_flare:
                 cv2.rectangle(canvas, (0, 0), (width - 1, height - 1), COLOR_FLARE, 4)
@@ -552,6 +667,15 @@ def render_clip(
                     f"{instant_speed:.2f}" if instant_speed is not None else "n/a",
                 ),
                 ("frame light_ratio", f"{light_frac:.4f}"),
+                (
+                    "tracked box flashlight overlap",
+                    (
+                        f"{light_overlap:.2f}"
+                        + (" -> FLASHLIGHT" if light_overlap > FLASHLIGHT_SUBJECT_THRESHOLD else "")
+                    )
+                    if light_overlap is not None
+                    else "n/a",
+                ),
                 ("motion px fraction", f"{detected.motion_pixel_fraction:.4f}"),
                 ("flare frames", f"{flare_total}/{len(detection.frames)}"),
                 ("recovered frames (appearance)", f"{recovered_total}/{len(detection.frames)}"),

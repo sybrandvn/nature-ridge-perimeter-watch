@@ -502,9 +502,15 @@ session — worth checking `git status` early next time.
 
 **State.** Branch `feat/phase1-finalisation`, working tree clean, 345 tests passing
 (`uv run ruff check . --fix && uv run pytest -q`). 432 label rows (guard 252, environment 39,
-unknown 18, resident 10, incident 10, animal 10, plus 93 with only a `startup_state`). 51 debug
+unknown 18, resident 10, incident 10, animal 10, plus 93 with only a `startup_state`). 52 debug
 renders across 6 folders under `data/reports/debug_render/` (gitignored, local-only), all current
 against HEAD.
+
+**Do not "complete" the incident sample set.** Every incident is a pair of Telegram clips: a short
+startup/trigger segment followed by a longer continuation that already contains it. Only the
+second of each pair belongs in `incident_recent_long/`. All 5 pairs are now represented
+(cam08/4053, cam08/4055, cam06/21520, cam09/21522, cam10/21524); 4053 was a genuine omission,
+fixed 2026-09-03. The 5 missing first-of-pair clips are correct to leave out.
 
 **Read before touching detection:** `/memories/repo/nature-ridge-conventions.md` is the real
 engineering log — every failed approach is recorded there with *why* it failed, and several

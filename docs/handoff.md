@@ -1,17 +1,16 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
-Written 2026-08-28, updated 2026-08-29, updated again 2026-08-30 for an agent picking this up
-fresh, updated again 2026-08-31 (detection exploratory tools + anchor sweep streak cap, see
-below). Session closed out 2026-08-31 with next focus set to storm/guard identification — see
-"Next up: storm and guard identification" below before starting new work. `docs/plan.md` is the
-full plan and stays authoritative; this is the short version of where things actually stand and
-what to do next.
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-03. **If you are a new agent
+picking this up, start at "Handoff for a new agent (2026-09-03, session close)" near the bottom**
+— it has current state, the prioritised remaining work, and the two validation lessons that cost
+the most time recently. `docs/plan.md` is the full plan and stays authoritative; this file is the
+short version of where things actually stand and what to do next.
 
 ## Where the project is
 
-On branch `feat/phase1-foundation` (branched off `main` at the `phase0-checkpoint` tag;
-`feat/phase0-foundations` is retired but kept). Working tree clean, 306 tests passing
-(`uv run ruff check . && uv run pytest -q`).
+On branch `feat/phase1-finalisation` (branched off `main` at the `phase0-checkpoint` tag;
+`feat/phase0-foundations` is retired but kept). Working tree clean, 345 tests passing
+(`uv run ruff check . && uv run pytest -q`) as of 2026-09-03.
 
 Phase 0 is merged to `main` as a checkpoint, not a clean sign-off — see `docs/plan.md`'s
 "Checkpoint (2026-08-30)" section. Gate 2 pass/fail is still the one open decision affecting
@@ -469,16 +468,102 @@ sample folder were re-rendered at the end, more than once, against the final cod
    bug, not re-attempted). Confirmed-animal clips moved from `animal_check/` into
    `animal_recent_long/`; `animal_check/` now only holds the 2 still-`unknown` cam03 clips.
 
-**Still open / not started this session:** cam05/4822 and cam11/4310 real fixes (both need the
-bigger reference-image/background-model architecture work above), cam01/16167's drift beyond the
-hue fix. See `/memories/repo/nature-ridge-conventions.md`'s newest sections for full blow-by-blow
-detail, including the exact regressions found and how each was diagnosed.
+6. **Static ignore-region overlay removed.** The `zone.ignore` hatch + outline + "IGNORE" label
+   was baked into the *static* per-clip `ink` layer in `_zone_layers`, so it drew on every frame
+   regardless of whether the light was lit — including in broad daylight, which is what the user
+   spotted on cam10. Removed. The region is still masked out of detection/scoring exactly as
+   before; it is now only *visually* marked when something real happens there, via the
+   already-per-frame-gated STATIONARY LIGHT and "IGNORED" dashed markers from item 1.
+7. **cam12 remount — dated fence history added.** User's trace on `cam12/19245.mp4` (2026-03-02)
+   did not match the configured fence, but every earlier sampled clip back through `12201.mp4`
+   (2025-02-21) still did. cam12 triggers rarely, so there are no clips between those dates to
+   bisect. `effective_from` is `2026-03-02T16:13:54Z` (message 19244, the earlier of the two
+   same-night clips confirming the new position) — the earliest timestamp there is real evidence
+   for. `outside: right` re-verified for the new polyline via `side_name`.
+8. **Two investigations that correctly ended in "do not change anything":**
+   - *cam04/4210* ("tracking 1 frame only, maybe the IR flare should be longer?"): median grey is
+     already flat (~30) from frame 13 on, exactly matching the current `warmup_dropped=13`, so no
+     flare is being missed and lengthening the window would only discard real frames. The actual
+     problem is 13 consecutive appearance-recovered frames frozen on a static ~143px feature —
+     the same static-texture-lock family as cam01/16167 and cam02/11264, and *above* the new 20px
+     floor, so `min_reacquire_area` does not catch it.
+   - *cam05/4822* ("maybe still too much IR flare, we can see the guard earlier"): the step that
+     sets `warmup_dropped=8` is a genuine ~10-level IR gain jump (8 -> 18). Swept
+     `flare_tolerance` 2.0/3.0/4.0/5.0 — settle index is 8 for every value in 3.0-5.0, and *worse*
+     (11) at 2.0. There is no safe tolerance change available, and forcing a larger one risks
+     accepting real ongoing flare as settled corpus-wide.
+
+**Committed** in 6 logical commits on `feat/phase1-finalisation` (`258fa5e`..`2b05875`): config
+ignore regions, detect-layer, render-layer, a leftover `rank_candidates.py` fix, docs, and the
+cam12 dated fence. The working tree had been carrying all of this uncommitted since the previous
+session — worth checking `git status` early next time.
+
+## Handoff for a new agent (2026-09-03, session close)
+
+**State.** Branch `feat/phase1-finalisation`, working tree clean, 345 tests passing
+(`uv run ruff check . --fix && uv run pytest -q`). 432 label rows (guard 252, environment 39,
+unknown 18, resident 10, incident 10, animal 10, plus 93 with only a `startup_state`). 51 debug
+renders across 6 folders under `data/reports/debug_render/` (gitignored, local-only), all current
+against HEAD.
+
+**Read before touching detection:** `/memories/repo/nature-ridge-conventions.md` is the real
+engineering log — every failed approach is recorded there with *why* it failed, and several
+plausible-sounding ideas in this area have already been tried and rejected on measurements. The
+two most expensive lessons from this session:
+
+- **Validate `detect_clip`-level changes against the full 51-clip standing sample**, diffing old
+  vs new per-frame boxes, not a handful of reference clips. A narrow validation passed cleanly
+  this session while silently destroying detection on cam10's smallest real animals.
+- **When the user corrects your reading of a frame, discard the evidence you gathered under the
+  wrong assumption** rather than averaging it in. A second fence trace collected while misreading
+  which line was which nearly ended up blended into the final config.
+
+### Remaining work, in suggested order
+
+**1. The static-texture lock (highest value, 4+ clips, no fix yet).** A track gets sustained
+indefinitely by appearance-matching against a fixed, high-texture background feature — a mounting
+pole (cam01/16167), a spider-web strand (cam02/11264), a fence-post junction (cam04/4210) — while
+the real subject is elsewhere or gone. `max_recovered_streak` and this session's
+`min_reacquire_area` each catch a slice of it; neither catches these, because the false feature is
+larger than the floor and re-matches its own template forever. Worth attacking directly: the
+distinguishing signal is that a *genuine* subject's template changes over time while a static
+feature's does not, so template drift (or its absence) across a recovery streak may separate them
+without touching the size heuristics at all. Validate on those 4 clips plus the fragile-animal
+set (cam08/7360, cam15/15454, cam05/18270).
+
+**2. cam05/4822 and cam11/4310 — wrong artifact tracked.** cam05/4822 improved this session (user
+confirmed it now gets the guard and flashlight) but both still centre on the wrong thing in
+places. Repeated attempts have concluded these need a per-camera reference-background /
+cross-clip background model rather than another per-clip heuristic. **Do not start this without
+explicit sign-off** — it changes the detector's foundation and would invalidate every tuned
+constant and every stored feature row. Scope and cost it first.
+
+**3. cam03 daylight-gate confound (known, twice-abandoned).** `color_fraction` around 0.12-0.15
+leaves dawn/dusk cam03 clips just under the 0.15 gate, so the green overlay renders a false
+FLASHLIGHT marker (~9% of sampled cam03 clips). Scored features are unaffected — this is a render
+artifact only. Four threshold-based fixes have already failed because the guard's own flashlight
+raises whole-frame saturation the same way ambient colour does. Only worth revisiting with a
+genuinely different signal (e.g. hue *distribution* rather than a saturation fraction).
+
+**4. Gate 2 pass/fail is still the one open decision.** See "The next task: gate 2 pass/fail"
+above, including its staleness warning — the main body of
+`docs/gate2_separability_finding.md` predates both the `zones.py` fix and roughly 150 additional
+labels, so re-run its analysis on current data before signing anything off.
+
+**5. Smaller, well-defined loose ends.** `animal_check/` still holds 2 unresolved cam03 clips
+(9237/9239, currently `unknown`, decisive clip shows zero genuine motion). The two design
+questions from the prior pass — a per-camera `expect_illumination` flag, and cross-clip stability
+checking for auto-detected stationary lights (this session's detector only checks within a single
+clip, which cannot distinguish a fixed light from a guard holding a torch steady) — remain open
+and are cheap next steps compared to items 1-2.
 
 ## Conventions
 
 - `uv` for everything: `uv run ruff check . --fix && uv run pytest -q` after every module change
   and before every commit.
-- Commit logically per change, stay on `feat/phase1-foundation`, never auto-merge.
+- Commit logically per change, stay on `feat/phase1-finalisation`, never auto-merge.
+- After any detector/feature change, re-render the standing `data/reports/debug_render/` sample
+  set and numerically diff old vs new before trusting the change.
 - `src/` is flat, no package. `scripts/` are standalone entry points that `sys.path`-insert the
   repo root.
 - DB timestamps are UTC; site local time is UTC+2 (SAST).

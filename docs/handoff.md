@@ -531,11 +531,31 @@ indefinitely by appearance-matching against a fixed, high-texture background fea
 pole (cam01/16167), a spider-web strand (cam02/11264), a fence-post junction (cam04/4210) — while
 the real subject is elsewhere or gone. `max_recovered_streak` and this session's
 `min_reacquire_area` each catch a slice of it; neither catches these, because the false feature is
-larger than the floor and re-matches its own template forever. Worth attacking directly: the
-distinguishing signal is that a *genuine* subject's template changes over time while a static
-feature's does not, so template drift (or its absence) across a recovery streak may separate them
-without touching the size heuristics at all. Validate on those 4 clips plus the fragile-animal
-set (cam08/7360, cam15/15454, cam05/18270).
+larger than the floor and re-matches its own template forever.
+
+**Frame-local discrimination has now been measured and REJECTED — do not retry it.** The idea was
+that a run of appearance-recovered frames whose box never moves *and* whose contents correlate
+with the clip's own median background must be scenery rather than a subject. Implemented and swept
+over all 52 standing clips: it changed 23 of them and gutted precisely the fragile-animal set it
+was supposed to leave alone (cam10/17146 21->9 boxed, cam10/7632 17->5, cam10/9405 13->7,
+cam08/7360 11->6). The measurement explains why, and the numbers are worth keeping:
+
+| | frozen-recovered runs | background similarity |
+|---|---|---|
+| known static locks | 6 | 0.87 – 0.99 |
+| real guards/animals | 54 | 0.54 – 1.00 (18 of 54 at >= 0.97) |
+
+There is no separation. Worse, the *worst* target (cam04/4210, 11 frozen frames) sits at 0.87 —
+**below** most genuine subjects. The reason is structural, not a tuning problem: a frame is only
+appearance-recovered *because* bg-diff found nothing there, which already means its contents
+resemble the background. High background similarity is therefore a property of every recovered
+frame, subject or not. Run length doesn't separate either (12 of the 54 real runs are >= 11
+frames). Any frame-local signal derived from "does this look like the background" is measuring the
+precondition for being in that state at all.
+
+That leaves the discriminator genuinely outside a single clip's median: a static feature is in the
+*same place across different clips from the same camera*, and a subject never is. That is item 2's
+per-camera reference background, which is why these two items are really one.
 
 **2. cam05/4822 and cam11/4310 — wrong artifact tracked.** cam05/4822 improved this session (user
 confirmed it now gets the guard and flashlight) but both still centre on the wrong thing in

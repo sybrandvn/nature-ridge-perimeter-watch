@@ -152,6 +152,19 @@ cameras:
     fence: [[0.1282, 0.9958], [0.4409, 0.1854]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-08-31: stationary background light (small greenish point, far down
+    # the fence line) confirmed fixed across all 43 frames of
+    # data/history/cam08/4055.mp4 -- pixel bbox never left x=[130,139],
+    # y=[33,55] out of a 320x240 frame. Box below is that region with a small
+    # margin, normalized.
+    # 2026-09-03: SECOND stationary light found (data/history/cam08/4306.mp4,
+    # a different clip on the same camera) -- pixel bbox held to x=[93,143]
+    # y=[15,24] out of a 320x240 frame across all 51 frames, distinct position
+    # from the light above. This camera has (at least) two fixed light
+    # sources in view.
+    ignore:
+      - [[0.381, 0.104], [0.462, 0.104], [0.462, 0.263], [0.381, 0.263]]
+      - [[0.28, 0.04], [0.46, 0.04], [0.46, 0.12], [0.28, 0.12]]
   - id: cam09
     aliases: ["MOTIONVIEWER 9"]
     order: 10
@@ -169,6 +182,14 @@ cameras:
     fence: [[0.4495, 0.1979], [0.3666, 0.3974], [0.2821, 0.5969], [0.1977, 0.7964], [0.115, 0.9958]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-08-31: stationary background light behind foliage, confirmed fixed
+    # (bbox held to roughly x=[117,175] y=[6,63] out of a 320x240 frame) across
+    # all 29 frames of data/history/cam10/4049.mp4 -- pixel COUNT flickers as
+    # branches sway in front of it, which is what was getting picked up as
+    # motion, but the light's own footprint never moves. Box below covers that
+    # region with a small margin, normalized.
+    ignore:
+      - [[0.344, 0.0], [0.569, 0.0], [0.569, 0.292], [0.344, 0.292]]
   - id: cam11
     aliases: ["MOTIONVIEWER 11"]
     order: 12

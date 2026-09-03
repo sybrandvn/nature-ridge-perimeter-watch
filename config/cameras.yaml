@@ -201,10 +201,24 @@ cameras:
   - id: cam12
     aliases: ["MOTIONVIEWER 12"]
     order: 13
-    # Red-trace/color-threshold method. Open ground to the left, first point to last.
-    fence: [[0.4646, 0.276], [0.3669, 0.456], [0.2664, 0.6359], [0.1659, 0.8159], [0.0678, 0.9958]]
-    outside: right
-    depth_cutoff: 0.05
+    # 2026-09-03: confirmed remounted -- user-traced fence over
+    # data/history/cam12/19245.mp4 (2026-03-02) does not match the original
+    # trace, but every other sampled clip back through data/history/cam12/
+    # 12201.mp4 (2025-02-21) still matches the ORIGINAL fence, so the new
+    # position only took effect sometime between those two dates -- no clips
+    # exist in between to bisect further. effective_from is set to
+    # 19244 (2026-03-02T16:13:54Z), the earlier of the two same-night clips
+    # that confirmed the new position (19245 is 19244's Timeout sibling,
+    # 2026-03-02T16:18:11Z) -- the earliest timestamp there's real evidence
+    # for, not a guessed midpoint of the year-long gap.
+    zones:
+      - fence: [[0.4646, 0.276], [0.3669, 0.456], [0.2664, 0.6359], [0.1659, 0.8159], [0.0678, 0.9958]]
+        outside: right
+        depth_cutoff: 0.05
+      - effective_from: "2026-03-02T16:13:54Z"
+        fence: [[0.4455, 0.1958], [0.3466, 0.3943], [0.2467, 0.5927], [0.1467, 0.7911], [0.0477, 0.9896]]
+        outside: right
+        depth_cutoff: 0.05
   - id: cam13
     aliases: ["MOTIONVIEWER 13"]
     order: 14

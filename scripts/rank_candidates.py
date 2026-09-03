@@ -42,7 +42,14 @@ from src.config import CamerasConfig, load_app_config, load_cameras_config  # no
 
 ExtractFn = Callable[..., "dict[str, float] | None"]
 
-_NON_FEATURE_COLUMNS = ("channel_id", "message_id", "camera_id", "label", "time_of_day")
+_NON_FEATURE_COLUMNS = (
+    "channel_id",
+    "message_id",
+    "camera_id",
+    "label",
+    "time_of_day",
+    "is_daylight",
+)
 NUMERIC_FEATURES = tuple(c for c in FEATURE_COLUMNS if c not in _NON_FEATURE_COLUMNS)
 POSITIVE_LABELS = ("animal", "incident")
 NEGATIVE_LABELS = ("guard", "environment", "resident", "unknown")

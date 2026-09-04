@@ -70,6 +70,13 @@ from src.features import (  # noqa: E402
     flashlight_bbox_overlap,
     green_light_mask,
     ignore_region_mask,
+    is_daylight,
+)
+from src.reference_bg import (  # noqa: E402
+    era_of,
+    load_manifest,
+    load_reference_image,
+    reference_for,
 )
 from src.video_encode import Mp4Writer  # noqa: E402
 from src.zones import _fence_x_at_y, side_name  # noqa: E402
@@ -394,6 +401,7 @@ def render_clip(
     max_area_fraction: float = DEFAULTS["max_area"],
     flare_tolerance: float = DEFAULTS["flare_tolerance"],
     max_flare_fraction: float = DEFAULTS["max_flare_fraction"],
+    reference_background: np.ndarray | None = None,
 ) -> str | None:
     """Write an annotated H.264 .mp4 video for one clip. Returns the path, or
     None if the clip has no readable frames.
@@ -411,6 +419,7 @@ def render_clip(
         threshold=threshold,
         flare_tolerance=flare_tolerance,
         max_flare_fraction=max_flare_fraction,
+        reference_background=reference_background,
     )
     if detection is None:
         return None
@@ -826,6 +835,22 @@ def _resolve_clips(args, conn) -> list[dict]:
     return selected[: args.limit] if args.limit else selected
 
 
+def _reference_background(entries, root, camera, timestamp):
+    """Resolve this camera's reference background for the clip's era and
+    lighting, or None when no reference covers it (too few clips, or a
+    remounted camera with nothing recorded since the move)."""
+    if not entries or timestamp is None:
+        return None
+    entry = reference_for(
+        entries,
+        camera.id,
+        timestamp,
+        era=era_of(camera, timestamp),
+        daylight=is_daylight(timestamp),
+    )
+    return None if entry is None else load_reference_image(Path(root), entry)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_argument_group("what to render")
@@ -844,12 +869,23 @@ def main(argv: list[str] | None = None) -> int:
     tuning.add_argument("--max-area", type=float, default=DEFAULTS["max_area"])
     tuning.add_argument("--flare-tolerance", type=float, default=DEFAULTS["flare_tolerance"])
     tuning.add_argument("--max-flare-fraction", type=float, default=DEFAULTS["max_flare_fraction"])
+    tuning.add_argument(
+        "--reference-bg",
+        default="data/reference_bg",
+        help="per-camera reference background directory (build with scripts/build_reference_bg.py)",
+    )
+    tuning.add_argument(
+        "--no-reference-bg",
+        action="store_true",
+        help="disable the reference-background scenery veto, for before/after comparison",
+    )
     args = parser.parse_args(argv)
 
     if args.clip and not args.camera:
         parser.error("--clip needs --camera so the fence geometry can be loaded")
 
     cameras = load_cameras_config("config/cameras.yaml")
+    reference_entries = [] if args.no_reference_bg else load_manifest(args.reference_bg)
     if args.clip:
         clips = _resolve_clips(args, None)
     else:
@@ -888,6 +924,9 @@ def main(argv: list[str] | None = None) -> int:
             max_area_fraction=args.max_area,
             flare_tolerance=args.flare_tolerance,
             max_flare_fraction=args.max_flare_fraction,
+            reference_background=_reference_background(
+                reference_entries, args.reference_bg, camera, clip.get("timestamp")
+            ),
         )
         if result is None:
             print(f"  skip {title}: no readable frames")

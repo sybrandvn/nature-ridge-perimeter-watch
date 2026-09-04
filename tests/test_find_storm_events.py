@@ -105,6 +105,37 @@ def test_events_from_rows_ignores_rows_without_a_timestamp():
     assert fse.events_from_rows(rows, _cameras(), window_minutes=15, neighbor_distance=1) == []
 
 
+def test_events_from_rows_excludes_twilight_clips_from_candidacy():
+    # 2026-01-21T17:18:57Z is 24 minutes after the January sunset (18:55 local) --
+    # inside a 60-minute twilight margin, so it should not corroborate anything
+    # when exclude_twilight_minutes is set, even though is_candidate is True.
+    rows = [
+        {
+            "camera_id": "cam03",
+            "message_id": 1,
+            "timestamp": "2026-01-21T17:18:57.000000Z",
+            "is_candidate": True,
+        },
+        {
+            "camera_id": "cam04",
+            "message_id": 2,
+            "timestamp": "2026-01-21T17:20:00.000000Z",
+            "is_candidate": True,
+        },
+    ]
+    without_filter = fse.events_from_rows(rows, _cameras(), window_minutes=15, neighbor_distance=1)
+    assert len(without_filter) == 1
+
+    with_filter = fse.events_from_rows(
+        rows,
+        _cameras(),
+        window_minutes=15,
+        neighbor_distance=1,
+        exclude_twilight_minutes=60,
+    )
+    assert with_filter == []
+
+
 def test_write_events_writes_csv_and_message_ids_sidecar(tmp_path: Path):
     events = fse.events_from_rows(
         [

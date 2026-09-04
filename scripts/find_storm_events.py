@@ -39,6 +39,7 @@ from scripts.backtest import ExtractFn, classify, iter_clips_with_files  # noqa:
 from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
+from src.features import is_twilight  # noqa: E402
 from src.storm_events import ClipSignal, find_corroborated_events  # noqa: E402
 
 REPORT_COLUMNS = (
@@ -130,14 +131,29 @@ def events_from_rows(
     *,
     window_minutes: float,
     neighbor_distance: int,
+    exclude_twilight_minutes: float | None = None,
 ) -> list[list[ClipSignal]]:
+    """`exclude_twilight_minutes`, when given, treats any clip within that many
+    minutes of dawn or dusk (`src.features.is_twilight`) as a non-candidate --
+    it can neither seed nor join an event, though it still appears in output
+    rows as an ordinary non-candidate clip. Confirmed 2026-09-04: `blob_count`'s
+    guard false-fire rate spikes to 38% in the 15-60 minute post-sunset window,
+    which otherwise pollutes a wider (larger window/distance) sweep with
+    guard-patrol-route false events -- see repo memory.
+    """
     order = {c.id: c.order for c in cameras.cameras if c.order is not None}
     clips = [
         ClipSignal(
             camera_id=r["camera_id"],
             message_id=int(r["message_id"]),
             timestamp=r["timestamp"],
-            is_candidate=r["is_candidate"],
+            is_candidate=(
+                r["is_candidate"]
+                and (
+                    exclude_twilight_minutes is None
+                    or not is_twilight(r["timestamp"], margin_minutes=exclude_twilight_minutes)
+                )
+            ),
         )
         for r in rows
         if r["timestamp"]
@@ -192,6 +208,13 @@ def main() -> None:  # pragma: no cover - requires the real corpus/db
     parser.add_argument("--workers", type=int, default=1, help="1 runs single-process")
     parser.add_argument("--window-minutes", type=float, default=15.0)
     parser.add_argument("--neighbor-distance", type=int, default=2)
+    parser.add_argument(
+        "--exclude-twilight-minutes",
+        type=float,
+        default=None,
+        help="treat clips within this many minutes of dawn/dusk as non-candidates "
+        "(e.g. 60 avoids the measured blob_count dusk false-fire window)",
+    )
     parser.add_argument("--out", required=True, help="Output CSV path")
     args = parser.parse_args()
 
@@ -210,6 +233,7 @@ def main() -> None:  # pragma: no cover - requires the real corpus/db
         cameras_cfg,
         window_minutes=args.window_minutes,
         neighbor_distance=args.neighbor_distance,
+        exclude_twilight_minutes=args.exclude_twilight_minutes,
     )
     label_by_key = {(r["camera_id"], int(r["message_id"])): r["label"] for r in rows}
     to_review = write_events(events, label_by_key, args.out)

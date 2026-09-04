@@ -495,3 +495,45 @@ def is_daylight(timestamp_utc: str, *, utc_offset_hours: float = 2.0) -> bool:
     sunrise, sunset = _PRETORIA_SUN_TIMES_BY_MONTH[local.month]
     local_minutes = local.hour * 60 + local.minute
     return _hhmm_to_minutes(sunrise) <= local_minutes < _hhmm_to_minutes(sunset)
+
+
+def minutes_from_daylight_boundary(timestamp_utc: str, *, utc_offset_hours: float = 2.0) -> float:
+    """Signed minutes from whichever of sunrise/sunset (per
+    `_PRETORIA_SUN_TIMES_BY_MONTH`) is nearer to the clip's local time.
+
+    `is_daylight` only answers day-or-night; it treats a clip one minute past
+    sunset identically to one taken at midnight. This is the continuous
+    version underneath it -- negative before the nearer boundary (still dark
+    before sunrise, or still light before sunset), positive after (day has
+    broken, or dusk has begun). Confirmed necessary 2026-09-04: a cluster of
+    `blob_count` false-fires on real guard clips landed 13-56 minutes after
+    sunset, all still `is_daylight=False` since they're past the boundary --
+    the binary flag can't distinguish "just went dark" from "the middle of
+    the night", only this can.
+    """
+    dt = datetime.fromisoformat(timestamp_utc.replace("Z", "+00:00"))
+    local = dt + timedelta(hours=utc_offset_hours)
+    sunrise, sunset = _PRETORIA_SUN_TIMES_BY_MONTH[local.month]
+    local_minutes = local.hour * 60 + local.minute
+    from_sunrise = local_minutes - _hhmm_to_minutes(sunrise)
+    from_sunset = local_minutes - _hhmm_to_minutes(sunset)
+    return from_sunrise if abs(from_sunrise) <= abs(from_sunset) else from_sunset
+
+
+def is_twilight(
+    timestamp_utc: str, *, margin_minutes: float = 60.0, utc_offset_hours: float = 2.0
+) -> bool:
+    """Whether the clip falls within `margin_minutes` of dawn OR dusk (either
+    side of sunrise or sunset), per `minutes_from_daylight_boundary`.
+
+    Dawn and dusk share the same underlying problem for this site's footage:
+    residual ambient colour/light that a strict day/night split assigns
+    entirely to "night", but that still perturbs colour- and motion-based
+    features the same way full daylight does. `margin_minutes=60` matches the
+    measured window where `blob_count`'s guard false-fire rate spikes to 38%
+    (15-60 minutes after sunset) before dropping back to baseline.
+    """
+    return (
+        abs(minutes_from_daylight_boundary(timestamp_utc, utc_offset_hours=utc_offset_hours))
+        <= margin_minutes
+    )

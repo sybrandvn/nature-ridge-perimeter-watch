@@ -17,8 +17,10 @@ from src.features import (
     heading_change,
     ignore_region_mask,
     is_daylight,
+    is_twilight,
     jitter,
     longest_detection_run,
+    minutes_from_daylight_boundary,
     normalised_speed,
     path_length,
     persistence,
@@ -399,6 +401,42 @@ def test_is_daylight_false_for_deep_night():
 def test_is_daylight_false_for_pre_sunrise_winter_morning():
     # 03:30 UTC + 2h offset = 05:30 local in June, before the ~06:50 winter sunrise.
     assert is_daylight("2026-06-15T03:30:00Z") is False
+
+
+def test_minutes_from_daylight_boundary_positive_after_sunset():
+    # cam03/18512: 17:18:57 UTC = 19:18 local on 2026-01-21, January sunset 18:55.
+    assert minutes_from_daylight_boundary("2026-01-21T17:18:57Z") == pytest.approx(23.0)
+
+
+def test_minutes_from_daylight_boundary_negative_before_sunrise():
+    # 03:30 UTC + 2h offset = 05:30 local in June, 80 min before the 06:50 sunrise.
+    assert minutes_from_daylight_boundary("2026-06-15T03:30:00Z") == pytest.approx(-80.0)
+
+
+def test_minutes_from_daylight_boundary_picks_the_nearer_boundary():
+    # January (sunrise 05:30, sunset 18:55): 17:00 local is 115min before sunset,
+    # nearer than its 690min-past-sunrise distance.
+    assert minutes_from_daylight_boundary("2026-01-01T15:00:00Z") == pytest.approx(-115.0)
+
+
+def test_is_twilight_true_just_after_sunset():
+    # Same clip as the batch-2 false positive: 24 minutes after January sunset.
+    assert is_twilight("2026-01-21T17:18:57Z", margin_minutes=60) is True
+
+
+def test_is_twilight_false_well_after_dusk():
+    assert is_twilight("2026-01-21T20:00:00Z", margin_minutes=60) is False
+
+
+def test_is_twilight_false_at_deep_night():
+    assert is_twilight("2026-01-01T22:00:00Z", margin_minutes=60) is False
+
+
+def test_is_twilight_true_near_sunrise():
+    # 05:00 local in June is 110 min before the 06:50 sunrise -- outside a 60min
+    # margin, but inside a wider one.
+    assert is_twilight("2026-06-15T03:00:00Z", margin_minutes=60) is False
+    assert is_twilight("2026-06-15T03:00:00Z", margin_minutes=120) is True
 
 
 def test_flare_frames_marks_both_sides_of_a_gain_step():

@@ -71,6 +71,7 @@ from src.features import (  # noqa: E402
     green_light_mask,
     ignore_region_mask,
     is_daylight,
+    is_twilight,
 )
 from src.reference_bg import (  # noqa: E402
     era_of,
@@ -452,7 +453,12 @@ def render_clip(
     tint, ink = _zone_layers(width, height, zone)
     # Sun-time is an independent check on the colour statistic: a dawn clip can sit
     # under the colour gate and still be broad daylight (cam03 at 05:55 in November).
-    sun_daylight = timestamp is not None and is_daylight(timestamp)
+    # Dusk/dawn TWILIGHT (still not full daylight by the sun-time table, but not deep
+    # night either) gets the same treatment -- confirmed 2026-09-04 that a cluster of
+    # real guard clips 13-56 minutes after sunset were reading a faint natural-foliage
+    # green (all well under the 0.05 guard-candidate threshold) that the overlay drew
+    # anyway, since neither the colour gate nor the strict day/night split caught them.
+    sun_daylight = timestamp is not None and (is_daylight(timestamp) or is_twilight(timestamp))
     daylight_gated = sun_daylight or (features is not None and features["color_fraction"] > 0.15)
     ignore_mask = (
         ignore_region_mask(detection.frame_width, detection.frame_height, zone.ignore)

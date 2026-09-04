@@ -622,6 +622,62 @@ def test_run_track_pass_min_reacquire_area_blocks_noise_speck_after_track_drop()
     assert permissive_results[4][0] is speck
 
 
+def _scenery_pass(reference, **kwargs):
+    # A fence rail: bg-diff sees it once, then never again, but its pixels stay
+    # physically present so appearance-recovery re-matches the same frozen box
+    # forever. Exactly the cam02/4302 / cam05/4695 failure.
+    rail = _square_contour(20, 20, 12)
+
+    def _gray(_index):
+        g = np.zeros((80, 80), dtype=np.uint8)
+        _draw_textured_patch(g, 20, 20, 200, 100)
+        return g
+
+    grays = [_gray(i) for i in range(6)]
+    return spike._run_track_pass(
+        grays,
+        [[rail]] + [[] for _ in range(5)],
+        max_jump_distance=200,
+        max_track_miss_frames=5,
+        template_match_threshold=0.5,
+        reference_background=reference,
+        **kwargs,
+    )
+
+
+def test_run_track_pass_drops_frozen_recovery_that_matches_the_reference_background():
+    # The reference (built from other clips of this camera) contains the rail
+    # at the same coordinates, because the rail is always there.
+    reference = np.zeros((80, 80), dtype=np.uint8)
+    _draw_textured_patch(reference, 20, 20, 200, 100)
+
+    results = _scenery_pass(reference, max_scenery_streak=2)
+
+    # Frame 0 is a real bg-diff hit and is kept; the frozen recovered run that
+    # follows is removed retroactively rather than reported as a confident,
+    # motionless detection.
+    assert results[0][0] is not None
+    assert all(contour is None for contour, _recovered in results[1:])
+
+
+def test_run_track_pass_keeps_frozen_recovery_absent_from_the_reference_background():
+    # Same frozen, appearance-recovered run, but the reference has nothing at
+    # those coordinates -- a subject that stopped moving, not scenery. Holding
+    # still must not be enough on its own to lose the track.
+    reference = np.zeros((80, 80), dtype=np.uint8)
+    _draw_textured_patch(reference, 60, 60, 200, 100)
+
+    results = _scenery_pass(reference, max_scenery_streak=2)
+
+    assert sum(1 for contour, _recovered in results if contour is not None) == len(results)
+
+
+def test_run_track_pass_scenery_check_is_off_without_a_reference_background():
+    # Cameras with too few clips to build a reference (cam11 has two in the
+    # whole corpus) must fall through to the previous behaviour untouched.
+    assert all(contour is not None for contour, _r in _scenery_pass(None, max_scenery_streak=2))
+
+
 def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(monkeypatch):
     # A single textured subject moves across frame, well-detected by
     # background-subtraction everywhere except one frame where it's drawn at

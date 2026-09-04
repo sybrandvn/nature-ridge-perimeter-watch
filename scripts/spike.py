@@ -349,6 +349,51 @@ def reacquire_by_template(
     return (wx0 + match_x, wy0 + match_y, wx0 + match_x + tw, wy0 + match_y + th)
 
 
+# Below this grey-level spread a patch has no texture for normalised
+# cross-correlation to work with, and NCC degenerates into matching anything.
+_FLAT_PATCH_STD = 1e-3
+# Mean absolute grey difference under which two textureless patches count as
+# the same thing, standing in for the NCC that can't be computed on them.
+_FLAT_PATCH_TOLERANCE = 2.0
+# Centre movement (px) under which a recovered box counts as not having moved.
+_SCENERY_DRIFT_TOLERANCE = 1.0
+
+
+def _bbox_crop(image: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
+    x0, y0, x1, y1 = bbox
+    return image[y0:y1, x0:x1]
+
+
+def _aligned_reference(
+    reference: np.ndarray | None, background: np.ndarray
+) -> np.ndarray | None:
+    """Register a reference background onto this clip's own median, or drop it
+    if the two don't even describe the same frame size (a camera swapped
+    resolution mid-era)."""
+    if reference is None or reference.shape != background.shape:
+        return None
+    from src.reference_bg import align
+
+    aligned, _shift = align(reference, background)
+    return aligned
+
+
+def _patch_similarity(patch: np.ndarray, other: np.ndarray) -> float:
+    """Normalised cross-correlation between two equal-sized grey patches.
+
+    Falls back to a direct level comparison when either patch is flat: NCC is
+    undefined at zero variance and reports a spurious perfect match against
+    anything, so a featureless patch would otherwise look identical to every
+    other featureless patch.
+    """
+    if patch.shape != other.shape or patch.size == 0:
+        return 0.0
+    a, b = patch.astype(np.float32), other.astype(np.float32)
+    if float(a.std()) < _FLAT_PATCH_STD or float(b.std()) < _FLAT_PATCH_STD:
+        return 1.0 if float(np.abs(a - b).mean()) <= _FLAT_PATCH_TOLERANCE else 0.0
+    return float(cv2.matchTemplate(a, b, cv2.TM_CCOEFF_NORMED)[0, 0])
+
+
 def _run_track_pass(
     grays: list[np.ndarray],
     candidates_per_frame: list[list[np.ndarray]],
@@ -362,6 +407,9 @@ def _run_track_pass(
     max_size_change_ratio: float = 4.0,
     min_reacquire_area: float = 20.0,
     enforce_min_area: list[bool] | None = None,
+    reference_background: np.ndarray | None = None,
+    max_scenery_streak: int = 2,
+    scenery_correlation: float = 0.94,
 ) -> list[tuple[np.ndarray | None, bool]]:
     """Run the track_contour + reacquire_by_template state machine once over a
     sequence of frames, in whatever order they're given -- forward, or
@@ -422,11 +470,37 @@ def _run_track_pass(
     time). The floor applies if EITHER this scan's own `ever_tracked` or the
     supplied flag says so -- whichever direction learned about a real subject
     first still protects every frame after it.
+
+    `reference_background` (see `src.reference_bg`) catches what
+    `max_recovered_streak` above is too blunt for: the track latching onto a
+    static piece of scenery -- a mounting pole, a fence rail, a strand of razor
+    wire -- and holding it for the rest of the clip. A run of
+    appearance-recovered frames whose box does not move and whose contents
+    correlate above `scenery_correlation` with the SAME COORDINATES in a
+    background built from OTHER clips of this camera is scenery, and is removed
+    retroactively rather than reported as a confident, motionless, wrong
+    detection.
+
+    The reference has to come from other clips. Comparing against this clip's
+    own median instead is circular and was measured to be worthless: a frame is
+    appearance-recovered precisely BECAUSE background subtraction found nothing
+    there, so it always resembles its own clip's median. Over 60 frozen runs
+    that gave real subjects 0.54-1.00 and known scenery 0.87-0.99 -- no
+    separation. A rail appears in every clip from its camera; a guard appears
+    in one.
+
+    Holding still is not itself penalised. A stationary guard also goes
+    recovered-and-frozen, but does not look like the scene behind them, so the
+    correlation test fails and the track survives. Pass
+    `reference_background=None` (the default) to disable this entirely, which
+    is what happens for any camera with too few clips to build a reference
+    from.
     """
     results: list[tuple[np.ndarray | None, bool]] = []
     track_bbox: tuple[int, int, int, int] | None = None
     track_miss = 0
     recovered_streak = 0
+    scenery_streak = 0
     template: np.ndarray | None = None
     velocity = (0.0, 0.0)
     ever_tracked = False
@@ -464,6 +538,7 @@ def _run_track_pass(
         if contour is None:
             track_miss += 1
             recovered_streak = 0
+            scenery_streak = 0
             if track_miss > max_track_miss_frames:
                 track_bbox = None
                 template = None
@@ -471,18 +546,41 @@ def _run_track_pass(
         else:
             ever_tracked = True
             new_bbox = _contour_bbox(contour)
+            drift = float("inf")
             if track_bbox is not None:
                 old_center, new_center = _bbox_center(track_bbox), _bbox_center(new_bbox)
                 velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
+                drift = (velocity[0] ** 2 + velocity[1] ** 2) ** 0.5
             track_bbox = new_bbox
             track_miss = 0
             recovered_streak = recovered_streak + 1 if recovered else 0
-            if recovered_streak > max_recovered_streak:
+            if (
+                recovered
+                and reference_background is not None
+                and drift <= _SCENERY_DRIFT_TOLERANCE
+                and _patch_similarity(
+                    _bbox_crop(gray, new_bbox), _bbox_crop(reference_background, new_bbox)
+                )
+                >= scenery_correlation
+            ):
+                scenery_streak += 1
+            else:
+                scenery_streak = 0
+            if scenery_streak > max_scenery_streak:
+                for offset in range(1, scenery_streak):
+                    results[-offset] = (None, False)
+                contour, recovered = None, False
                 track_bbox = None
                 template = None
                 velocity = (0.0, 0.0)
                 recovered_streak = 0
-            if not recovered:
+                scenery_streak = 0
+            elif recovered_streak > max_recovered_streak:
+                track_bbox = None
+                template = None
+                velocity = (0.0, 0.0)
+                recovered_streak = 0
+            if not recovered and track_bbox is not None:
                 x0, y0, x1, y1 = track_bbox
                 crop = gray[y0:y1, x0:x1]
                 if crop.size > 0:
@@ -841,6 +939,9 @@ def detect_clip(
     anchor_refine: bool = True,
     max_anchor_streak: int = 4,
     min_reacquire_area: float = 20.0,
+    reference_background: np.ndarray | None = None,
+    max_scenery_streak: int = 2,
+    scenery_correlation: float = 0.94,
     ignore_polygons: tuple[tuple[tuple[float, float], ...], ...] = (),
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
@@ -971,6 +1072,14 @@ def detect_clip(
     cam13/4101's post-exit frames correctly report no detection instead of a
     confident wrong one.
 
+    `reference_background`, when supplied, additionally removes runs of frozen
+    appearance-recovered frames that match a background built from OTHER clips
+    of the same camera at the same coordinates -- the tracker holding a fence
+    rail or a mounting pole rather than a subject (see `_run_track_pass` and
+    `src.reference_bg`). It is aligned onto this clip's own median by phase
+    correlation first, because cameras drift on their mounts between clips and
+    the comparison is per-pixel. Omit it to disable the check.
+
     Both passes above refresh their appearance template on every real
     detection, which is what lets them follow a genuinely changing subject.
     They can still both come up empty on a frame, so `anchor_refine` adds a
@@ -1079,6 +1188,9 @@ def detect_clip(
         "max_recovered_streak": max_recovered_streak,
         "max_size_change_ratio": max_size_change_ratio,
         "min_reacquire_area": min_reacquire_area,
+        "reference_background": _aligned_reference(reference_background, background),
+        "max_scenery_streak": max_scenery_streak,
+        "scenery_correlation": scenery_correlation,
     }
     forward = _run_track_pass(grays, per_frame_candidates, **track_kwargs)
     # Tell the backward pass which original frames already had a real subject

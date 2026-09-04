@@ -1,16 +1,17 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-03. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-03, session close)" near the bottom**
-— it has current state, the prioritised remaining work, and the two validation lessons that cost
-the most time recently. `docs/plan.md` is the full plan and stays authoritative; this file is the
-short version of where things actually stand and what to do next.
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-04. **If you are a new agent
+picking this up, start at "Handoff for a new agent (2026-09-04, session close #2)" at the very
+bottom, just above "Conventions"** — it has current state, the prioritised remaining work, and
+the two validation lessons that cost the most time recently. `docs/plan.md` is the full plan and
+stays authoritative; this file is the short version of where things actually stand and what to do
+next.
 
 ## Where the project is
 
 On branch `feat/phase1-finalisation` (branched off `main` at the `phase0-checkpoint` tag;
-`feat/phase0-foundations` is retired but kept). Working tree clean, 365 tests passing
-(`uv run ruff check . && uv run pytest -q`) as of 2026-09-03.
+`feat/phase0-foundations` is retired but kept). Working tree clean, 372 tests passing
+(`uv run ruff check . && uv run pytest -q`) as of 2026-09-04.
 
 Phase 0 is merged to `main` as a checkpoint, not a clean sign-off — see `docs/plan.md`'s
 "Checkpoint (2026-08-30)" section. Gate 2 pass/fail is still the one open decision affecting
@@ -735,6 +736,55 @@ steps. cam11/4310 (flashlight colour + stationary light) needs separate handling
 2 clips in the entire corpus, so no cross-clip method can ever help it. cam03/9237 and 9239 were
 reviewed on 2026-09-04 and deliberately left `unknown`; their notes record why, so don't
 re-investigate them.
+
+## Handoff for a new agent (2026-09-04, session close #2)
+
+**State.** Branch `feat/phase1-finalisation`, working tree clean, 372 tests passing
+(`uv run ruff check . --fix && uv run pytest -q`). Same label counts as the session above (guard
+252, environment 39, unknown 18, resident 10, incident 10, animal 10, 93 startup-only).
+
+**This session picked up item A from the section above** ("Identify `environment` correctly,
+using the reference background as the candidate source") and got a decisive, well-explained
+**negative** result for its first candidate signal. Full numbers and mechanism are in
+`/memories/repo/nature-ridge-conventions.md` under "Environment-via-reference-background: signal
+(a) MEASURED AND REJECTED (2026-09-04)" — read that before touching this again.
+
+**Summary: naive per-blob reference comparison scores WORSE than random for environment-vs-guard
+(AUC 0.42-0.45, vs. blob_count's existing 0.813-0.933 baseline on the same data), and it's not a
+tuning problem.** `_patch_similarity` (NCC) is invariant to linear brightness rescaling, so a
+guard's flashlight lighting up known-static scenery (a fence rail, the ground) still "matches"
+the reference structurally, just brighter — while wind-shaken foliage genuinely changes the local
+texture pattern and scores LOW. The signal points backwards for a real, structural reason. This
+is exactly why the narrower, already-shipped version of this idea (the frozen-box scenery veto,
+section above) works and this broader per-blob version does not: the veto additionally requires
+the box to be near-stationary across several consecutive frames before comparing it to the
+reference at all, which a translating illuminated guard never satisfies.
+
+**What shipped anyway, harmlessly:** `scripts/spike.py` gained `scenery_motion_fraction` +
+`has_reference_background` (the latter diagnostic-only, added to `rank_candidates.py`'s
+`_NON_FEATURE_COLUMNS`) — purely additive dict keys / dataclass fields with defaults, zero
+regression, 5 new tests. Kept as real infrastructure for a future refined attempt (see next
+paragraph), but **not** wired into `scripts/backtest.py::classify` — doing so would make
+guard/environment separation worse, not better. `environment_candidate` is unchanged
+(`blob_count > 10`).
+
+**Also quick-checked (no code shipped): net displacement / path length ("subject translates, wind
+oscillates in place").** AUC 0.665 guard-vs-environment — right direction this time, but still
+below the blob_count baseline and confounded by short tracks (exactly 2 genuine centroids always
+scores ratio=1.0, trivially, regardless of what the subject actually did). Same family of noise
+this repo's batch-5 ablation already found for `jitter`/`path_length` alone. Not implemented as a
+real feature. "Total area of scenery-matching motion" (the third candidate signal) was not
+separately tested — it shares signal (a)'s NCC-brightness-invariance flaw as its core ingredient.
+
+**Credible next direction for item A, not attempted this session:** restrict the reference
+comparison to blobs that are themselves near-stationary/recurring at the same location across the
+clip (or across several frames within it), rather than scoring every transient blob regardless of
+motion — i.e., borrow the veto's own "is this box actually holding still" gate rather than
+applying the reference check to everything. That is the one structural difference between the
+already-working veto and this session's failed broader attempt.
+
+**Gate 2 pass/fail (item 4 above) is still the standing, unrelated open decision** — nothing this
+session changes that.
 
 ## Conventions
 

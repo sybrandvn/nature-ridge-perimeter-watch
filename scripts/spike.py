@@ -106,6 +106,8 @@ FEATURE_COLUMNS = (
     "fence_crossed",
     "median_fence_distance",
     "recovered_fraction",
+    "scenery_motion_fraction",
+    "has_reference_background",
 )
 
 
@@ -917,6 +919,13 @@ class ClipDetection:
     # every persistently-identified subject per frame, from track_multiple_objects --
     # additive diagnostic detail, parallel to `frames`, not used in feature scoring.
     multi_tracks: list[list[TrackedObject]] = field(default_factory=list)
+    # fraction of this clip's total blob area that sits on reference-matching
+    # ground (see the scenery-motion computation in `detect_clip`) -- 0.0 with
+    # no motion or no reference background at all. `has_reference_background`
+    # tells the two apart, since "no reference" must never silently read the
+    # same as "no scenery motion found".
+    scenery_motion_fraction: float = 0.0
+    has_reference_background: bool = False
 
 
 def detect_clip(
@@ -1129,6 +1138,7 @@ def detect_clip(
     min_blob_area = min_blob_area_fraction * frame_height * frame_width
 
     background = np.median(np.stack(grays), axis=0).astype(np.uint8)
+    aligned_ref = _aligned_reference(reference_background, background)
     kernel = np.ones((3, 3), np.uint8)
     close_kernel = (
         np.ones((fragment_close_kernel_size, fragment_close_kernel_size), np.uint8)
@@ -1148,6 +1158,8 @@ def detect_clip(
     per_frame_candidates: list[list[np.ndarray]] = []
     per_frame_suppressed_boxes: list[tuple[int, int, int, int] | None] = []
     motion_fracs: list[float] = []
+    total_motion_area = 0.0
+    scenery_motion_area = 0.0
     for gray in grays:
         diff = cv2.absdiff(gray, background)
         _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
@@ -1178,6 +1190,19 @@ def detect_clip(
             [c for c in frame_contours if 0 < cv2.contourArea(c) <= max_area]
         )
         motion_fracs.append(float(np.count_nonzero(mask)) / mask.size)
+        # Scored per blob, not per pixel: a location matching the reference at
+        # the SAME coordinates (built from other clips of this camera) is
+        # something normally there -- foliage or a fence rail shaking in the
+        # wind, not a subject that only ever visits once. See `_run_track_pass`
+        # for why the comparison must use a different clip's background, not
+        # this clip's own (circular, no separation -- measured and rejected).
+        for blob in per_frame_blobs[-1]:
+            area = cv2.contourArea(blob)
+            total_motion_area += area
+            if aligned_ref is not None and _patch_similarity(
+                _bbox_crop(gray, _contour_bbox(blob)), _bbox_crop(aligned_ref, _contour_bbox(blob))
+            ) >= scenery_correlation:
+                scenery_motion_area += area
 
     track_kwargs = {
         "max_jump_distance": max_jump_distance,
@@ -1188,7 +1213,7 @@ def detect_clip(
         "max_recovered_streak": max_recovered_streak,
         "max_size_change_ratio": max_size_change_ratio,
         "min_reacquire_area": min_reacquire_area,
-        "reference_background": _aligned_reference(reference_background, background),
+        "reference_background": aligned_ref,
         "max_scenery_streak": max_scenery_streak,
         "scenery_correlation": scenery_correlation,
     }
@@ -1336,6 +1361,10 @@ def detect_clip(
         dropped_frames=frames[:drop],
         dropped_frame_boxes=dropped_frame_boxes,
         multi_tracks=multi_tracks,
+        scenery_motion_fraction=(
+            scenery_motion_area / total_motion_area if total_motion_area > 0 else 0.0
+        ),
+        has_reference_background=aligned_ref is not None,
     )
 
 
@@ -1351,6 +1380,8 @@ def extract_clip_features(
     max_flare_fraction: float = 0.4,
     daylight_color_fraction: float = 0.15,
     template_match_threshold: float = 0.55,
+    reference_background: np.ndarray | None = None,
+    scenery_correlation: float = 0.94,
 ) -> dict[str, float] | None:
     """Run the detector over one clip and compute features for its largest
     track. Returns None if no motion was detected.
@@ -1363,6 +1394,16 @@ def extract_clip_features(
     (broad-frame saturation, see `src.features.color_saturation_fraction`)
     clears this threshold the clip is treated as genuine colour footage and
     both green-light features are zeroed rather than trusted.
+
+    `reference_background`, when supplied, additionally computes
+    `scenery_motion_fraction` (see `detect_clip`) -- the fraction of this
+    clip's total blob area that sits on ground the reference says is normally
+    there, the candidate signal for wind-shaken vegetation. Omit it (the
+    default) to leave both `scenery_motion_fraction` at 0.0 and
+    `has_reference_background` at 0.0; a consumer must check the latter
+    before treating the former as "no scenery motion found", since a camera
+    with no reference at all looks identical to one with a reference that
+    simply found nothing.
     """
     detection = detect_clip(
         video_path,
@@ -1373,6 +1414,8 @@ def extract_clip_features(
         max_flare_fraction=max_flare_fraction,
         template_match_threshold=template_match_threshold,
         ignore_polygons=zone.ignore,
+        reference_background=reference_background,
+        scenery_correlation=scenery_correlation,
     )
     if detection is None:
         return None
@@ -1526,6 +1569,8 @@ def extract_clip_features(
         "recovered_fraction": (
             non_genuine_frames / len(considered) if considered else 0.0
         ),
+        "scenery_motion_fraction": detection.scenery_motion_fraction,
+        "has_reference_background": float(detection.has_reference_background),
     }
 
 

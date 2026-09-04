@@ -49,6 +49,7 @@ _NON_FEATURE_COLUMNS = (
     "label",
     "time_of_day",
     "is_daylight",
+    "has_reference_background",
 )
 NUMERIC_FEATURES = tuple(c for c in FEATURE_COLUMNS if c not in _NON_FEATURE_COLUMNS)
 POSITIVE_LABELS = ("animal", "incident")

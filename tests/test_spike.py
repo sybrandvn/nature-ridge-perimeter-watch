@@ -678,6 +678,107 @@ def test_run_track_pass_scenery_check_is_off_without_a_reference_background():
     assert all(contour is not None for contour, _r in _scenery_pass(None, max_scenery_streak=2))
 
 
+def test_detect_clip_scenery_motion_fraction_high_when_blobs_match_reference(monkeypatch):
+    # A blob visits three different spots across the clip -- unlike the frozen
+    # single-location veto tests above, this exercises the whole-clip
+    # scenery-motion feature, which scores every blob wherever it moves. The
+    # reference has matching texture at all three, standing in for "this
+    # camera's typical scenery covers this range of positions" (e.g. a bush
+    # swaying in the wind).
+    monkeypatch.setattr(spike, "_aligned_reference", lambda ref, _bg: ref)
+    positions = [(10, 10), (30, 30), (50, 10)]
+    frames = []
+    for x, y in positions:
+        frame = np.zeros((70, 70, 3), dtype=np.uint8)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], x, y, 200, 100)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    reference = np.zeros((70, 70), dtype=np.uint8)
+    for x, y in positions:
+        _draw_textured_patch(reference, x, y, 200, 100)
+    # Blurred the same way `src.reference_bg.clip_median_background` blurs a
+    # real reference -- an unblurred hard-edged synthetic reference compared
+    # against the (blurred) clip frames underscores real texture, not scenery.
+    reference = cv2.GaussianBlur(reference, (5, 5), 0)
+
+    detection = spike.detect_clip("clip.mp4", threshold=18, reference_background=reference)
+
+    assert detection is not None
+    assert detection.has_reference_background is True
+    assert detection.scenery_motion_fraction > 0.9
+
+
+def test_detect_clip_scenery_motion_fraction_low_when_blobs_dont_match_reference(monkeypatch):
+    # Same moving blob, but the reference has nothing there at any of its
+    # positions -- a subject visiting a place with no known static scenery.
+    monkeypatch.setattr(spike, "_aligned_reference", lambda ref, _bg: ref)
+    positions = [(10, 10), (30, 30), (50, 10)]
+    frames = []
+    for x, y in positions:
+        frame = np.zeros((70, 70, 3), dtype=np.uint8)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], x, y, 200, 100)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    reference = np.zeros((70, 70), dtype=np.uint8)
+
+    detection = spike.detect_clip("clip.mp4", threshold=18, reference_background=reference)
+
+    assert detection is not None
+    assert detection.has_reference_background is True
+    assert detection.scenery_motion_fraction == pytest.approx(0.0)
+
+
+def test_detect_clip_scenery_motion_fraction_zero_without_a_reference(monkeypatch):
+    # No reference supplied at all (e.g. too few clips to build one) --
+    # has_reference_background must say so rather than silently reading the
+    # same as "found no scenery motion".
+    frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+
+    assert detection is not None
+    assert detection.has_reference_background is False
+    assert detection.scenery_motion_fraction == pytest.approx(0.0)
+
+
+def test_extract_clip_features_surfaces_scenery_motion_fraction(monkeypatch):
+    monkeypatch.setattr(spike, "_aligned_reference", lambda ref, _bg: ref)
+    positions = [(10, 10), (30, 30), (50, 10)]
+    frames = []
+    for x, y in positions:
+        frame = np.zeros((70, 70, 3), dtype=np.uint8)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], x, y, 200, 100)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    reference = np.zeros((70, 70), dtype=np.uint8)
+    for x, y in positions:
+        _draw_textured_patch(reference, x, y, 200, 100)
+    reference = cv2.GaussianBlur(reference, (5, 5), 0)
+
+    result = spike.extract_clip_features(
+        "clip.mp4", _ZONE, threshold=18, reference_background=reference
+    )
+
+    assert result is not None
+    assert result["has_reference_background"] == 1.0
+    assert result["scenery_motion_fraction"] > 0.9
+
+
+def test_extract_clip_features_scenery_motion_fraction_zero_without_reference(monkeypatch):
+    frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features("clip.mp4", _ZONE, threshold=18)
+
+    assert result is not None
+    assert result["has_reference_background"] == 0.0
+    assert result["scenery_motion_fraction"] == pytest.approx(0.0)
+
+
 def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(monkeypatch):
     # A single textured subject moves across frame, well-detected by
     # background-subtraction everywhere except one frame where it's drawn at

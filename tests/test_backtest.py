@@ -18,6 +18,8 @@ def _features(**overrides) -> dict[str, float]:
         "jitter": 1.0,
         "persistence": 0.5,
         "outside_pixel_fraction": 0.0,
+        "median_fence_distance": 0.0,
+        "color_fraction": 0.0,
         "blob_count": 1,
     }
     base.update(overrides)
@@ -46,22 +48,37 @@ def test_classify_guard_wins_over_environment_blob_count():
 
 
 def test_classify_environment_wins_over_animal_incident_shape():
-    # high blob_count AND low aspect ratio -- environment_candidate takes priority
-    features = _features(blob_count=11, aspect_ratio=0.7)
+    # high blob_count AND a fence-crossing geometry read -- environment_candidate
+    # takes priority over the animal/incident geometry rule.
+    features = _features(blob_count=11, outside_pixel_fraction=0.9, median_fence_distance=0.5)
     assert backtest.classify(features) == "environment_candidate"
 
 
-def test_classify_animal_or_incident_candidate():
-    assert (
-        backtest.classify(_features(aspect_ratio=0.7, green_light_ratio=0.0))
-        == "animal_or_incident_candidate"
+def test_classify_animal_candidate_on_daylight_color():
+    features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.5, color_fraction=0.3)
+    assert backtest.classify(features) == "animal_candidate"
+
+
+def test_classify_incident_candidate_on_night_color():
+    features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.5, color_fraction=0.0)
+    assert backtest.classify(features) == "incident_candidate"
+
+
+def test_classify_guard_wins_over_animal_incident_geometry():
+    # green light present AND a fence-crossing geometry read -- guard_candidate
+    # takes priority, since guards routinely register as "outside" too (they walk
+    # close to the fence and shine a flashlight across it).
+    features = _features(
+        outside_pixel_fraction=0.9, median_fence_distance=0.5, green_light_ratio=0.2
     )
-
-
-def test_classify_guard_wins_over_animal_incident_shape():
-    # green light present AND low aspect ratio -- guard_candidate takes priority
-    features = _features(aspect_ratio=0.7, green_light_ratio=0.2)
     assert backtest.classify(features) == "guard_candidate"
+
+
+def test_classify_requires_both_outside_fraction_and_fence_distance():
+    # High outside_pixel_fraction alone (e.g. a guard hugging the fence, visible
+    # through the mesh) must not fire without also being far from the fence line.
+    features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.05)
+    assert backtest.classify(features) == "unclassified"
 
 
 def test_classify_insect_candidate():

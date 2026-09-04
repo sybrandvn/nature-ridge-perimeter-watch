@@ -12,7 +12,7 @@ Rules:
     every alternative gate design tried and rejected 2026-08-30, see
     "Daylight-gate fix investigated and ABANDONED" in repo memory.)
   - environment_candidate: blob_count > 10 (added 2026-08-31, checked before
-    animal_or_incident_candidate/insect_candidate so a stormy/windy clip's
+    animal_candidate/incident_candidate/insect_candidate so a stormy/windy clip's
     scattered foliage blobs don't get read as a shape signal. Measured against
     222 labelled guard+environment clips: 59% environment recall (13/22), 4.5%
     guard false-fire (9/200), 0/15 leak against the full labelled animal+incident
@@ -20,14 +20,33 @@ Rules:
     AUC 0.933. Higher thresholds trade recall for guard false-fire; 10 is the
     highest threshold with zero animal+incident leak (cam15/15454's porcupine
     sits at exactly blob_count=10).)
-  - animal_or_incident_candidate: aspect_ratio < 0.95 and green_light_ratio < 0.05
-    (measured 2026-08-31 on the current tracker: this rule's own premise has
-    inverted -- animal+incident median aspect_ratio is now 1.24-1.41, HIGHER
-    than guard's 1.05, not lower as the original finding doc assumed. Left
-    unchanged pending a real re-derivation of this rule, not touched this pass;
-    still fires on 74/200 guard clips, a known contamination of this candidate
-    pool -- do not trust its precision without re-measuring.) This category
-    doesn't split animal vs incident -- there's no validated rule for that.
+  - animal_candidate / incident_candidate: outside_pixel_fraction > 0.6 and
+    median_fence_distance > 0.1, split further by color_fraction > 0.15
+    (re-derived 2026-09-04, replacing the old aspect_ratio<0.95 rule -- its
+    premise had fully inverted under the current tracker, see below).
+    Measured on 378 labelled+detected clips (guard 264, environment 95,
+    animal 9, incident 10), through the SAME rule order as classify() itself
+    (i.e. only rows guard_candidate/environment_candidate didn't already
+    catch): recall 26.3% -> 73.7%, guard false-fire 31.8% -> 15.9% (both a
+    clear improvement over the old rule measured the same way). Cost:
+    environment false-fire rose 21.1% -> 31.6%, acceptable since
+    environment_candidate is checked first and already catches most of it.
+    `outside_pixel_fraction` alone (AUC 0.700 animal+incident vs guard+
+    environment) was NOT safe on its own -- guards routinely register as
+    "outside" too (they walk close to the fence, visible through the mesh,
+    and shine a flashlight across it), matching this exact predicted failure
+    mode in docs/gate2_separability_finding.md. Requiring `median_fence_
+    distance > 0.1` alongside it is what actually suppresses that confound.
+    The animal/incident split itself is DERIVED FROM ONLY 19 TOTAL CLIPS (9
+    animal, 10 incident) -- treat it as a strong LEAD, not a certified rule.
+    `color_fraction > 0.15` (AUC 0.828 animal-vs-incident) separates them
+    cleanly in this small sample: 0/10 incident clips exceed 0.04, so every
+    incident in this corpus happened in full night IR; 7/9 animal clips
+    exceed 0.15 (daylight/dusk sightings). The other rule-order note still
+    applies: `aspect_ratio` itself is now USELESS for this pair (AUC 0.518,
+    barely better than random) -- do not reuse it, that premise inverted for
+    real this time, confirmed on a much bigger sample than the original
+    2026-08-31 measurement.
   - insect_candidate: jitter > 50 and solidity < 0.85
     (measured 2026-08-31: 0/22 environment clips now reach jitter>50 under the
     current tracker -- this rule is effectively dead, the persistent-tracking
@@ -82,6 +101,8 @@ REPORT_COLUMNS = (
     "jitter",
     "persistence",
     "outside_pixel_fraction",
+    "median_fence_distance",
+    "color_fraction",
     "path_length",
     "blob_count",
 )
@@ -89,19 +110,19 @@ REPORT_COLUMNS = (
 
 def classify(features: dict[str, float] | None) -> str:
     """Pure rule lookup -- see the module docstring for what each rule means and
-    where its thresholds come from. `guard_candidate` is checked first: the
-    green-light exclusion in `animal_or_incident_candidate` is what raises that
-    rule's precision, so a clip matching both is a guard, not a double-count.
-    `environment_candidate` is checked next, before the shape-based rules, so a
-    stormy/windy clip's scattered blobs don't get read as a shape signal."""
+    where its thresholds come from. `guard_candidate` is checked first since
+    most rules below assume a real flashlight sighting has already been pulled
+    out. `environment_candidate` is checked next, before the shape-based rules,
+    so a stormy/windy clip's scattered blobs don't get read as a shape
+    signal."""
     if features is None:
         return "no_motion"
     if features["green_light_ratio"] > 0.05 or features["green_light_flicker"] > 0.02:
         return "guard_candidate"
     if features["blob_count"] > 10:
         return "environment_candidate"
-    if features["aspect_ratio"] < 0.95 and features["green_light_ratio"] < 0.05:
-        return "animal_or_incident_candidate"
+    if features["outside_pixel_fraction"] > 0.6 and features["median_fence_distance"] > 0.1:
+        return "animal_candidate" if features["color_fraction"] > 0.15 else "incident_candidate"
     if features["jitter"] > 50 and features["solidity"] < 0.85:
         return "insect_candidate"
     return "unclassified"

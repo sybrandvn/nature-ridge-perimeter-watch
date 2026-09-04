@@ -402,6 +402,7 @@ def render_clip(
     flare_tolerance: float = DEFAULTS["flare_tolerance"],
     max_flare_fraction: float = DEFAULTS["max_flare_fraction"],
     reference_background: np.ndarray | None = None,
+    timestamp: str | None = None,
 ) -> str | None:
     """Write an annotated H.264 .mp4 video for one clip. Returns the path, or
     None if the clip has no readable frames.
@@ -449,7 +450,10 @@ def render_clip(
         if value != DEFAULTS[name]
     ]
     tint, ink = _zone_layers(width, height, zone)
-    daylight_gated = features is not None and features["color_fraction"] > 0.15
+    # Sun-time is an independent check on the colour statistic: a dawn clip can sit
+    # under the colour gate and still be broad daylight (cam03 at 05:55 in November).
+    sun_daylight = timestamp is not None and is_daylight(timestamp)
+    daylight_gated = sun_daylight or (features is not None and features["color_fraction"] > 0.15)
     ignore_mask = (
         ignore_region_mask(detection.frame_width, detection.frame_height, zone.ignore)
         if zone.ignore
@@ -720,7 +724,12 @@ def render_clip(
                     (
                         "clip color_fraction (green gated?)",
                         f"{features['color_fraction']:.2f}"
-                        + (" YES" if features["color_fraction"] > 0.15 else " no"),
+                        + (
+                            " YES"
+                            if daylight_gated
+                            else " no"
+                        )
+                        + (" (sun)" if sun_daylight else ""),
                     ),
                 ]
             if overrides:
@@ -835,6 +844,14 @@ def _resolve_clips(args, conn) -> list[dict]:
     return selected[: args.limit] if args.limit else selected
 
 
+def _widen_year(embedded: str) -> str:
+    """Captions carry `DD-MM-YY HH:MM:SS`; show the century so a 2024 clip
+    can't be misread as 2004 or 1924."""
+    date, _, clock = embedded.partition(" ")
+    day, month, year = date.split("-")
+    return f"{day}-{month}-20{year} {clock}" if len(year) == 2 else embedded
+
+
 def _reference_background(entries, root, camera, timestamp):
     """Resolve this camera's reference background for the clip's era and
     lighting, or None when no reference covers it (too few clips, or a
@@ -910,7 +927,8 @@ def main(argv: list[str] | None = None) -> int:
         title = f"{clip['camera_id']}/{clip['message_id']} {clip['label']}".strip()
         ts_match = _EVENT_TS_RE.search(clip.get("caption") or "")
         if ts_match:
-            title += f" @ {ts_match.group(1)}"  # embedded camera time, site-local (SAST)
+            # embedded camera time, site-local (SAST); captions carry a 2-digit year
+            title += f" @ {_widen_year(ts_match.group(1))}"
         if clip.get("startup_state"):
             title += f" [startup_state={clip['startup_state']}]"
         result = render_clip(
@@ -927,6 +945,7 @@ def main(argv: list[str] | None = None) -> int:
             reference_background=_reference_background(
                 reference_entries, args.reference_bg, camera, clip.get("timestamp")
             ),
+            timestamp=clip.get("timestamp"),
         )
         if result is None:
             print(f"  skip {title}: no readable frames")

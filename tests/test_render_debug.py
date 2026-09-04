@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
+from scripts import render_debug
 from scripts.render_debug import DEFAULTS, _draw_dashed_rect, _draw_light_mask, render_clip
 from scripts.spike import detect_clip
 from src.config import CameraZone
@@ -84,6 +85,14 @@ def test_draw_light_mask_is_suppressed_when_daylight_gated():
     canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
     _draw_light_mask(canvas, frame, daylight_gated=True)
     assert not canvas.any()
+
+
+def test_widen_year_shows_the_century_on_a_caption_timestamp():
+    assert render_debug._widen_year("25-11-24 05:55:34") == "25-11-2024 05:55:34"
+
+
+def test_widen_year_leaves_an_already_four_digit_year_alone():
+    assert render_debug._widen_year("25-11-2024 05:55:34") == "25-11-2024 05:55:34"
 
 
 def test_draw_light_mask_splits_stationary_from_moving_by_ignore_mask():

@@ -498,13 +498,19 @@ ignore regions, detect-layer, render-layer, a leftover `rank_candidates.py` fix,
 cam12 dated fence. The working tree had been carrying all of this uncommitted since the previous
 session — worth checking `git status` early next time.
 
-## Handoff for a new agent (2026-09-03, session close)
+## Handoff for a new agent (2026-09-04, session close)
 
-**State.** Branch `feat/phase1-finalisation`, working tree clean, 365 tests passing
-(`uv run ruff check . --fix && uv run pytest -q`). 432 label rows (guard 252, environment 39,
-unknown 18, resident 10, incident 10, animal 10, plus 93 with only a `startup_state`). 52 debug
-renders across 6 folders under `data/reports/debug_render/` (gitignored, local-only), all current
-against HEAD.
+**State.** Branch `feat/phase1-finalisation`, working tree clean, 367 tests passing
+(`uv run ruff check . --fix && uv run pytest -q`), 21 commits ahead of `origin/main` and
+unpushed. 432 label rows (guard 252, environment 39, unknown 18, resident 10, incident 10,
+animal 10, plus 93 with only a `startup_state`). 52 debug renders across 6 folders under
+`data/reports/debug_render/` (gitignored, local-only). 133 per-camera reference backgrounds in
+`data/reference_bg/` (also gitignored) — rebuild with `scripts/build_reference_bg.py` as the
+corpus grows.
+
+**What changed on 2026-09-04.** The per-camera reference background (item 2 below) was built,
+swept, kept and committed. The cam03 daylight confound (item 3) was partially resolved by a
+sun-time gate. Neither is wired into scoring yet — see item A.
 
 **Do not "complete" the incident sample set.** Every incident is a pair of Telegram clips: a short
 startup/trigger segment followed by a longer continuation that already contains it. Only the
@@ -526,7 +532,68 @@ two most expensive lessons from this session:
 
 ### Remaining work, in suggested order
 
-**1. The static-texture lock (highest value, 4+ clips, no fix yet).** A track gets sustained
+Items A and B are the current priorities and were set on 2026-09-04. Items 1-5 below them are the
+older list, kept because their measurements and rejected approaches are still the reference
+record; 1 and 2 are now closed, 3 is partially closed.
+
+**A. Identify `environment` correctly, using the reference background as the candidate source.**
+This is the user's chosen next direction and the highest-value open item.
+
+The reference-background veto shipped this session currently *throws away* the information it
+computes. When it drops a frozen run because the box matches the per-camera reference, it has
+just established something valuable: **there is motion here, and it is sitting on top of scenery
+that is always there.** That is close to a definition of wind-blown vegetation.
+
+The proposed signals, in the user's framing:
+
+- *If it moves, it may be wind.* Motion that lands on reference-background regions is vegetation
+  being shaken, not a subject. A candidate feature is the fraction of a clip's bg-diff motion
+  pixels whose location matches the reference background above the `scenery_correlation`
+  threshold.
+- *If it isn't movement, track it across the screen.* A subject **translates**; wind
+  **oscillates in place**. Net displacement over the clip, measured against path length, should
+  separate a person walking a fence line from a branch swinging back and forth. Note this is
+  distinct from the existing `path_length`/`jitter` features, which measure magnitude, not net
+  direction \u2014 and which the batch-5 ablation found to be noise.
+- *Larger surface areas.* Wind moves a whole bush; a subject is compact. Total area (or bounding
+  extent) of scenery-matching motion is a third candidate.
+
+**Read these three prior results before writing any code \u2014 two of them are near-misses on this
+exact idea:**
+
+1. **A closely-related attempt already failed.** An ad-hoc "fraction of frames with whole-frame-ish
+   motion" metric was tried against the 4 known storm clips (cam15/9944, 9954, 9956, 18948) and did
+   *not* separate them from guard/environment clips \u2014 some guard clips scored as high or higher.
+   The reference background is the genuinely new ingredient (it distinguishes "motion everywhere"
+   from "motion everywhere *on top of known-static scenery*"), but treat this as unproven, and
+   expect to have to beat that prior negative explicitly.
+2. **`motion_heatmap` was rejected as a detection prior precisely because of this behaviour** \u2014 it
+   lights 60-68% of the frame on vegetation clips (cam10/4042: 52655 of 76800 px) because
+   wind-blown foliage is real motion everywhere. That failure as a *prior* is exactly the signal
+   wanted as an *environment feature*. The tool already exists and is already validated.
+3. **The bar to beat is `blob_count`**, AUC 0.933 for environment-vs-guard, currently used at
+   threshold 10 in `scripts/backtest.py::classify` for 59% environment recall at 4.5% guard
+   false-fire and zero animal/incident leak. Any new feature must be measured against that
+   baseline, and must be checked against the **full** animal+incident set \u2014 the user's standing
+   constraint is that no tuning may lose an animal or an incident.
+
+Practical caveats: there are only 39 environment labels, and just 4 environment clips in the whole
+DB carry any notes, so labelling more wind/storm clips with notes is a cheap prerequisite. Four
+of the standing sample's clips have no reference background at all (cam12/19245 by era,
+cam11/4309, cam11/4310, cam09/21522 by sparsity), so any reference-derived feature needs a defined
+value when no reference exists \u2014 do not let "no reference" silently read as "no scenery motion".
+
+**B. Decide whether the reference-background veto feeds scoring.** It is currently wired only into
+`scripts/render_debug.py`. `scripts/backtest.py` and `scripts/rank_candidates.py` still pass no
+reference, so **no feature value has moved corpus-wide** and every recorded AUC remains
+comparable. Turning it on there would change `persistence`, `longest_detection_run`,
+`recovered_fraction` and the other provenance-derived features on the ~7% of clips it affects, and
+requires a fresh leave-one-out AUC measurement to justify. This is a deliberate decision, not an
+oversight \u2014 and item A may well settle it, since item A wants that information as a feature
+rather than as a silent veto.
+
+**1. The static-texture lock — ADDRESSED 2026-09-04 via item 2; kept for its rejected approach.**
+A track gets sustained
 indefinitely by appearance-matching against a fixed, high-texture background feature — a mounting
 pole (cam01/16167), a spider-web strand (cam02/11264), a fence-post junction (cam04/4210) — while
 the real subject is elsewhere or gone. `max_recovered_streak` and this session's
@@ -637,24 +704,37 @@ headroom. Pick any new value on the labelled set.
 **cam11 has only 2 clips in the entire corpus, so cam11/4310 can never be fixed this way** — it
 needs separate handling and should come off this item's list.
 
-**3. cam03 daylight-gate confound (known, twice-abandoned).** `color_fraction` around 0.12-0.15
-leaves dawn/dusk cam03 clips just under the 0.15 gate, so the green overlay renders a false
-FLASHLIGHT marker (~9% of sampled cam03 clips). Scored features are unaffected — this is a render
-artifact only. Four threshold-based fixes have already failed because the guard's own flashlight
-raises whole-frame saturation the same way ambient colour does. Only worth revisiting with a
-genuinely different signal (e.g. hue *distribution* rather than a saturation fraction).
+**3. cam03 daylight-gate confound — PARTIALLY FIXED 2026-09-04 (`2664c22`).** `color_fraction`
+around 0.12-0.15 left dawn/dusk cam03 clips just under the 0.15 gate, so the green overlay drew a
+false FLASHLIGHT marker. Four threshold-based fixes had already failed, all of them re-deriving
+daylight *from the pixels* — which is exactly why they failed, since the guard's own flashlight
+perturbs every such statistic the same way ambient colour does.
+
+The fix was an **exogenous** signal: `src.features.is_daylight` (a month-keyed Pretoria
+sunrise/sunset table that already existed but was only used as an eyeball column) is now OR'd into
+`render_clip`'s `daylight_gated`. A clock and a date cannot be fooled by a flashlight. cam03/9237
+fires at 05:54 local in November, 49 minutes after sunrise, at `color_fraction` 0.095.
+
+Measured cost: **zero** — all 28 labelled clips that `is_daylight` flags already reported
+`flashlight_subject_fraction` and `green_light_ratio` of exactly 0.000.
+
+**Still open, and do not call this solved:** it fixes dawn/dusk only. cam03/9066 (02:54 local) and
+cam03/8767 (23:55 local) carry the confirmed 0.42/0.30 corruption at genuine night and are
+untouched. Note also that the sun table is a month-granular step function rounded to 5 minutes.
 
 **4. Gate 2 pass/fail is still the one open decision.** See "The next task: gate 2 pass/fail"
 above, including its staleness warning — the main body of
 `docs/gate2_separability_finding.md` predates both the `zones.py` fix and roughly 150 additional
 labels, so re-run its analysis on current data before signing anything off.
 
-**5. Smaller, well-defined loose ends.** `animal_check/` still holds 2 unresolved cam03 clips
-(9237/9239, currently `unknown`, decisive clip shows zero genuine motion). The two design
-questions from the prior pass — a per-camera `expect_illumination` flag, and cross-clip stability
-checking for auto-detected stationary lights (this session's detector only checks within a single
-clip, which cannot distinguish a fixed light from a guard holding a torch steady) — remain open
-and are cheap next steps compared to items 1-2.
+**5. Smaller, well-defined loose ends.** The two design questions from the prior pass — a
+per-camera `expect_illumination` flag, and cross-clip stability checking for auto-detected
+stationary lights (the current detector only checks within a single clip, which cannot
+distinguish a fixed light from a guard holding a torch steady) — remain open and are cheap next
+steps. cam11/4310 (flashlight colour + stationary light) needs separate handling: cam11 has only
+2 clips in the entire corpus, so no cross-clip method can ever help it. cam03/9237 and 9239 were
+reviewed on 2026-09-04 and deliberately left `unknown`; their notes record why, so don't
+re-investigate them.
 
 ## Conventions
 

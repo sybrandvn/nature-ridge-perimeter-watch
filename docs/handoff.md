@@ -557,12 +557,50 @@ That leaves the discriminator genuinely outside a single clip's median: a static
 *same place across different clips from the same camera*, and a subject never is. That is item 2's
 per-camera reference background, which is why these two items are really one.
 
-**2. cam05/4822 and cam11/4310 — wrong artifact tracked.** cam05/4822 improved this session (user
-confirmed it now gets the guard and flashlight) but both still centre on the wrong thing in
-places. Repeated attempts have concluded these need a per-camera reference-background /
-cross-clip background model rather than another per-clip heuristic. **Do not start this without
-explicit sign-off** — it changes the detector's foundation and would invalidate every tuned
-constant and every stored feature row. Scope and cost it first.
+**Stage 1 of item 2 has now been measured, and it works — see below.**
+
+**2. Per-camera reference background — stage 1 measured 2026-09-03, verdict GO.** The signal that
+item 1 lacked: score each frozen-recovered run against a reference background built from the 15
+clips *nearest in time from the same camera and lighting*, excluding the clip under test
+(nearest-in-time stands in for both camera era and season). Unlike the clip's own median, a
+different clip's background carries no guarantee of resembling a recovered frame, which is what
+breaks item 1's circularity.
+
+It separates. Verified by eye on the review sheets in
+`data/reports/investigations/static_lock_review/` (60 sheets, one per frozen run, each showing the
+clip crop beside the reference crop at the same coordinates):
+
+- Every high scorer inspected was scenery — cam02/4302 (fence rail, 13 frames), cam05/4695 (razor
+  wire, 13), cam06/4875 (palisade, 11), cam05/4822 (rail corner, 13) — in each the clip crop and
+  the reference crop are visually identical.
+- Low scorers are real subjects: cam10/21524 at 0.143 is the crawling men, clip crop plainly
+  unlike the reference.
+
+**The scope is roughly four times what we thought.** At a 0.94 threshold, 18 of 60 frozen runs
+across 15 of the 52 sample clips are scenery locks — ~139 wrongly-boxed frames — not the 4 clips
+originally listed. Two specific consequences worth knowing:
+
+- **cam05/4822's first 13 frames are locked on the fence rail**, which is exactly why the guard
+  "appears late". That complaint was diagnosed twice as an IR-flare-window problem and it is not
+  one; the warmup window was already correct both times.
+- cam13/4091, cam07/4067, cam06/4701, cam08/4306, cam07/4097, cam04/4103, cam11/4309 all carry
+  previously-unnoticed locks.
+
+**Caveats to carry into stage 2.** The margin is real but not generous: the lowest flagged run is
+0.944 and the highest unflagged is 0.938, and cam10/9405's genuine small animal sits at 0.922 —
+about 0.02 of headroom. This is not the clean bimodal split item 1 hoped for, so the threshold has
+to be chosen on a labelled set, not by eye. **Alignment is required, not optional**: phase
+correlation lifted cam01/16167's two weaker runs from 0.847/0.844 to 0.953/0.954, and cameras
+whose framing shifts between clips need it far more (cam01a/22635 measured a 36px shift,
+cam14/21501 27px — without alignment those score as false locks).
+
+Remaining stages: (2) `scripts/build_reference_bg.py` writing per-camera-era, per-lighting
+references as PNGs plus a manifest, with era boundaries reusing the existing `effective_from`
+model from `cameras.yaml` — a remount invalidates a reference exactly like it invalidates a fence;
+(3) integrate as a veto on appearance-recovered frames only, never on genuine bg-diff hits;
+(4) full 52-clip old-vs-new sweep before shipping. **cam11 has only 2 clips in the entire corpus,
+so cam11/4310 can never be fixed this way** — it needs separate handling and should come off this
+item's list.
 
 **3. cam03 daylight-gate confound (known, twice-abandoned).** `color_fraction` around 0.12-0.15
 leaves dawn/dusk cam03 clips just under the 0.15 gate, so the green overlay renders a false

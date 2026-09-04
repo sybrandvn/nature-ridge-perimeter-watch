@@ -29,3 +29,5 @@ data/*.log
 # Test/lint caches
 .pytest_cache/
 .ruff_cache/
+data/reference_bg/*
+!data/reference_bg/.gitkeep

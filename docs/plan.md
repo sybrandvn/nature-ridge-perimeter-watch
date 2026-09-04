@@ -364,6 +364,74 @@ access before the bot ships.
   path in `telegram_alert.py` (currently text-only, `send_message` only). Natural fit as a Phase 4
   addition once the base classifier and plain-text alerts are proven — no upstream pipeline to
   draw from yet, so there's nothing to wire it into today.
+- **Fence-base reference line for real-world scale, height, and speed (2026-09-04, user).**
+  Idea: draw a SECOND polyline tracing the fence's own base/ground line (in addition to the
+  existing top-of-fence `fence` polyline), alongside the known real-world fence height
+  (~2m). Together these two lines calibrate pixels-to-metres AT EVERY ROW of the frame (the
+  fence's own apparent height in pixels at a given row is a built-in perspective ruler for that
+  camera, no separate camera calibration needed). This converts several already-pixel-relative
+  features into real-world units for the first time:
+  - **Real height/size**: a tracked blob's height in pixels, divided by the local pixel-per-metre
+    ratio at its own row, gives an actual height estimate — a ~1.7m subject reads very differently
+    from a ~0.3m one, regardless of how close to the camera either is. `row_normalised_area`
+    already partially addresses depth-dependence (see Perspective consequences above) but stays in
+    pixel units; this would be the first true metric-scale feature.
+  - **Real speed**: combined with timestamps between frames, calibrated real-world displacement
+    per second — distinct from the existing `normalised_speed` (already in `src/features.py`,
+    scaled by the blob's OWN width in body-lengths, not metres). A real speed in m/s is
+    comparable ACROSS cameras and across distance-from-camera in a way `normalised_speed` isn't.
+  - **Dwell time / lingering vs. moving-at-pace vs. small-and-fast**: the user's own framing --
+    lingering in one spot may mean one thing (a guard posted/waiting, or an animal browsing),
+    moving steadily at a walking pace may indicate a guard patrol, small-and-fast may indicate an
+    animal. `persistence`/`longest_detection_run` (dwell proxies) and calibrated real speed/size
+    together would let a rule distinguish these for the first time with an actual physical basis,
+    not just relative pixel statistics.
+  - Not built: needs a second hand-traced polyline per camera (same drawing-effort cost as the
+    "dual fence lines" idea above, though this one calibrates depth rather than gating inside/
+    outside), a `src/zones.py`/`CameraZone` schema change, and a validated pixels-per-metre
+    formula checked against known real subject sizes (e.g. the confirmed animal sightings in
+    `/memories/repo/incident-findings.md`) before trusting any derived speed/height number.
+- **Flashlight-vs-subject side divergence as a guard-specific signal (2026-09-04, user + this
+  session's re-derivation)**: the user's insight — "guards are on the inside, they can cross the
+  line since they are visible through the fence if they walk close, they shine their flashlight
+  across the fence" — is not a hypothesis, it's confirmed in this session's re-derivation of the
+  animal/incident rule (see the commit re-deriving `scripts.backtest.classify`): `outside_pixel_
+  fraction` alone scores AUC 0.700 for animal+incident vs guard+environment, but is NOT safe as a
+  standalone rule (guard false-fire 40%+ at every threshold tried) precisely because guards
+  routinely register as "outside" too. The idea, not yet built: track the fence-side of the
+  FLASHLIGHT'S OWN light mask separately from the subject's own tracked-box side (both already
+  computable per frame from existing zone geometry + `green_light_mask`). A guard's own body
+  staying inside while their flashlight beam crosses outside would read as "subject-inside,
+  flashlight-outside" — a divergence a real intruder essentially never produces (per the same
+  insight: "incidents are on the wrong side of the fence with mostly no flashlight"). Two new
+  candidate features: `flashlight_outside_fraction` (time flashlight-mask pixels read outside,
+  independent of the tracked subject) and `subject_flashlight_side_divergence` (how often the two
+  disagree). Not measured yet — would need per-frame side-classification of the light mask wired
+  into `extract_clip_features`, distinct from the existing whole-box `flashlight_bbox_overlap`.
+- **"What else" — further candidate features raised or implied 2026-09-04, none built or
+  measured yet:**
+  - Time-of-day/schedule pattern: guards patrol on a roughly regular schedule; a track's local
+    time relative to known typical guard-activity hours could be its own weak prior (distinct
+    from `is_daylight`/`is_twilight`, which are about ambient light, not patrol scheduling).
+  - Sequential cross-camera appearance at walking pace: `src/storm_events.py`'s neighbor/order-
+    adjacency machinery (built this session for the unrelated storm-corroboration problem) is
+    structurally the same shape needed to detect "a subject reaches an ADJACENT camera within a
+    plausible walking-speed time gap" as a POSITIVE guard-patrol signal — the mirror image of
+    today's finding that such correlation is a guard signature, not a storm one. Currently only
+    used as a environment/storm filter; repurposing it as a guard-identification feature is
+    unexplored.
+  - Dog/pet detection for `resident`: user asked "can we look for a dog also". No dog-labelled
+    clips exist in the corpus yet (checked: `labels.notes` has no confirmed dog sighting on
+    record) — needs real examples before any shape/speed-based rule could be derived, same
+    discipline as everywhere else in this repo. The already-planned real-height/speed calibration
+    above would help here too (a dog is both smaller and faster than a person at the same
+    distance from camera).
+  - `resident`: `is_daylight`/`is_twilight` (already built, 2026-09-04) plus the fence-side
+    geometry (staying inside, never crossing) are the two existing ingredients closest to a
+    `resident_candidate` rule — not yet assembled into one, and `resident` currently has NO rule
+    of its own in `scripts.backtest.classify` at all (falls through to `unclassified`).
+
+
 
 ## Explicitly deferred
 `main.py` live loop, listener queueing, delivery outbox and crash recovery, Dockerfile/compose and

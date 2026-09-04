@@ -9,7 +9,7 @@ short version of where things actually stand and what to do next.
 ## Where the project is
 
 On branch `feat/phase1-finalisation` (branched off `main` at the `phase0-checkpoint` tag;
-`feat/phase0-foundations` is retired but kept). Working tree clean, 345 tests passing
+`feat/phase0-foundations` is retired but kept). Working tree clean, 365 tests passing
 (`uv run ruff check . && uv run pytest -q`) as of 2026-09-03.
 
 Phase 0 is merged to `main` as a checkpoint, not a clean sign-off — see `docs/plan.md`'s
@@ -500,7 +500,7 @@ session — worth checking `git status` early next time.
 
 ## Handoff for a new agent (2026-09-03, session close)
 
-**State.** Branch `feat/phase1-finalisation`, working tree clean, 345 tests passing
+**State.** Branch `feat/phase1-finalisation`, working tree clean, 365 tests passing
 (`uv run ruff check . --fix && uv run pytest -q`). 432 label rows (guard 252, environment 39,
 unknown 18, resident 10, incident 10, animal 10, plus 93 with only a `startup_state`). 52 debug
 renders across 6 folders under `data/reports/debug_render/` (gitignored, local-only), all current
@@ -559,7 +559,7 @@ per-camera reference background, which is why these two items are really one.
 
 **Stage 1 of item 2 has now been measured, and it works — see below.**
 
-**2. Per-camera reference background — stage 1 measured 2026-09-03, verdict GO.** The signal that
+**2. Per-camera reference background — BUILT 2026-09-03, pending keep/discard.** The signal that
 item 1 lacked: score each frozen-recovered run against a reference background built from the 15
 clips *nearest in time from the same camera and lighting*, excluding the clip under test
 (nearest-in-time stands in for both camera era and season). Unlike the clip's own median, a
@@ -594,13 +594,48 @@ correlation lifted cam01/16167's two weaker runs from 0.847/0.844 to 0.953/0.954
 whose framing shifts between clips need it far more (cam01a/22635 measured a 36px shift,
 cam14/21501 27px — without alignment those score as false locks).
 
-Remaining stages: (2) `scripts/build_reference_bg.py` writing per-camera-era, per-lighting
-references as PNGs plus a manifest, with era boundaries reusing the existing `effective_from`
-model from `cameras.yaml` — a remount invalidates a reference exactly like it invalidates a fence;
-(3) integrate as a veto on appearance-recovered frames only, never on genuine bg-diff hits;
-(4) full 52-clip old-vs-new sweep before shipping. **cam11 has only 2 clips in the entire corpus,
-so cam11/4310 can never be fixed this way** — it needs separate handling and should come off this
-item's list.
+**Stages 2-4 are now built and committed (`be45a20`, `6b45155`, `65f18f7`) — awaiting a keep/discard
+decision.** What shipped:
+
+- `src/reference_bg.py` + `scripts/build_reference_bg.py`. References are bucketed by camera, mount
+  era, daylight and calendar quarter, sparse quarters folding into the nearest populated sibling;
+  up to 40 clips sampled evenly per bucket. **133 references built** into `data/reference_bg/`
+  (gitignored). `reference_for` returns `None` rather than crossing an era boundary — cam12's
+  post-remount clips get no reference at all, which is correct.
+- The veto in `scripts/spike.py`: `_run_track_pass(reference_background=..., max_scenery_streak=2,
+  scenery_correlation=0.94)`. Applies only to appearance-recovered frames that are also
+  near-stationary, and nulls the frozen run retroactively. With no reference passed the behaviour
+  is byte-identical to before, which is the fallback for sparse cameras.
+- `scripts/render_debug.py` resolves each clip's reference automatically; `--no-reference-bg`
+  renders the old behaviour for comparison.
+
+**Full-sweep result (52 clips, old vs new): 7 clips changed, 44 frames dropped, 0 gained**, 4 clips
+had no reference (cam12/19245 by era, cam11/4309, cam11/4310, cam09/21522 by sparsity).
+
+| clip | frames | lost |
+|---|---|---|
+| cam05/4695 | 16 -> 6 | 6-15 (razor wire) |
+| cam02/4302 | 27 -> 18 | 18-26 (fence rail) |
+| cam05/4822 | 15 -> 6 | 6-14 — **the "guard appears late" complaint, now actually fixed** |
+| cam08/4306 | 43 -> 35 | 31-38 (dark ground under the palisade) |
+| cam01b/18884 | 14 -> 9 | 9-13 (empty black corner) |
+| cam06/4875 | 31 -> 29 | 11-12 (palisade) |
+| cam04/4065 | 43 -> 42 | 29 |
+
+All seven were inspected as clip-vs-reference crops and are scenery; renders for review are in
+`data/reports/debug_render/reference_bg_check/`. **Nothing was gained, and no real subject was
+lost.** It is much more conservative than stage 1 predicted (44 frames, not ~139) because the
+production references are coarser than stage 1's nearest-15, era filtering removes cam12, and
+`max_scenery_streak=2` needs 3+ consecutive frames.
+
+Against production references the named targets score cam01/16167 0.99, cam04/4210 0.99,
+cam05/4822 0.99; real subjects cam13/4101 0.57 and cam10/9405 0.72/0.90 stay below. **One known
+miss: cam02/11264's 13-frame lock scores 0.922, under the 0.94 threshold.** Do not lower the
+threshold to catch it by eye — cam10/9405's genuine animal is at 0.896, leaving only ~0.014 of
+headroom. Pick any new value on the labelled set.
+
+**cam11 has only 2 clips in the entire corpus, so cam11/4310 can never be fixed this way** — it
+needs separate handling and should come off this item's list.
 
 **3. cam03 daylight-gate confound (known, twice-abandoned).** `color_fraction` around 0.12-0.15
 leaves dawn/dusk cam03 clips just under the 0.15 gate, so the green overlay renders a false

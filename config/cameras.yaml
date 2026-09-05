@@ -67,13 +67,19 @@ cameras:
     # data/history/cam01a/22635.mp4. (2026-09-05 correction: this clip is
     # actually NIGHT IR footage, not daylight as an earlier note here claimed.)
     zones:
-      - fence: [[0.3975, 0.1823], [0.3285, 0.3844], [0.2582, 0.5865], [0.188, 0.7885], [0.1191, 0.9906]]
+      - # 2026-09-05: RE-TRACED both lines -- msg 17444/17445 (the only daylight
+        # clip in this era) turned out to be an outlier angle, confirmed by
+        # bisecting 9 clips spread across the whole old era: every night/
+        # twilight frame shows a consistent scene (a loose free-hanging cable,
+        # and a distinct wire-mesh fence post) that 17444's wider daylight
+        # view didn't obviously match. Retraced over data/history/cam01a/
+        # 18347.mp4 (2026-01-10, twilight) instead, which matches that
+        # consistent framing. `outside: right` re-confirmed.
+        fence: [[0.4947, 0.1719], [0.4212, 0.3784], [0.3467, 0.5849], [0.2723, 0.7914], [0.1983, 0.9979]]
         outside: right
         depth_cutoff: 0.05
-        # 2026-09-05: fence_bottom, traced by the user over data/history/cam01a/17444.mp4
-        # (2025-11-11, pre-remount era). `outside: right` re-confirmed.
         fence_bottom:
-          [[0.5038, 0.1927], [0.4892, 0.3935], [0.4748, 0.5943], [0.4601, 0.7951], [0.4456, 0.9958]]
+          [[0.503, 0.1646], [0.488, 0.3729], [0.4727, 0.5812], [0.4578, 0.7896], [0.4426, 0.9979]]
       - effective_from: "2026-08-05T17:22:15Z"
         # 2026-09-05: RE-TRACED -- the old line here was only 2 points (every
         # other camera's top line has >=3) and clearly imprecise. Confirmed

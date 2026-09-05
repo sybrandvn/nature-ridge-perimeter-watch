@@ -80,7 +80,7 @@ from src.reference_bg import (  # noqa: E402
     reference_for,
 )
 from src.video_encode import Mp4Writer  # noqa: E402
-from src.zones import _fence_x_at_y, side_name  # noqa: E402
+from src.zones import _fence_x_at_y, effective_fence, side_name  # noqa: E402
 
 DEFAULTS = {
     "threshold": 18,
@@ -96,6 +96,7 @@ COLOR_REVERSE = (255, 255, 0)
 COLOR_BLOB = (200, 200, 0)
 COLOR_DISCARDED = (90, 90, 90)
 COLOR_FENCE = (0, 255, 255)
+COLOR_FENCE_BOTTOM = (0, 140, 255)
 COLOR_OUTSIDE = (0, 0, 255)
 COLOR_INSIDE = (0, 255, 0)
 COLOR_IGNORE = (110, 110, 110)
@@ -155,7 +156,8 @@ def _zone_layers(width: int, height: int, zone: CameraZone) -> tuple[np.ndarray,
     tint = np.zeros((height, width, 3), dtype=np.uint8)
     ink = np.zeros((height, width, 3), dtype=np.uint8)
 
-    if zone.fence is not None:
+    classification_fence = effective_fence(zone)
+    if classification_fence is not None:
         # Sample which side each pixel column falls on, rather than assuming the
         # fence runs top-to-bottom.
         ys, xs = np.mgrid[0:height, 0:width]
@@ -163,26 +165,40 @@ def _zone_layers(width: int, height: int, zone: CameraZone) -> tuple[np.ndarray,
         norm_y = ys / height
         fence_x = np.empty((height, width), dtype=np.float64)
         for row in range(height):
-            fence_x[row, :] = _fence_x_at_y(norm_y[row, 0], zone.fence)
+            fence_x[row, :] = _fence_x_at_y(norm_y[row, 0], classification_fence)
         left = norm_x < fence_x
         outside_mask = left if zone.outside == "left" else ~left
         tint[outside_mask] = COLOR_OUTSIDE
         tint[~outside_mask] = COLOR_INSIDE
 
-        fence_px = [_to_px(p, width, height) for p in zone.fence]
-        for a, b in zip(fence_px, fence_px[1:], strict=False):
-            cv2.line(ink, a, b, COLOR_FENCE, 2)
-        for p in fence_px:
-            cv2.circle(ink, p, 3, COLOR_FENCE, -1)
+        # Top-rail line always drawn when present -- it's every camera's
+        # original geometry, kept visible even on cameras whose base line
+        # (fence_bottom) is what actually drives classification now.
+        if zone.fence is not None:
+            fence_px = [_to_px(p, width, height) for p in zone.fence]
+            for a, b in zip(fence_px, fence_px[1:], strict=False):
+                cv2.line(ink, a, b, COLOR_FENCE, 2)
+            for p in fence_px:
+                cv2.circle(ink, p, 3, COLOR_FENCE, -1)
 
-        (ax, ay), (bx, by) = zone.fence[0], zone.fence[-1]
+        # Base/ground line, only traced on some cameras (cam06 as of
+        # 2026-09-05) -- drawn in a distinct colour so both lines are visible
+        # at once rather than overlapping the top rail's colour.
+        if zone.fence_bottom is not None:
+            bottom_px = [_to_px(p, width, height) for p in zone.fence_bottom]
+            for a, b in zip(bottom_px, bottom_px[1:], strict=False):
+                cv2.line(ink, a, b, COLOR_FENCE_BOTTOM, 2)
+            for p in bottom_px:
+                cv2.circle(ink, p, 3, COLOR_FENCE_BOTTOM, -1)
+
+        (ax, ay), (bx, by) = classification_fence[0], classification_fence[-1]
         dx, dy = bx - ax, by - ay
         norm = (dx * dx + dy * dy) ** 0.5 or 1.0
         nx, ny = -dy / norm, dx / norm
         mid = ((ax + bx) / 2, (ay + by) / 2)
         for sign in (1, -1):
             probe = (mid[0] + sign * nx * 0.14, mid[1] + sign * ny * 0.14)
-            outside = side_name(probe, zone.fence) == zone.outside
+            outside = side_name(probe, classification_fence) == zone.outside
             px, py = _to_px(probe, width, height)
             px = max(4, min(width - 74, px))
             py = max(14, min(height - 4, py))

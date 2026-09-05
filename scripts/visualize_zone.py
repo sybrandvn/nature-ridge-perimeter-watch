@@ -27,7 +27,7 @@ import cv2  # noqa: E402
 
 from scripts.spike import detect_clip  # noqa: E402
 from src.config import CameraZone, load_cameras_config  # noqa: E402
-from src.zones import outside_pixel_fraction, side_name  # noqa: E402
+from src.zones import effective_fence, outside_pixel_fraction, side_name  # noqa: E402
 
 
 def _to_px(point: tuple[float, float], width: int, height: int) -> tuple[int, int]:
@@ -55,16 +55,25 @@ def render(video_path: str, zone: CameraZone, *, out_path: str) -> str:
         for a, b in zip(fence_px, fence_px[1:], strict=False):
             cv2.line(canvas, a, b, (0, 255, 255), 2)
 
+    # Base/ground line, only traced on some cameras (cam06 as of 2026-09-05) --
+    # drawn in a distinct colour, alongside the top rail rather than replacing it.
+    if zone.fence_bottom is not None:
+        bottom_px = [_to_px(p, width, height) for p in zone.fence_bottom]
+        for a, b in zip(bottom_px, bottom_px[1:], strict=False):
+            cv2.line(canvas, a, b, (0, 140, 255), 2)
+
+    classification_fence = effective_fence(zone)
+    if classification_fence is not None:
         # Perpendicular to the first->last segment, so the outside/inside labels
         # land on the correct side regardless of the fence's own orientation.
-        (ax, ay), (bx, by) = zone.fence[0], zone.fence[-1]
+        (ax, ay), (bx, by) = classification_fence[0], classification_fence[-1]
         dx, dy = bx - ax, by - ay
         norm = (dx * dx + dy * dy) ** 0.5 or 1.0
         nx, ny = -dy / norm, dx / norm
         mid = ((ax + bx) / 2, (ay + by) / 2)
         for sign, tag_color in ((1, (0, 0, 255)), (-1, (0, 255, 0))):
             probe = (mid[0] + sign * nx * 0.12, mid[1] + sign * ny * 0.12)
-            side = side_name(probe, zone.fence)
+            side = side_name(probe, classification_fence)
             tag = "OUTSIDE" if side == zone.outside else "INSIDE"
             px, py = _to_px(probe, width, height)
             px, py = max(5, min(width - 90, px)), max(15, min(height - 5, py))
@@ -76,7 +85,7 @@ def render(video_path: str, zone: CameraZone, *, out_path: str) -> str:
     cv2.rectangle(canvas, (x, y), (x + w, y + h), (255, 0, 255), 2)
     centroid = best.centroid
     frac = None
-    if centroid is not None and zone.fence is not None and zone.outside is not None:
+    if centroid is not None and classification_fence is not None and zone.outside is not None:
         frac = outside_pixel_fraction([(centroid[0] / width, centroid[1] / height)], zone)
     label = (
         f"intruder box (outside_pixel_fraction={frac:.2f})"

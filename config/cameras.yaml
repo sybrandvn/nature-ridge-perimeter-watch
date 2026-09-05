@@ -211,6 +211,13 @@ cameras:
     fence: [[0.5254, 0.2156], [0.4629, 0.4107], [0.3993, 0.6057], [0.3357, 0.8008], [0.2731, 0.9958]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over a CLAHE-brightened,
+    # 4x-upscaled frame from data/history/cam11/4310.mp4 despite the poor
+    # source quality (this camera has only 2 clips in the whole corpus) --
+    # traced anyway, kept. `outside: right` re-confirmed via side_name against
+    # the same reference points as the top-rail line, not re-derived.
+    fence_bottom:
+      [[0.5369, 0.1844], [0.5255, 0.387], [0.5139, 0.5896], [0.5023, 0.7922], [0.4909, 0.9948]]
   - id: cam12
     aliases: ["MOTIONVIEWER 12"]
     order: 13

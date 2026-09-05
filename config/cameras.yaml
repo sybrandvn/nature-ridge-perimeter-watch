@@ -43,6 +43,11 @@ cameras:
     fence: [[0.4111, 0.1656], [0.3436, 0.374], [0.2748, 0.5823], [0.2059, 0.7906], [0.1381, 0.999]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam01/10560.mp4.
+    # `outside: right` re-confirmed via side_name against the same reference
+    # points as the top-rail line.
+    fence_bottom:
+      [[0.454, 0.1], [0.4406, 0.3232], [0.4268, 0.5464], [0.4133, 0.7695], [0.3999, 0.9927]]
   # cam01a: confirmed by the user to be mounted at the exact same physical spot as
   # cam01 -- a straight replacement, not a second camera. Matches the data: cam01's
   # last clip is 2025-09-04, cam01a's first is 2025-09-13. Kept as separate camera
@@ -64,10 +69,17 @@ cameras:
       - fence: [[0.3975, 0.1823], [0.3285, 0.3844], [0.2582, 0.5865], [0.188, 0.7885], [0.1191, 0.9906]]
         outside: right
         depth_cutoff: 0.05
+        # 2026-09-05: fence_bottom, traced by the user over data/history/cam01a/17444.mp4
+        # (2025-11-11, pre-remount era). `outside: right` re-confirmed.
+        fence_bottom:
+          [[0.5038, 0.1927], [0.4892, 0.3935], [0.4748, 0.5943], [0.4601, 0.7951], [0.4456, 0.9958]]
       - effective_from: "2026-08-05T17:22:15Z"
         fence: [[0.4365, 0.1052], [0.1135, 0.999]]
         outside: right
         depth_cutoff: 0.05
+        # 2026-09-05: no fence_bottom traced yet for the post-remount era --
+        # data/reports/fence_trace_2026-09-05/cam01a_new_era.png is the frame
+        # to trace (data/history/cam01a/22635.mp4, 2026-08-26).
   # Confirmed by the user 2026-08-28: faces the OPPOSITE way to most perimeter
   # cameras -- open ground in frame is the interior side, not exterior.
   - id: cam01b
@@ -93,6 +105,9 @@ cameras:
     fence: [[0.4701, 0.1469], [0.3906, 0.3599], [0.3095, 0.5729], [0.2285, 0.7859], [0.1488, 0.999]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam02/8429.mp4.
+    fence_bottom:
+      [[0.5059, 0.0302], [0.4961, 0.2721], [0.4867, 0.5141], [0.4773, 0.756], [0.468, 0.9979]]
   - id: cam03
     aliases: ["MOTIONVIEWER 3"]
     order: 4
@@ -101,6 +116,9 @@ cameras:
     fence: [[0.4908, 0.1354], [0.3841, 0.3505], [0.2755, 0.5656], [0.167, 0.7807], [0.0606, 0.9958]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam03/8617.mp4.
+    fence_bottom:
+      [[0.4858, 0.1344], [0.461, 0.3503], [0.4361, 0.5661], [0.4115, 0.782], [0.3867, 0.9979]]
   - id: cam04
     aliases: ["MOTIONVIEWER 4"]
     order: 5
@@ -108,6 +126,9 @@ cameras:
     fence: [[0.4878, 0.0823], [0.3927, 0.3115], [0.2961, 0.5406], [0.1993, 0.7698], [0.1034, 0.999]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam04/3455.mp4.
+    fence_bottom:
+      [[0.5, 0.0208], [0.4816, 0.2654], [0.4632, 0.5099], [0.4445, 0.7544], [0.4262, 0.999]]
   - id: cam05
     aliases: ["MOTIONVIEWER 5"]
     order: 6
@@ -118,6 +139,9 @@ cameras:
     fence: [[0.4717, 0.2365], [0.3099, 0.6177], [0.1484, 0.999]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam05/8904.mp4.
+    fence_bottom:
+      [[0.5125, 0.1198], [0.4999, 0.3393], [0.4867, 0.5589], [0.4742, 0.7784], [0.4616, 0.9979]]
   - id: cam06
     aliases: ["MOTIONVIEWER 6"]
     order: 7
@@ -149,6 +173,9 @@ cameras:
     fence: [[0.4502, 0.1698], [0.3626, 0.3763], [0.2736, 0.5828], [0.1846, 0.7893], [0.0973, 0.9958]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam07/3724.mp4.
+    fence_bottom:
+      [[0.481, 0.0979], [0.46, 0.3229], [0.4391, 0.5479], [0.4178, 0.7729], [0.3973, 0.9979]]
   - id: cam08
     aliases: ["MOTIONVIEWER 8"]
     order: 9
@@ -171,6 +198,9 @@ cameras:
     fence: [[0.1282, 0.9958], [0.4409, 0.1854]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam08/4217.mp4.
+    fence_bottom:
+      [[0.4378, 0.1302], [0.4488, 0.3471], [0.46, 0.5641], [0.471, 0.781], [0.4819, 0.9979]]
     # 2026-08-31: stationary background light (small greenish point, far down
     # the fence line) confirmed fixed across all 43 frames of
     # data/history/cam08/4055.mp4 -- pixel bbox never left x=[130,139],
@@ -194,6 +224,9 @@ cameras:
     fence: [[0.4451, 0.0417], [0.3843, 0.2802], [0.3225, 0.5188], [0.2605, 0.7573], [0.1997, 0.9958]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam09/3501.mp4.
+    fence_bottom:
+      [[0.5041, 0.2042], [0.4938, 0.4026], [0.4831, 0.601], [0.4727, 0.7995], [0.4624, 0.9979]]
   - id: cam10
     aliases: ["MOTIONVIEWER 10"]
     order: 11
@@ -201,6 +234,9 @@ cameras:
     fence: [[0.4495, 0.1979], [0.3666, 0.3974], [0.2821, 0.5969], [0.1977, 0.7964], [0.115, 0.9958]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam10/3576.mp4.
+    fence_bottom:
+      [[0.4625, 0.1417], [0.4508, 0.3555], [0.4391, 0.5693], [0.4273, 0.7831], [0.4156, 0.9969]]
     # 2026-08-31: stationary background light behind foliage, confirmed fixed
     # (bbox held to roughly x=[117,175] y=[6,63] out of a 320x240 frame) across
     # all 29 frames of data/history/cam10/4049.mp4 -- pixel COUNT flickers as
@@ -241,14 +277,17 @@ cameras:
       - fence: [[0.4646, 0.276], [0.3669, 0.456], [0.2664, 0.6359], [0.1659, 0.8159], [0.0678, 0.9958]]
         outside: right
         depth_cutoff: 0.05
+        # 2026-09-05: fence_bottom, traced by the user over data/history/cam12/3457.mp4
+        # (2023-11-20, pre-remount era). `outside: right` re-confirmed.
+        fence_bottom:
+          [[0.498, 0.1635], [0.4875, 0.3719], [0.4769, 0.5802], [0.4664, 0.7885], [0.4559, 0.9969]]
       - effective_from: "2026-03-02T16:13:54Z"
         fence: [[0.4455, 0.1958], [0.3466, 0.3943], [0.2467, 0.5927], [0.1467, 0.7911], [0.0477, 0.9896]]
         outside: right
         depth_cutoff: 0.05
         # 2026-09-05: fence_bottom, traced by the user over the same clip
         # (data/history/cam12/19245.mp4, 2026-03-02) the new top-rail line
-        # itself came from -- only the new-era geometry has a base line so
-        # far, the pre-remount era has none. `outside: right` re-confirmed.
+        # itself came from. `outside: right` re-confirmed.
         fence_bottom:
           [[0.4466, 0.1781], [0.4477, 0.3831], [0.4484, 0.588], [0.4492, 0.793], [0.4502, 0.9979]]
   - id: cam13
@@ -258,6 +297,9 @@ cameras:
     fence: [[0.4558, 0.1573], [0.357, 0.3669], [0.2566, 0.5766], [0.1561, 0.7862], [0.0574, 0.9958]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam13/3496.mp4.
+    fence_bottom:
+      [[0.5338, 0.0385], [0.512, 0.2784], [0.4898, 0.5182], [0.4676, 0.7581], [0.4456, 0.9979]]
   - id: cam14
     aliases: ["MOTIONVIEWER 14"]
     order: 15
@@ -266,6 +308,9 @@ cameras:
     fence: [[0.477, 0.2344], [0.4114, 0.4255], [0.3444, 0.6167], [0.2774, 0.8078], [0.2115, 0.999]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam14/3495.mp4.
+    fence_bottom:
+      [[0.5267, 0.1281], [0.5164, 0.3458], [0.5057, 0.5635], [0.4953, 0.7812], [0.4848, 0.999]]
   # 2026-08-28: user corrected the earlier "orientation unresolved, not worth
   # resolving" call below -- cam15 does have a traceable fence after all (a
   # clean single line on data/history/cam15/15453.mp4, frame index 5; an

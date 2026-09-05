@@ -436,6 +436,18 @@ access before the bot ships.
       ("uncalibrated") instead of a wrong number -- not attempted, needs its own
       threshold-on-labelled-data pass. The inside/outside classification improvement from
       `fence_bottom` itself is unaffected by this finding -- only the metric-scale features are.
+    - **`fence_picket` angle-correction shipped 2026-09-05 (user insight).** A second likely
+      contributor to the phase-5 blowup, distinct from the far-field-noise root cause above:
+      pairing `fence`/`fence_bottom` at the SAME image row (as `fence_separation_at_y` always
+      did) silently assumes a picket renders perfectly vertical in frame -- false whenever the
+      camera looks down the fence at an angle. New `CameraZone.fence_picket` (one hand-traced
+      picket's top point + base point) lets `fence_separation_at_y` project along that picket's
+      real on-screen direction to find where it actually crosses the top rail, instead of
+      assuming the crossing is directly above. Falls back to the old same-row method when no
+      picket is traced -- every camera is byte-identical until one is added. **Not yet validated
+      against real data** -- no camera has a `fence_picket` traced yet; the next step is tracing
+      one on cam06 (the only camera with a full phase-5 baseline to compare against) and
+      re-running the height-clustering check to see whether it actually tightens the result.
 - **Flashlight-vs-subject side divergence as a guard-specific signal (2026-09-04, user + this
   session's re-derivation)**: the user's insight — "guards are on the inside, they can cross the
   line since they are visible through the fence if they walk close, they shine their flashlight

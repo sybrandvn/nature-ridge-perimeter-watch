@@ -119,10 +119,23 @@ cameras:
     # hand-traced the fence in red over the reference frame with Snipping
     # Tool; these 3 points are extracted from that red line (color-thresholded,
     # sampled at top/mid/bottom). Open background is to the left walking
-    # first point to last.
+    # first point to last. This is the TOP RAIL -- unchanged meaning of
+    # `fence` for all 18 cameras; do not repurpose this field.
     fence: [[0.4532, 0.1427], [0.3171, 0.5688], [0.1809, 0.9948]]
     outside: right
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom -- the first bottom/base line traced anywhere
+    # in this config. Cameras sit near the top of the fence looking down and
+    # slightly outward, so a subject walking INSIDE the fence still projects
+    # to the outside of the top-rail line above -- this is why
+    # outside_pixel_fraction false-fires on 40%+ of guards regardless of
+    # threshold. Traced by the user over data/history/cam06/8467.mp4 (a
+    # daylight clip, same camera, framing confirmed unchanged vs the night
+    # clip via scripts/visualize_zone.py). Near-vertical because the camera
+    # looks down its own fence run, not a tracing error. `outside: right`
+    # re-confirmed directly for this line, not re-derived.
+    fence_bottom:
+      [[0.5028, 0.0688], [0.4992, 0.3003], [0.4953, 0.5318], [0.4914, 0.7633], [0.4875, 0.9948]]
   - id: cam07
     aliases: ["MOTIONVIEWER 7"]
     order: 8

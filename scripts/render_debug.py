@@ -80,7 +80,13 @@ from src.reference_bg import (  # noqa: E402
     reference_for,
 )
 from src.video_encode import Mp4Writer  # noqa: E402
-from src.zones import _fence_x_at_y, effective_fence, side_name  # noqa: E402
+from src.zones import (  # noqa: E402
+    _fence_x_at_y,
+    effective_fence,
+    estimated_height_m,
+    side_name,
+    subject_base_y,
+)
 
 DEFAULTS = {
     "threshold": 18,
@@ -588,6 +594,7 @@ def render_clip(
             instant_speed = None
             blob_width_px = 0.0
             light_overlap: float | None = None
+            estimated_height: float | None = None
             if detected.largest is not None and detected.centroid is not None:
                 scaled = (detected.largest * scale).astype(np.int32)
                 history.append(
@@ -631,6 +638,21 @@ def render_clip(
                     cv2.rectangle(canvas, (x, y), (x + w, y + h), box_color, 2)
                 cv2.drawContours(canvas, [scaled], -1, box_color, 1)
                 _text(canvas, label, (x, max(11, y - 4)), color=box_color, scale=0.4)
+                raw_box = cv2.boundingRect(detected.largest)
+                estimated_height = estimated_height_m(
+                    float(raw_box[3]),
+                    subject_base_y(raw_box, detection.frame_height),
+                    zone,
+                    detection.frame_width,
+                    detection.frame_height,
+                )
+                _text(
+                    canvas,
+                    f"{estimated_height:.2f}m" if estimated_height is not None else "height n/a",
+                    (x, y + h + 12),
+                    color=box_color,
+                    scale=0.4,
+                )
                 blob_width_px = float(cv2.boundingRect(detected.largest)[2])
                 if prev_centroid is not None and blob_width_px > 0:
                     step = np.hypot(
@@ -696,6 +718,10 @@ def render_clip(
                     + (" (reverse fill)" if detected.filled_by_reverse else "")
                     if area
                     else "none",
+                ),
+                (
+                    "estimated height (fence ruler)",
+                    f"{estimated_height:.2f}m" if estimated_height is not None else "uncalibrated",
                 ),
                 (
                     "instant speed (body/frame)",

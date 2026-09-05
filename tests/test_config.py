@@ -139,6 +139,53 @@ def test_load_cameras_config_valid_with_zone(tmp_path):
     assert cfg.by_id("cam01") is cam
 
 
+def test_load_cameras_config_with_fence_bottom(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        """
+        cameras:
+          - id: cam06
+            fence: [[0.45, 0.14], [0.18, 0.99]]
+            fence_bottom: [[0.5, 0.07], [0.49, 0.99]]
+            outside: right
+            depth_cutoff: 0.05
+            fence_height_m: 1.8
+        """,
+    )
+    cam = load_cameras_config(path).by_id("cam06")
+    assert cam.zone.fence == ((0.45, 0.14), (0.18, 0.99))
+    assert cam.zone.fence_bottom == ((0.5, 0.07), (0.49, 0.99))
+    assert cam.zone.fence_height_m == 1.8
+
+
+def test_fence_bottom_defaults_to_none_and_height_to_2m(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    fence: [[0.1, 0.9], [0.6, 0.2]]\n    outside: right\n",
+    )
+    cam = load_cameras_config(path).by_id("cam01")
+    assert cam.zone.fence_bottom is None
+    assert cam.zone.fence_height_m == 2.0
+
+
+def test_fence_bottom_needs_at_least_two_points(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    fence_bottom: [[0.1, 0.1]]\n",
+    )
+    with pytest.raises(ConfigError, match="fence_bottom needs >= 2 points"):
+        load_cameras_config(path)
+
+
+def test_fence_height_m_must_be_positive(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    fence_height_m: 0\n",
+    )
+    with pytest.raises(ConfigError, match="fence_height_m must be > 0"):
+        load_cameras_config(path)
+
+
 def test_zones_dated_history_picks_geometry_by_timestamp(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",
@@ -166,6 +213,22 @@ def test_zones_dated_history_picks_geometry_by_timestamp(tmp_path):
     # no timestamp / unparseable timestamp falls back to the current geometry.
     assert cam.zone_at(None).fence == ((0.4, 0.1), (0.1, 0.99))
     assert cam.zone_at("not-a-timestamp").fence == ((0.4, 0.1), (0.1, 0.99))
+
+
+def test_zones_and_flat_fence_bottom_together_raises(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        """
+        cameras:
+          - id: cam01a
+            fence_bottom: [[0.1, 0.9], [0.6, 0.2]]
+            zones:
+              - fence: [[0.1, 0.9], [0.6, 0.2]]
+                outside: right
+        """,
+    )
+    with pytest.raises(ConfigError, match="must not mix"):
+        load_cameras_config(path)
 
 
 def test_zones_and_flat_fields_together_raises(tmp_path):

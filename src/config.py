@@ -177,6 +177,14 @@ class CameraZone:
     outside: str | None  # "left" | "right"
     depth_cutoff: float
     ignore: tuple[tuple[Point, ...], ...]
+    # Second, optional polyline traced along the fence's BASE (where it meets
+    # the ground), not a redefinition of `fence` (still always the top rail).
+    # When present, inside/outside classification prefers this line over
+    # `fence` (see src/zones.py); paired with `fence_height_m` it also gives a
+    # per-row pixels-to-metres ruler. None for every camera without one traced
+    # yet -- see docs/plan.md "Fence base line + metric features".
+    fence_bottom: tuple[Point, ...] | None = None
+    fence_height_m: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -306,7 +314,7 @@ def load_cameras_config(path: str | Path) -> CamerasConfig:
     return CamerasConfig(cameras=tuple(cameras), unknown_camera_id=str(unknown_camera_id))
 
 
-_ZONE_FIELDS = ("fence", "outside", "depth_cutoff", "ignore")
+_ZONE_FIELDS = ("fence", "outside", "depth_cutoff", "ignore", "fence_bottom", "fence_height_m")
 
 
 def _parse_camera_zones(
@@ -398,7 +406,25 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
         if len(polygon) < 3:
             raise ConfigError(f"cameras.yaml: {camera_id!r} ignore polygons need >= 3 points")
 
-    return CameraZone(fence=fence, outside=outside, depth_cutoff=depth_cutoff, ignore=ignore)
+    raw_fence_bottom = entry.get("fence_bottom")
+    fence_bottom: tuple[Point, ...] | None = None
+    if raw_fence_bottom is not None:
+        if not isinstance(raw_fence_bottom, list) or len(raw_fence_bottom) < 2:
+            raise ConfigError(f"cameras.yaml: {camera_id!r} fence_bottom needs >= 2 points")
+        fence_bottom = tuple(_parse_point(camera_id, "fence_bottom", p) for p in raw_fence_bottom)
+
+    fence_height_m = float(entry.get("fence_height_m", 2.0))
+    if fence_height_m <= 0.0:
+        raise ConfigError(f"cameras.yaml: {camera_id!r} fence_height_m must be > 0")
+
+    return CameraZone(
+        fence=fence,
+        outside=outside,
+        depth_cutoff=depth_cutoff,
+        ignore=ignore,
+        fence_bottom=fence_bottom,
+        fence_height_m=fence_height_m,
+    )
 
 
 def _parse_point(camera_id: str, field_name: str, point: Any) -> Point:

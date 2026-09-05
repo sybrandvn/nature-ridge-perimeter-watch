@@ -3,12 +3,22 @@ import pytest
 from src.config import CameraZone
 from src.zones import (
     classify_zone,
+    effective_fence,
+    entered_band_from_outside,
+    estimated_height_m,
+    estimated_speed_mps,
+    estimated_width_m,
+    fence_separation_at_y,
+    in_fence_band,
     in_ignore_region,
     is_beyond_depth_cutoff,
+    is_grounded_at_fence,
     median_fence_distance,
     outside_pixel_fraction,
+    pixels_per_metre_at_y,
     side_name,
     signed_side,
+    subject_base_y,
     track_crosses_fence,
 )
 
@@ -153,3 +163,197 @@ def test_median_fence_distance_without_fence_or_track_is_zero():
     no_fence = CameraZone(fence=None, outside=None, depth_cutoff=0.0, ignore=())
     assert median_fence_distance([], zone) == 0.0
     assert median_fence_distance([(0.9, 0.5)], no_fence) == 0.0
+
+
+# --------------------------------------------------------------------------
+# effective_fence + the classification functions preferring fence_bottom
+# --------------------------------------------------------------------------
+
+_BOTTOM_FENCE = ((0.7, 0.0), (0.7, 1.0))
+
+
+def test_effective_fence_prefers_fence_bottom():
+    zone = CameraZone(
+        fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=(),
+        fence_bottom=_BOTTOM_FENCE,
+    )
+    assert effective_fence(zone) == _BOTTOM_FENCE
+
+
+def test_effective_fence_falls_back_to_fence():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=())
+    assert effective_fence(zone) == _VERTICAL_FENCE
+
+
+def test_classify_zone_uses_fence_bottom_when_present():
+    # A point between the top (x=0.5) and bottom (x=0.7) lines reads "inside"
+    # under fence_bottom even though it would read "outside" under fence alone.
+    zone = CameraZone(
+        fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=(),
+        fence_bottom=_BOTTOM_FENCE,
+    )
+    assert classify_zone((0.6, 0.5), zone) == "inside"
+    assert classify_zone((0.6, 0.5), CameraZone(
+        fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=()
+    )) == "outside"
+
+
+def test_track_crosses_fence_uses_fence_bottom_when_present():
+    zone = CameraZone(
+        fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=(),
+        fence_bottom=_BOTTOM_FENCE,
+    )
+    # Both points sit between the two lines -- crosses the top-only fence but
+    # not the base line actually driving classification.
+    assert track_crosses_fence([(0.55, 0.4), (0.6, 0.6)], zone) is False
+
+
+def test_median_fence_distance_uses_fence_bottom_when_present():
+    zone = CameraZone(
+        fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=(),
+        fence_bottom=_BOTTOM_FENCE,
+    )
+    assert median_fence_distance([(0.9, 0.5)], zone) == pytest.approx(0.2)
+
+
+# --------------------------------------------------------------------------
+# Fence-pair calibration (top + base line -> pixels-per-metre ruler)
+# --------------------------------------------------------------------------
+
+
+def _calibrated_zone(**overrides) -> CameraZone:
+    defaults = dict(
+        fence=((0.5, 0.0), (0.5, 1.0)),
+        outside="right",
+        depth_cutoff=0.0,
+        ignore=(),
+        fence_bottom=((0.6, 0.0), (0.6, 1.0)),
+        fence_height_m=2.0,
+    )
+    defaults.update(overrides)
+    return CameraZone(**defaults)
+
+
+def test_is_grounded_at_fence_true_within_base_line_range():
+    zone = _calibrated_zone()
+    assert is_grounded_at_fence(0.5, zone) is True
+
+
+def test_is_grounded_at_fence_false_above_base_line_range():
+    zone = _calibrated_zone(fence_bottom=((0.6, 0.2), (0.6, 0.9)))
+    assert is_grounded_at_fence(0.1, zone) is False
+
+
+def test_is_grounded_at_fence_false_without_fence_bottom():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=())
+    assert is_grounded_at_fence(0.5, zone) is False
+
+
+def test_fence_separation_at_y_computes_pixel_gap():
+    zone = _calibrated_zone()
+    # 0.1 normalised x separation * 320px frame width = 32px.
+    assert fence_separation_at_y(0.5, zone, frame_width=320) == pytest.approx(32.0)
+
+
+def test_fence_separation_at_y_none_without_fence_bottom():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=())
+    assert fence_separation_at_y(0.5, zone, frame_width=320) is None
+
+
+def test_fence_separation_at_y_none_below_min_separation():
+    zone = _calibrated_zone(fence_bottom=((0.501, 0.0), (0.501, 1.0)))
+    assert fence_separation_at_y(0.5, zone, frame_width=320) is None
+
+
+def test_fence_separation_at_y_none_when_not_grounded():
+    zone = _calibrated_zone(fence_bottom=((0.6, 0.2), (0.6, 0.9)))
+    assert fence_separation_at_y(0.05, zone, frame_width=320) is None
+
+
+def test_pixels_per_metre_at_y():
+    zone = _calibrated_zone()
+    # 32px separation / 2.0m fence height = 16 px/m.
+    assert pixels_per_metre_at_y(0.5, zone, frame_width=320) == pytest.approx(16.0)
+
+
+def test_pixels_per_metre_at_y_none_when_uncalibrated():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=())
+    assert pixels_per_metre_at_y(0.5, zone, frame_width=320) is None
+
+
+def test_subject_base_y_uses_bbox_bottom_edge():
+    # bbox (x, y, w, h) = (10, 20, 30, 40) in a 240px-tall frame -> bottom row
+    # (20 + 40) / 240.
+    assert subject_base_y((10, 20, 30, 40), frame_height=240) == pytest.approx(60 / 240)
+
+
+def test_estimated_height_m_uses_pixels_per_metre_scale():
+    zone = _calibrated_zone()
+    # 32px scale @ 16 px/m -> 2.0m tall.
+    assert estimated_height_m(32.0, 0.5, zone, frame_width=320) == pytest.approx(2.0)
+
+
+def test_estimated_height_m_none_when_uncalibrated():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=())
+    assert estimated_height_m(32.0, 0.5, zone, frame_width=320) is None
+
+
+def test_estimated_width_m_uses_pixels_per_metre_scale():
+    zone = _calibrated_zone()
+    assert estimated_width_m(8.0, 0.5, zone, frame_width=320) == pytest.approx(0.5)
+
+
+def test_estimated_speed_mps_uses_pixels_per_metre_scale_and_dt():
+    zone = _calibrated_zone()
+    # 32px / 16 px/m = 2.0m travelled in 2s -> 1.0 m/s.
+    assert estimated_speed_mps(32.0, 2.0, 0.5, zone, frame_width=320) == pytest.approx(1.0)
+
+
+def test_estimated_speed_mps_none_for_non_positive_dt():
+    zone = _calibrated_zone()
+    assert estimated_speed_mps(32.0, 0.0, 0.5, zone, frame_width=320) is None
+
+
+# --------------------------------------------------------------------------
+# Fence "band" (the structure itself, between the two lines) -- discovery
+# stage only, see docs/plan.md.
+# --------------------------------------------------------------------------
+
+
+def test_in_fence_band_true_between_the_two_lines():
+    zone = _calibrated_zone()  # fence x=0.5, fence_bottom x=0.6, both vertical
+    assert in_fence_band((0.55, 0.5), zone) is True
+
+
+def test_in_fence_band_false_outside_both_lines():
+    zone = _calibrated_zone()
+    assert in_fence_band((0.9, 0.5), zone) is False
+    assert in_fence_band((0.1, 0.5), zone) is False
+
+
+def test_in_fence_band_false_without_fence_bottom():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=())
+    assert in_fence_band((0.5, 0.5), zone) is False
+
+
+def test_in_fence_band_false_when_not_grounded():
+    zone = _calibrated_zone(fence_bottom=((0.6, 0.2), (0.6, 0.9)))
+    assert in_fence_band((0.55, 0.05), zone) is False
+
+
+def test_entered_band_from_outside_true_when_outside_precedes_band():
+    zone = _calibrated_zone()
+    track = [(0.9, 0.5), (0.55, 0.5)]  # outside, then on the fence band
+    assert entered_band_from_outside(track, zone) is True
+
+
+def test_entered_band_from_outside_false_when_band_precedes_outside():
+    zone = _calibrated_zone()
+    track = [(0.55, 0.5), (0.9, 0.5)]  # on the band first, then outside
+    assert entered_band_from_outside(track, zone) is False
+
+
+def test_entered_band_from_outside_false_without_any_outside_point():
+    zone = _calibrated_zone()
+    track = [(0.55, 0.5), (0.58, 0.5)]  # stays on the band the whole time
+    assert entered_band_from_outside(track, zone) is False

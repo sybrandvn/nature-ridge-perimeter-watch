@@ -286,6 +286,13 @@ def test_pixels_per_metre_at_y_none_when_uncalibrated():
     assert pixels_per_metre_at_y(0.5, zone, frame_width=320, frame_height=240) is None
 
 
+def test_pixels_per_metre_at_y_none_below_min_pixels_per_metre():
+    # 32px separation / 4.0m "fence height" = 8 px/m, below the MIN_PIXELS_PER_METRE
+    # floor -- far enough away that ordinary pixel noise isn't trustworthy.
+    zone = _calibrated_zone(fence_height_m=4.0)
+    assert pixels_per_metre_at_y(0.5, zone, frame_width=320, frame_height=240) is None
+
+
 def test_subject_base_y_uses_bbox_bottom_edge():
     # bbox (x, y, w, h) = (10, 20, 30, 40) in a 240px-tall frame -> bottom row
     # (20 + 40) / 240.

@@ -180,6 +180,14 @@ def median_fence_distance(track: Sequence[Point], zone: CameraZone) -> float:
 
 MIN_FENCE_SEPARATION_PX = 4.0
 
+# Below this scale, a subject is far enough away that ordinary bbox
+# measurement noise translates into an implausible real-world size (a
+# corpus-wide check found per-camera medians up to 6.93m and a single-frame
+# outlier of 18.73m, all traced to low-px/m rows). PROVISIONAL: picked as a
+# conservative starting point, not fit to labelled data yet -- re-check once
+# a second camera's fence_picket gives real numbers to validate against.
+MIN_PIXELS_PER_METRE = 15.0
+
 
 def _line_intersection(p1: Point, p2: Point, p3: Point, p4: Point) -> Point | None:
     """Intersection of infinite line p1-p2 with infinite line p3-p4, or None
@@ -334,11 +342,20 @@ def pixels_per_metre_at_y(
     not the same scale (frames are 320x240, not square), so pixel separation
     must be computed in real pixels before it's divided into a metres-based
     ruler.
+
+    None below `MIN_PIXELS_PER_METRE` -- a subject that far away (near the
+    edge of this camera's usable view) reports "uncalibrated" instead of a
+    wild number, rather than letting ordinary pixel-measurement noise turn
+    into an implausible real-world size.
     """
     separation = fence_separation_at_y(y, zone, frame_width, frame_height)
     if separation is None:
         return None
-    return separation / zone.fence_height_m
+    scale = separation / zone.fence_height_m
+    if scale < MIN_PIXELS_PER_METRE:
+        return None
+    return scale
+
 
 
 def subject_base_y(bbox: tuple[float, float, float, float], frame_height: int) -> float:

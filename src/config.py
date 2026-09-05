@@ -185,6 +185,14 @@ class CameraZone:
     # yet -- see docs/plan.md "Fence base line + metric features".
     fence_bottom: tuple[Point, ...] | None = None
     fence_height_m: float = 2.0
+    # A single picket's own edge (top point, base point), tracing its real
+    # on-screen tilt. The naive ruler pairs `fence`/`fence_bottom` at the SAME
+    # row, which silently assumes a picket renders perfectly vertical in
+    # frame -- false whenever the camera looks down at an angle. When set,
+    # `src.zones.fence_separation_at_y` projects along this picket's own
+    # angle instead of straight up, before falling back to the naive same-row
+    # method if no camera has one traced yet.
+    fence_picket: tuple[Point, Point] | None = None
 
 
 @dataclass(frozen=True)
@@ -314,7 +322,15 @@ def load_cameras_config(path: str | Path) -> CamerasConfig:
     return CamerasConfig(cameras=tuple(cameras), unknown_camera_id=str(unknown_camera_id))
 
 
-_ZONE_FIELDS = ("fence", "outside", "depth_cutoff", "ignore", "fence_bottom", "fence_height_m")
+_ZONE_FIELDS = (
+    "fence",
+    "outside",
+    "depth_cutoff",
+    "ignore",
+    "fence_bottom",
+    "fence_height_m",
+    "fence_picket",
+)
 
 
 def _parse_camera_zones(
@@ -417,6 +433,14 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
     if fence_height_m <= 0.0:
         raise ConfigError(f"cameras.yaml: {camera_id!r} fence_height_m must be > 0")
 
+    raw_fence_picket = entry.get("fence_picket")
+    fence_picket: tuple[Point, Point] | None = None
+    if raw_fence_picket is not None:
+        if not isinstance(raw_fence_picket, list) or len(raw_fence_picket) != 2:
+            raise ConfigError(f"cameras.yaml: {camera_id!r} fence_picket needs exactly 2 points")
+        top_pt, base_pt = (_parse_point(camera_id, "fence_picket", p) for p in raw_fence_picket)
+        fence_picket = (top_pt, base_pt)
+
     return CameraZone(
         fence=fence,
         outside=outside,
@@ -424,6 +448,7 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
         ignore=ignore,
         fence_bottom=fence_bottom,
         fence_height_m=fence_height_m,
+        fence_picket=fence_picket,
     )
 
 

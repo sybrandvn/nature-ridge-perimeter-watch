@@ -252,33 +252,37 @@ def test_is_grounded_at_fence_false_without_fence_bottom():
 def test_fence_separation_at_y_computes_pixel_gap():
     zone = _calibrated_zone()
     # 0.1 normalised x separation * 320px frame width = 32px.
-    assert fence_separation_at_y(0.5, zone, frame_width=320) == pytest.approx(32.0)
+    assert fence_separation_at_y(0.5, zone, frame_width=320, frame_height=240) == pytest.approx(
+        32.0
+    )
 
 
 def test_fence_separation_at_y_none_without_fence_bottom():
     zone = CameraZone(fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=())
-    assert fence_separation_at_y(0.5, zone, frame_width=320) is None
+    assert fence_separation_at_y(0.5, zone, frame_width=320, frame_height=240) is None
 
 
 def test_fence_separation_at_y_none_below_min_separation():
     zone = _calibrated_zone(fence_bottom=((0.501, 0.0), (0.501, 1.0)))
-    assert fence_separation_at_y(0.5, zone, frame_width=320) is None
+    assert fence_separation_at_y(0.5, zone, frame_width=320, frame_height=240) is None
 
 
 def test_fence_separation_at_y_none_when_not_grounded():
     zone = _calibrated_zone(fence_bottom=((0.6, 0.2), (0.6, 0.9)))
-    assert fence_separation_at_y(0.05, zone, frame_width=320) is None
+    assert fence_separation_at_y(0.05, zone, frame_width=320, frame_height=240) is None
 
 
 def test_pixels_per_metre_at_y():
     zone = _calibrated_zone()
     # 32px separation / 2.0m fence height = 16 px/m.
-    assert pixels_per_metre_at_y(0.5, zone, frame_width=320) == pytest.approx(16.0)
+    assert pixels_per_metre_at_y(0.5, zone, frame_width=320, frame_height=240) == pytest.approx(
+        16.0
+    )
 
 
 def test_pixels_per_metre_at_y_none_when_uncalibrated():
     zone = CameraZone(fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=())
-    assert pixels_per_metre_at_y(0.5, zone, frame_width=320) is None
+    assert pixels_per_metre_at_y(0.5, zone, frame_width=320, frame_height=240) is None
 
 
 def test_subject_base_y_uses_bbox_bottom_edge():
@@ -290,28 +294,70 @@ def test_subject_base_y_uses_bbox_bottom_edge():
 def test_estimated_height_m_uses_pixels_per_metre_scale():
     zone = _calibrated_zone()
     # 32px scale @ 16 px/m -> 2.0m tall.
-    assert estimated_height_m(32.0, 0.5, zone, frame_width=320) == pytest.approx(2.0)
+    assert estimated_height_m(
+        32.0, 0.5, zone, frame_width=320, frame_height=240
+    ) == pytest.approx(2.0)
 
 
 def test_estimated_height_m_none_when_uncalibrated():
     zone = CameraZone(fence=_VERTICAL_FENCE, outside="right", depth_cutoff=0.0, ignore=())
-    assert estimated_height_m(32.0, 0.5, zone, frame_width=320) is None
+    assert estimated_height_m(32.0, 0.5, zone, frame_width=320, frame_height=240) is None
 
 
 def test_estimated_width_m_uses_pixels_per_metre_scale():
     zone = _calibrated_zone()
-    assert estimated_width_m(8.0, 0.5, zone, frame_width=320) == pytest.approx(0.5)
+    assert estimated_width_m(8.0, 0.5, zone, frame_width=320, frame_height=240) == pytest.approx(
+        0.5
+    )
 
 
 def test_estimated_speed_mps_uses_pixels_per_metre_scale_and_dt():
     zone = _calibrated_zone()
     # 32px / 16 px/m = 2.0m travelled in 2s -> 1.0 m/s.
-    assert estimated_speed_mps(32.0, 2.0, 0.5, zone, frame_width=320) == pytest.approx(1.0)
+    assert estimated_speed_mps(
+        32.0, 2.0, 0.5, zone, frame_width=320, frame_height=240
+    ) == pytest.approx(1.0)
 
 
 def test_estimated_speed_mps_none_for_non_positive_dt():
     zone = _calibrated_zone()
-    assert estimated_speed_mps(32.0, 0.0, 0.5, zone, frame_width=320) is None
+    assert estimated_speed_mps(32.0, 0.0, 0.5, zone, frame_width=320, frame_height=240) is None
+
+
+# --------------------------------------------------------------------------
+# fence_picket angle-correction: projects along a traced picket's own tilt
+# instead of assuming the fence/fence_bottom pair is vertical at the same row.
+# --------------------------------------------------------------------------
+
+
+def test_fence_separation_at_y_uses_picket_angle_when_configured():
+    # Top rail and base are both vertical (x=0.5 / x=0.6), but the picket
+    # itself is tilted -- its projection crosses the top rail at a DIFFERENT
+    # row than the base point, not row 0.5.
+    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)))
+    # origin = (0.6, 0.5); direction = (0.6-0.65, 0.4-0.5) = (-0.05, -0.1);
+    # crosses fence (x=0.5) at t=2 -> point (0.5, 0.3).
+    # dx_px = -0.1*320 = -32, dy_px = -0.2*240 = -48 -> hypot = ~57.69px.
+    assert fence_separation_at_y(0.5, zone, frame_width=320, frame_height=240) == pytest.approx(
+        57.6879, rel=1e-4
+    )
+
+
+def test_fence_separation_at_y_falls_back_without_picket_crossing():
+    # A picket direction that never crosses the top rail within its segment
+    # range must fall back to the naive same-row method, not return None.
+    zone = _calibrated_zone(fence_picket=((0.6, 0.5), (0.65, 0.5)))  # horizontal, never rises
+    assert fence_separation_at_y(0.5, zone, frame_width=320, frame_height=240) == pytest.approx(
+        32.0
+    )
+
+
+def test_fence_separation_at_y_ignores_picket_when_not_configured():
+    zone = _calibrated_zone()
+    assert zone.fence_picket is None
+    assert fence_separation_at_y(0.5, zone, frame_width=320, frame_height=240) == pytest.approx(
+        32.0
+    )
 
 
 # --------------------------------------------------------------------------

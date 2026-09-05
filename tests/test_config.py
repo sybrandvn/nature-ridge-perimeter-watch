@@ -186,6 +186,40 @@ def test_fence_height_m_must_be_positive(tmp_path):
         load_cameras_config(path)
 
 
+def test_load_cameras_config_with_fence_picket(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        """
+        cameras:
+          - id: cam06
+            fence: [[0.45, 0.14], [0.18, 0.99]]
+            fence_bottom: [[0.5, 0.07], [0.49, 0.99]]
+            outside: right
+            fence_picket: [[0.6, 0.4], [0.65, 0.5]]
+        """,
+    )
+    cam = load_cameras_config(path).by_id("cam06")
+    assert cam.zone.fence_picket == ((0.6, 0.4), (0.65, 0.5))
+
+
+def test_fence_picket_defaults_to_none(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    fence: [[0.1, 0.9], [0.6, 0.2]]\n    outside: right\n",
+    )
+    cam = load_cameras_config(path).by_id("cam01")
+    assert cam.zone.fence_picket is None
+
+
+def test_fence_picket_needs_exactly_two_points(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    fence_picket: [[0.1, 0.1], [0.2, 0.2], [0.3, 0.3]]\n",
+    )
+    with pytest.raises(ConfigError, match="fence_picket needs exactly 2 points"):
+        load_cameras_config(path)
+
+
 def test_zones_dated_history_picks_geometry_by_timestamp(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",

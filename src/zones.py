@@ -181,6 +181,64 @@ def median_fence_distance(track: Sequence[Point], zone: CameraZone) -> float:
 MIN_FENCE_SEPARATION_PX = 4.0
 
 
+def _line_intersection(p1: Point, p2: Point, p3: Point, p4: Point) -> Point | None:
+    """Intersection of infinite line p1-p2 with infinite line p3-p4, or None
+    if parallel. Standard two-point-form determinant solution."""
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(denom) < 1e-12:
+        return None
+    a = x1 * y2 - y1 * x2
+    b = x3 * y4 - y3 * x4
+    px = (a * (x3 - x4) - (x1 - x2) * b) / denom
+    py = (a * (y3 - y4) - (y1 - y2) * b) / denom
+    return (px, py)
+
+
+def _project_along_picket(
+    origin: Point, direction: Point, polyline: Sequence[Point]
+) -> Point | None:
+    """Walk from `origin` in `direction` until it crosses `polyline`, and
+    return the nearest such crossing (smallest positive distance along the
+    ray), or None if the ray never crosses within any segment.
+    """
+    far = (origin[0] + direction[0], origin[1] + direction[1])
+    best: Point | None = None
+    best_t: float | None = None
+    for seg_a, seg_b in zip(polyline, polyline[1:], strict=False):
+        point = _line_intersection(origin, far, seg_a, seg_b)
+        if point is None:
+            continue
+        # t: how far along `direction` the crossing sits (must be ahead of origin).
+        if abs(direction[0]) > abs(direction[1]):
+            t = (point[0] - origin[0]) / direction[0]
+        elif direction[1] != 0:
+            t = (point[1] - origin[1]) / direction[1]
+        else:
+            continue
+        if t <= 1e-9:
+            continue
+        # s: where the crossing falls along this specific segment (must be within it).
+        ax, ay = seg_a
+        bx, by = seg_b
+        if abs(bx - ax) > abs(by - ay):
+            if bx == ax:
+                continue
+            s = (point[0] - ax) / (bx - ax)
+        else:
+            if by == ay:
+                continue
+            s = (point[1] - ay) / (by - ay)
+        if not (-1e-6 <= s <= 1 + 1e-6):
+            continue
+        if best_t is None or t < best_t:
+            best_t, best = t, point
+    return best
+
+
 def is_grounded_at_fence(y: float, zone: CameraZone) -> bool:
     """True if row `y` falls within the base line's own traced y-range.
 
@@ -195,8 +253,20 @@ def is_grounded_at_fence(y: float, zone: CameraZone) -> bool:
     return min(ys) <= y <= max(ys)
 
 
-def fence_separation_at_y(y: float, zone: CameraZone, frame_width: int) -> float | None:
+def fence_separation_at_y(
+    y: float, zone: CameraZone, frame_width: int, frame_height: int
+) -> float | None:
     """Pixel separation between the top-rail and base fence lines at row `y`.
+
+    Prefers projecting along `zone.fence_picket`'s own on-screen angle (one
+    hand-traced picket's top-to-base edge) when configured: pairing the two
+    lines at the SAME row silently assumes a picket renders perfectly
+    vertical in frame, which is false whenever the camera looks down the
+    fence at an angle -- confirmed to matter in practice (2026-09-05: a
+    corpus-wide height-calibration check clustered correctly only on cam06,
+    whose base line happens to be near-vertical already). Falls back to the
+    naive same-row method when no picket is traced yet, or the picket's
+    projection never crosses the top rail.
 
     None when the camera has no `fence_bottom` traced yet, `y` falls outside
     the base line's own range (see `is_grounded_at_fence`), or the separation
@@ -206,22 +276,36 @@ def fence_separation_at_y(y: float, zone: CameraZone, frame_width: int) -> float
         return None
     if not is_grounded_at_fence(y, zone):
         return None
+    origin = (_fence_x_at_y(y, zone.fence_bottom), y)
+    if zone.fence_picket is not None:
+        top_point, base_point = zone.fence_picket
+        direction = (top_point[0] - base_point[0], top_point[1] - base_point[1])
+        crossing = _project_along_picket(origin, direction, zone.fence)
+        if crossing is not None:
+            dx_px = (crossing[0] - origin[0]) * frame_width
+            dy_px = (crossing[1] - origin[1]) * frame_height
+            separation = (dx_px * dx_px + dy_px * dy_px) ** 0.5
+            if separation < MIN_FENCE_SEPARATION_PX:
+                return None
+            return separation
     top_x = _fence_x_at_y(y, zone.fence) * frame_width
-    bottom_x = _fence_x_at_y(y, zone.fence_bottom) * frame_width
-    separation = abs(bottom_x - top_x)
+    separation = abs(top_x - origin[0] * frame_width)
     if separation < MIN_FENCE_SEPARATION_PX:
         return None
     return separation
 
 
-def pixels_per_metre_at_y(y: float, zone: CameraZone, frame_width: int) -> float | None:
+def pixels_per_metre_at_y(
+    y: float, zone: CameraZone, frame_width: int, frame_height: int
+) -> float | None:
     """Pixels-per-metre scale at row `y`, from the fence's known real height.
 
-    Frame width must be passed explicitly: normalised x and y are not the same
-    scale (frames are 320x240, not square), so pixel separation must be
-    computed in real pixels before it's divided into a metres-based ruler.
+    Frame width AND height must be passed explicitly: normalised x and y are
+    not the same scale (frames are 320x240, not square), so pixel separation
+    must be computed in real pixels before it's divided into a metres-based
+    ruler.
     """
-    separation = fence_separation_at_y(y, zone, frame_width)
+    separation = fence_separation_at_y(y, zone, frame_width, frame_height)
     if separation is None:
         return None
     return separation / zone.fence_height_m
@@ -239,29 +323,34 @@ def subject_base_y(bbox: tuple[float, float, float, float], frame_height: int) -
 
 
 def estimated_height_m(
-    bbox_height_px: float, y: float, zone: CameraZone, frame_width: int
+    bbox_height_px: float, y: float, zone: CameraZone, frame_width: int, frame_height: int
 ) -> float | None:
     """A tracked bbox's real height in metres at feet-row `y`, or None if
     the camera is uncalibrated there (see `pixels_per_metre_at_y`)."""
-    scale = pixels_per_metre_at_y(y, zone, frame_width)
+    scale = pixels_per_metre_at_y(y, zone, frame_width, frame_height)
     if not scale:
         return None
     return bbox_height_px / scale
 
 
 def estimated_width_m(
-    bbox_width_px: float, y: float, zone: CameraZone, frame_width: int
+    bbox_width_px: float, y: float, zone: CameraZone, frame_width: int, frame_height: int
 ) -> float | None:
     """A tracked bbox's real width in metres at feet-row `y`, or None if
     the camera is uncalibrated there (see `pixels_per_metre_at_y`)."""
-    scale = pixels_per_metre_at_y(y, zone, frame_width)
+    scale = pixels_per_metre_at_y(y, zone, frame_width, frame_height)
     if not scale:
         return None
     return bbox_width_px / scale
 
 
 def estimated_speed_mps(
-    distance_px: float, dt_seconds: float, y: float, zone: CameraZone, frame_width: int
+    distance_px: float,
+    dt_seconds: float,
+    y: float,
+    zone: CameraZone,
+    frame_width: int,
+    frame_height: int,
 ) -> float | None:
     """Real-world speed (m/s) for a subject moving `distance_px` in
     `dt_seconds`, at feet-row `y`. None if `dt_seconds` isn't positive or the
@@ -269,7 +358,7 @@ def estimated_speed_mps(
     """
     if dt_seconds <= 0:
         return None
-    scale = pixels_per_metre_at_y(y, zone, frame_width)
+    scale = pixels_per_metre_at_y(y, zone, frame_width, frame_height)
     if not scale:
         return None
     return (distance_px / scale) / dt_seconds

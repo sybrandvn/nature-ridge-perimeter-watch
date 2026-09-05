@@ -365,6 +365,8 @@ access before the bot ships.
   addition once the base classifier and plain-text alerts are proven — no upstream pipeline to
   draw from yet, so there's nothing to wire it into today.
 - **Fence-base reference line for real-world scale, height, and speed (2026-09-04, user).**
+  **Phases 1-3 IMPLEMENTED 2026-09-05** (schema/parsing, dual-line render, geometry helpers); see
+  `docs/handoff.md`'s 2026-09-05 session for the full writeup. Summary of what shipped:
   Idea: draw a SECOND polyline tracing the fence's own base/ground line (in addition to the
   existing top-of-fence `fence` polyline), alongside the known real-world fence height
   (~2m). Together these two lines calibrate pixels-to-metres AT EVERY ROW of the frame (the
@@ -391,6 +393,30 @@ access before the bot ships.
     outside), a `src/zones.py`/`CameraZone` schema change, and a validated pixels-per-metre
     formula checked against known real subject sizes (e.g. the confirmed animal sightings in
     `/memories/repo/incident-findings.md`) before trusting any derived speed/height number.
+  - **Shipped 2026-09-05**: `CameraZone.fence_bottom`/`fence_height_m` (defaults `None`/2.0m, all
+    25 existing test-suite `CameraZone(...)` constructions untouched). Inside/outside
+    classification (`classify_zone`/`track_crosses_fence`/`median_fence_distance`, via a new
+    `effective_fence()`) now prefers `fence_bottom` when a camera has one, else falls back to
+    `fence` unchanged -- cam06 is the only camera with a bottom line so far (traced over
+    `data/history/cam06/8467.mp4`), every other camera's behaviour is byte-identical to before.
+    New pure geometry helpers in `src/zones.py`: `fence_separation_at_y`, `pixels_per_metre_at_y`,
+    `estimated_height_m`/`estimated_width_m`/`estimated_speed_mps`, `subject_base_y` (feet-row,
+    not centroid), `is_grounded_at_fence` (returns `None`/uncalibrated above the base line's own
+    traced range -- the bird-sitting-on-the-fence confound). `render_debug.py`/`visualize_zone.py`
+    draw both lines (top rail unchanged colour, base line in orange) when both exist. **Sanity
+    check (phase 5) against all 41 cam06 guard clips**: per-clip median `estimated_height_m`
+    clusters at 1.66m median (genuine bg-diff frames only), right in the 1.6-1.9m target band;
+    clips with >=10 genuine frames cluster even tighter (1.5-1.7m on 6 of 10 such clips) --
+    calibration passes, ruler is trustworthy for cam06. **Discovery (phase 4) for
+    `in_fence_band`/`entered_band_from_outside`**: checked against the only calibrated camera's
+    incident/animal ground truth (cam06 has 1 incident clip, 21520, and 0 animal clips) --
+    `entered_band_from_outside` is `False` (the crawl incident's whole track reads "outside" and
+    never enters the band region at his row; the confirmed real-world crawl-along-the-fence
+    subject never crossed into it). n=1 is far too small to certify anything either way. **Neither
+    the calibration functions nor the fence-band functions are wired into
+    `scripts/backtest.py::classify`** -- this was deliberately left as additive infrastructure,
+    same as `scenery_motion_fraction`'s own history; a real rule needs a labelled sample size and
+    threshold sweep this session didn't have time for (only 1 camera is calibrated at all).
 - **Flashlight-vs-subject side divergence as a guard-specific signal (2026-09-04, user + this
   session's re-derivation)**: the user's insight — "guards are on the inside, they can cross the
   line since they are visible through the fence if they walk close, they shine their flashlight

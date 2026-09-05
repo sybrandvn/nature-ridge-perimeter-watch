@@ -1,7 +1,7 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-04. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-04, session close #2)" at the very
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-05. **If you are a new agent
+picking this up, start at "Handoff for a new agent (2026-09-05, session close #3)" at the very
 bottom, just above "Conventions"** — it has current state, the prioritised remaining work, and
 the two validation lessons that cost the most time recently. `docs/plan.md` is the full plan and
 stays authoritative; this file is the short version of where things actually stand and what to do
@@ -10,8 +10,9 @@ next.
 ## Where the project is
 
 On branch `feat/phase1-finalisation` (branched off `main` at the `phase0-checkpoint` tag;
-`feat/phase0-foundations` is retired but kept). Working tree clean, 372 tests passing
-(`uv run ruff check . && uv run pytest -q`) as of 2026-09-04.
+`feat/phase0-foundations` is retired but kept). 398 tests passing
+(`uv run ruff check . --fix && uv run pytest -q`) as of 2026-09-05, with one deliberate
+uncommitted change in `config/cameras.yaml` (cam06 fence base line — see session close #3).
 
 Phase 0 is merged to `main` as a checkpoint, not a clean sign-off — see `docs/plan.md`'s
 "Checkpoint (2026-08-30)" section. Gate 2 pass/fail is still the one open decision affecting
@@ -785,6 +786,199 @@ already-working veto and this session's failed broader attempt.
 
 **Gate 2 pass/fail (item 4 above) is still the standing, unrelated open decision** — nothing this
 session changes that.
+
+## Handoff for a new agent (2026-09-05, session close #3)
+
+**State.** Branch `feat/phase1-finalisation`, 398 tests passing. **One uncommitted change in the
+working tree**: `config/cameras.yaml` cam06's `fence` field currently holds a quick-test BOTTOM
+(base) trace, with the original TOP-rail line preserved in a YAML comment. This was only a fast
+way to validate the base-line idea — `fence` is, and stays, the TOP rail for all 18 cameras
+(unchanged meaning). **Do not commit this as-is.** When implementing the next feature, restore
+`fence` to the commented-out top line and move the bottom trace into the new `fence_bottom`
+field (see below) — see `/memories/session/plan.md`. Labels grew this session: guard 268,
+environment 96, animal 10, incident 10, resident 10, unknown 18.
+
+**Shipped this session (5 commits).**
+
+- `1680f29` — cross-camera storm/environment corroboration. New `src/storm_events.py`
+  (`ClipSignal`, `neighbor_cameras`, `find_corroborated_events` via union-find) and
+  `scripts/find_storm_events.py`. A clip is only surfaced when spatial neighbours fire inside a
+  time window, which is what wind/rain does and a single guard does not.
+- `924937a` — continuous dawn/dusk signal. `src/features.py` gained
+  `minutes_from_daylight_boundary()` (signed minutes from the nearer of sunrise/sunset) and
+  `is_twilight()`. Also fixed cam03/18512's wrong flashlight overlay by OR-ing `is_twilight` into
+  `render_debug.py`'s daylight gate.
+- `4082444` — `--exclude-twilight-minutes` filter for `find_storm_events.py`.
+- `fd2a886` — re-derived the broken `animal_or_incident_candidate` rule (the "next natural step"
+  flagged back on 2026-08-31) and split it into `animal_candidate` / `incident_candidate`.
+- `d254f8b` — recorded the fence-height calibration and flashlight-divergence design ideas in
+  `docs/plan.md`.
+
+**Findings worth not rediscovering.**
+
+- *"The guard false-positives are all in daylight" was wrong, but pointed at something real.*
+  `is_daylight()` returns `False` for all 8 of them; they sit 13–56 minutes **after** the sun
+  table's January sunset (18:55 local). Real twilight, past a binary cutoff — hence the continuous
+  signal. Bucketing guard clips by minutes-after-sunset shows the confound directly: +15→+60 min,
+  n=21, mean `blob_count` 9.05, **38.1%** false-fire on `blob_count > 10`; +60→+120 min, n=20,
+  mean 4.80, **0%**; +240 min and beyond, n=80, mean 4.40, 6.2%. Dusk grain, not wind.
+- *The `aspect_ratio < 0.95` premise was measurably dead* (AUC 0.518). Re-derived on 378 labelled
+  + detected clips: `outside_pixel_fraction` AUC 0.700, `median_fence_distance` 0.660. Neither is
+  usable alone — `outside_pixel_fraction` alone false-fires on 40%+ of guards at *every* threshold
+  from 0.3 to 0.9, because **guards genuinely read as "outside"** under top-rail geometry. Requiring
+  both moved recall 26.3% → **73.7%** and guard false-fire 31.8% → **15.9%** (environment false-fire
+  21.1% → 31.6%, accepted). Animal-vs-incident splits on `color_fraction > 0.15` (AUC 0.828): 0/10
+  incidents exceed 0.04 (all night IR), 7/9 animals exceed 0.15.
+- *`blob_count > 10` survived re-measurement* on the larger label set: AUC dropped 0.933 → 0.856,
+  but at the shipped threshold recall is 54.2%, guard false-fire 6.72%, and the animal+incident
+  leak is still **0/20**. Threshold unchanged.
+- *Storm sweep, tightened settings* (30 min window, neighbour distance 3, `exclude_twilight_minutes=60`)
+  produced 6 events, all already-confirmed environment, **zero false positives** — but two real
+  storms (2024-02-08, 2024-03-05) drop out because their members land 41–57 min after sunset. The
+  twilight filter is a precision/recall dial, not a free win.
+- **Known bug, diagnosed but NOT fixed:** `blob_count` is a *max over frames*, so a single noisy
+  leading frame trips it. cam04/10887 reads `[16, 5, 5, 4, 3, ...]`, cam03/11096 `[14, 6, 6, 2, ...]`,
+  cam03/18512 `[20, 1, 1, 1, ...]` — all spike on the first scored frame then decay. Contrast a
+  genuinely windy clip, cam01a/18347: `[0, 1, 0, 2, 6, 23, 10, 8, ...]`, peaking mid-clip and
+  *staying* elevated. Likely leftover IR flare-settle grain that `flare_settle_index`'s single-step
+  test doesn't clear; `motion_heatmap.py::_residual_settle_index` already does the multi-step
+  version and was never ported into `detect_clip`. Fixing it is a detector-level change and needs a
+  full-corpus re-validation, so it was left alone.
+
+### The fence base-line finding (this is what the next feature is built on)
+
+Every camera's existing `fence` polyline was traced along the **top rail**, and that stays true —
+it is not being redefined. Cameras are mounted near the fence top looking down and slightly
+outward, so a guard walking *inside* the fence still projects to the outside of the top-rail line
+— which is exactly why `outside_pixel_fraction` false-fires on 40%+ of guards no matter where you
+put the threshold.
+
+Tracing a brand-new line for cam06 along the **base of the fence where it meets the ground** (the
+first bottom line to exist anywhere in the config) and re-running `extract_clip_features` over all
+45 labelled cam06 clips, using it in place of the top line for the outside-fraction calculation:
+33 of 45 changed, most collapsing to `outside_pixel_fraction = 0.0`. The crawl incident
+cam06/21520 stayed at **1.0** under both geometries. cam06/21519 went 0.75 → 0.0 but is
+`startup_state='blank'`, so not meaningful. A few kept real spread (3441 1.0→0.722, 4732
+1.0→0.741, 22647 1.0→0.839, 4875 0.516→0.169).
+
+The collapse initially looked like signal loss. **It isn't** — the user's call, and it's right: a
+guard patrolling inside the fence *cannot* be outside, so 0.0 is the correct reading. The bottom
+line is the correct reference for the inside/outside decision, once it exists. cam06's bottom
+trace is near-vertical because the camera sits on top of the fence looking down its own line; that
+is the real geometry, not a tracing error. `outside: right` was confirmed directly by the user.
+
+### Next feature: two fence polylines (top + bottom) and metric features
+
+Planned this session, **not implemented**. Full plan in `/memories/session/plan.md`. Summary:
+
+Add a second polyline per camera — the base/bottom line — while the existing `fence` field keeps
+its name AND its existing meaning: the **top rail**, unchanged, for all 18 cameras. Inside/outside
+classification switches to prefer the new bottom line when a camera has one, falling back to the
+top line (`fence`) when it doesn't — so the 17 cameras with no bottom line yet keep behaving
+exactly as today. The pair of lines then gives a per-row pixel ruler (the fence is ~2 m) that
+unlocks real height / size / speed features and a "crossed into the fence band from outside"
+signal.
+
+Design decisions already made, with the reasoning:
+
+- `fence_bottom: tuple[Point, ...] | None = None` and `fence_height_m: float = 2.0` go on
+  `CameraZone` as the **last fields, with defaults**. There are 25 literal `CameraZone(...)`
+  constructions across 9 test files (16 in `tests/test_zones.py`); a required field would mean
+  touching all of them for nothing. "Suite green with no edits to those 25 sites" is the
+  acceptance test for phase 1. Do **not** call it `fence_top` — `fence` already is the top line.
+- Don't rename `fence`, and don't repurpose what it holds. It would touch every call site plus all
+  18 YAML entries, 17 of which have never had a bottom line traced.
+- `signed_side`/`side_name`/`classify_zone`/`outside_pixel_fraction`/`track_crosses_fence`/
+  `median_fence_distance` in `src/zones.py` all switch to reading `fence_bottom` when present,
+  else `fence` — this is the one deliberate behaviour change, scoped to whichever cameras get a
+  bottom line.
+- The ruler is the horizontal separation between the two lines at a given row, reusing the existing
+  `zones._fence_x_at_y` for both. Checked against cam06's two real traces: separation is 0.048
+  (normalised x) near the top of frame and 0.31 at the bottom — it converges with distance, which
+  is what a receding fence must do.
+- **Units trap:** normalised x and y are not the same scale (frames are 320×240). Convert to pixels
+  via `frame_width`/`frame_height` before forming any ratio.
+- Guard the degenerate case: when separation falls under a floor, or `fence_bottom` is absent,
+  return `None` ("uncalibrated") rather than dividing and emitting absurd metres.
+
+Phases: (1) schema + parsing — add `fence_bottom`, wire the fallback logic above, and **fix
+cam06's YAML** (restore `fence` to the commented-out top line, move the current bottom trace into
+`fence_bottom`); (2) draw both lines in `render_debug.py` and `visualize_zone.py`, pilot cam06
+only — it's the only camera with both lines traced; (3) pure helpers in `src/zones.py` —
+`fence_separation_at_y`, `pixels_per_metre_at_y`, `estimated_height_m`, `estimated_width_m`,
+`estimated_speed_mps`, `subject_base_y`, all using the subject's **feet row** (bbox bottom) as the
+depth reference; (4) `in_fence_band` / `entered_band_from_outside`, but **discovery first** —
+nobody knows whether the corpus contains an actual outside-to-band crossing, so run the 10
+incident + 10 animal clips through it and report the count before building a rule on it; (5)
+sanity-check calibration against the 268 guard clips (`estimated_height_m` should cluster around
+1.6–1.9 m — if it doesn't, the ruler is wrong, fix or abandon, do not ship) and only then sweep
+thresholds.
+
+**Do not touch `scripts/backtest.py::classify` until phase 5 has numbers.** Out of scope: retracing
+all 18 cameras, a zone editor, full perspective homography.
+
+**Confound to encode as a regression fixture:** the bird that sat on the fence, then moved away
+very fast and got smaller. Its feet row is on the *top* line, not the ground, so the depth
+assumption breaks and height/speed will read absurd. Worth a "feet above the base line ⇒
+uncalibrated" guard.
+
+### Still open, unchanged by this session
+
+- Gate 2 pass/fail — the standing decision, still the user's to make.
+- `guard_candidate` recall is 8.7%; the daylight gate is self-defeating and four fix attempts have
+  failed. See `/memories/repo/nature-ridge-conventions.md` before attempting a fifth.
+- **`resident` has no rule at all** in `classify()`. Dog detection is the obvious route but zero
+  dog-labelled clips exist — examples are needed first.
+- The first-frame `blob_count` spike bug above.
+
+## Handoff for a new agent (2026-09-05, session close #4)
+
+**State.** Branch `feat/phase1-finalisation`, 430 tests passing
+(`uv run ruff check . --fix && uv run pytest -q`). Same label counts as session close #3.
+
+**Shipped: phases 1-3 of the fence base-line plan above, plus phase 4 (discovery) and phase 5
+(calibration sanity check).** Full detail in `/memories/repo/nature-ridge-conventions.md`
+("Fence base line + metric features -- phases 1-3 IMPLEMENTED"); short version:
+
+- Fixed the uncommitted cam06 YAML (`fence` restored to the top rail, the base trace moved into a
+  new `fence_bottom` field). `CameraZone.fence_bottom`/`fence_height_m` added as trailing
+  defaulted fields — zero edits needed to any of the 25 existing `CameraZone(...)` test
+  constructions.
+- `src/zones.py::effective_fence()` prefers `fence_bottom` when present, else `fence`;
+  `classify_zone`/`track_crosses_fence`/`median_fence_distance` all switched to it. Every camera
+  without a bottom line (17 of 18) is byte-identical to before.
+- New pure, tested calibration helpers: `is_grounded_at_fence`, `fence_separation_at_y`,
+  `pixels_per_metre_at_y`, `estimated_height_m`/`estimated_width_m`/`estimated_speed_mps`,
+  `subject_base_y`. All return `None` ("uncalibrated") rather than a guess whenever a camera has
+  no `fence_bottom`, the row is outside the base line's traced range, or the two lines' pixel
+  separation is below a floor.
+- Discovery-stage `in_fence_band`/`entered_band_from_outside` added, per the plan's explicit
+  "discovery first" requirement. Checked against the only calibrated camera's ground truth (cam06
+  has 1 incident clip, 0 animal clips): `entered_band_from_outside` is `False` on the crawl
+  incident (21520) — its whole track reads "outside" and never enters the band at its own row.
+  n=1, nowhere near enough to build a rule on.
+- Phase 5 sanity check run against all 41 cam06 guard clips' genuine (non-recovered) frames:
+  per-clip median `estimated_height_m` clusters at 1.66m overall, tighter (1.5-1.7m) on
+  higher-frame-count clips — inside the 1.6-1.9m target band. **Verdict: the ruler is trustworthy
+  for cam06, kept.**
+- `render_debug.py`/`visualize_zone.py` now draw both lines when both exist (verified visually on
+  cam06/21520 night + cam06/8467 daylight).
+- **Deliberately not done, matching the plan's own gating**: no threshold sweep, nothing wired
+  into `scripts/backtest.py::classify`, no other camera retraced. Only cam06 is calibrated.
+
+**Natural next step if this is picked up again**: trace a `fence_bottom` for a second camera (a
+guard-heavy one with enough labelled volume to be worth calibrating) before attempting any
+threshold sweep — a rule built on a single calibrated camera can't generalise, and phase 4's
+discovery result (n=1 incident) is too thin to judge `in_fence_band` on its own merits yet.
+
+### Still open, unchanged by this session
+
+- Gate 2 pass/fail — the standing decision, still the user's to make.
+- `guard_candidate` recall is 8.7%; the daylight gate is self-defeating and four fix attempts have
+  failed. See `/memories/repo/nature-ridge-conventions.md` before attempting a fifth.
+- **`resident` has no rule at all** in `classify()`. Dog detection is the obvious route but zero
+  dog-labelled clips exist — examples are needed first.
+- The first-frame `blob_count` spike bug above.
 
 ## Conventions
 

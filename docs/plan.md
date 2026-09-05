@@ -417,6 +417,25 @@ access before the bot ships.
     `scripts/backtest.py::classify`** -- this was deliberately left as additive infrastructure,
     same as `scenery_motion_fraction`'s own history; a real rule needs a labelled sample size and
     threshold sweep this session didn't have time for (only 1 camera is calibrated at all).
+  - **All 18 cameras now have `fence_bottom` traced (2026-09-05, later same day) -- phases 4/5
+    re-run on the full corpus, both with material findings:**
+    - **Phase 4, full incident+animal set (20/21 detectable)**: only one nominal
+      `entered_band_from_outside` hit (`cam09/21522`), confirmed via `render_debug.py` to be the
+      already-documented wire-lock tracking artifact on that exact clip, not a real subject.
+      Real count of genuine band-crossings: **0/20**. Still nowhere near enough to build a rule.
+    - **Phase 5, 15 cameras with guard clips (up to 20/camera)**: does **NOT generalise beyond
+      cam06**. Per-camera median height ranges 0.89m-6.93m, with a single-frame outlier as high
+      as 18.73m. Root cause diagnosed: `pixels_per_metre_at_y` is correctly direction-monotonic
+      (more px/m near the camera, fewer far away) but the far end is very coarse (as low as
+      ~2.5 px/m) -- ordinary bbox-height measurement noise on a far subject gets amplified into
+      an absurd real-world height once divided by that tiny scale. cam06's own 41-clip
+      validation happened to work because enough of its guard sightings are close-range;
+      that isn't true corpus-wide. **Verdict: do not wire the metric (height/width/speed)
+      helpers into scoring as-is.** Credible fix if revisited: a minimum px-per-metre floor
+      (same shape as `MIN_FENCE_SEPARATION_PX`) so far-field estimates return `None`
+      ("uncalibrated") instead of a wrong number -- not attempted, needs its own
+      threshold-on-labelled-data pass. The inside/outside classification improvement from
+      `fence_bottom` itself is unaffected by this finding -- only the metric-scale features are.
 - **Flashlight-vs-subject side divergence as a guard-specific signal (2026-09-04, user + this
   session's re-derivation)**: the user's insight — "guards are on the inside, they can cross the
   line since they are visible through the fence if they walk close, they shine their flashlight

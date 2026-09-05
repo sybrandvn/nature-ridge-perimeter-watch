@@ -226,6 +226,42 @@ def test_fence_pickets_entry_needs_exactly_two_points(tmp_path):
         load_cameras_config(path)
 
 
+def test_metric_calibration_is_off_by_default(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    fence: [[0.1, 0.9], [0.6, 0.2]]\n    outside: right\n",
+    )
+    zone = load_cameras_config(path).by_id("cam01").zone
+    assert zone.metric_calibration is False
+    assert zone.metric_max_range_m is None
+
+
+def test_metric_calibration_opt_in_and_range_parse(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        """
+        cameras:
+          - id: cam06
+            fence: [[0.45, 0.14], [0.18, 0.99]]
+            outside: right
+            metric_calibration: true
+            metric_max_range_m: 35
+        """,
+    )
+    zone = load_cameras_config(path).by_id("cam06").zone
+    assert zone.metric_calibration is True
+    assert zone.metric_max_range_m == 35.0
+
+
+def test_metric_max_range_must_be_positive(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    metric_max_range_m: 0\n",
+    )
+    with pytest.raises(ConfigError, match="metric_max_range_m must be > 0"):
+        load_cameras_config(path)
+
+
 def test_zones_dated_history_picks_geometry_by_timestamp(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",

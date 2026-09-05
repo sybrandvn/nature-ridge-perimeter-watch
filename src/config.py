@@ -198,6 +198,15 @@ class CameraZone:
     # further away) -- a single point + linear taper gets this wrong in both
     # directions, so multiple real samples are interpolated between instead.
     fence_pickets: tuple[tuple[Point, Point], ...] = ()
+    # Opt in to `src.ground_calibration`: real distances/heights from the
+    # fence's two lines plus the pickets' vertical vanishing point. Off by
+    # default -- it needs `fence`, `fence_bottom` and >= 2 `fence_pickets`
+    # traced well, and has only been validated on cam06 so far.
+    metric_calibration: bool = False
+    # Refuse distances past this many metres. None uses
+    # `ground_calibration.DEFAULT_MAX_RANGE_M`. The effective cap is also
+    # limited by how much distance one pixel row is worth near the horizon.
+    metric_max_range_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -335,6 +344,8 @@ _ZONE_FIELDS = (
     "fence_bottom",
     "fence_height_m",
     "fence_pickets",
+    "metric_calibration",
+    "metric_max_range_m",
 )
 
 
@@ -450,6 +461,17 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
         top_pt, base_pt = (_parse_point(camera_id, "fence_pickets", p) for p in picket)
         fence_pickets.append((top_pt, base_pt))
 
+    metric_calibration = bool(entry.get("metric_calibration", False))
+
+    raw_max_range = entry.get("metric_max_range_m")
+    metric_max_range_m: float | None = None
+    if raw_max_range is not None:
+        metric_max_range_m = float(raw_max_range)
+        if metric_max_range_m <= 0.0:
+            raise ConfigError(
+                f"cameras.yaml: {camera_id!r} metric_max_range_m must be > 0"
+            )
+
     return CameraZone(
         fence=fence,
         outside=outside,
@@ -458,6 +480,8 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
         fence_bottom=fence_bottom,
         fence_height_m=fence_height_m,
         fence_pickets=tuple(fence_pickets),
+        metric_calibration=metric_calibration,
+        metric_max_range_m=metric_max_range_m,
     )
 
 

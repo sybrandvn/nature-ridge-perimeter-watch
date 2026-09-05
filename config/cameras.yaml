@@ -192,6 +192,16 @@ cameras:
       - [[0.3453, 0.5711], [0.4649, 0.9969]]
       - [[0.3907, 0.4188], [0.4762, 0.8445]]
       - [[0.4102, 0.366], [0.4832, 0.7392]]
+    # 2026-09-05: first camera opted in to src/ground_calibration.py. The two
+    # fence lines give a horizon vanishing point and the pickets a vertical
+    # one, which fixes focal length (187px, HFOV 81deg) and camera height
+    # (2.63m). Validated: camera height stays constant to 1e-15m from 1.3m to
+    # 33m, and the guard's flashlight at the far end of the fence reads
+    # 28.7-31.7m against the user's independent "20 to 30 metres" estimate
+    # (data/reports/metric_calib_2026-09-05/). Capped at 35m: past the far end
+    # of the traced base line nothing anchors the ground-plane assumption.
+    metric_calibration: true
+    metric_max_range_m: 35.0
   - id: cam07
     aliases: ["MOTIONVIEWER 7"]
     order: 8

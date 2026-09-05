@@ -186,7 +186,7 @@ def test_fence_height_m_must_be_positive(tmp_path):
         load_cameras_config(path)
 
 
-def test_load_cameras_config_with_fence_picket(tmp_path):
+def test_load_cameras_config_with_fence_pickets(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",
         """
@@ -195,28 +195,34 @@ def test_load_cameras_config_with_fence_picket(tmp_path):
             fence: [[0.45, 0.14], [0.18, 0.99]]
             fence_bottom: [[0.5, 0.07], [0.49, 0.99]]
             outside: right
-            fence_picket: [[0.6, 0.4], [0.65, 0.5]]
+            fence_pickets:
+              - [[0.6, 0.4], [0.65, 0.5]]
+              - [[0.55, 0.3], [0.58, 0.38]]
         """,
     )
     cam = load_cameras_config(path).by_id("cam06")
-    assert cam.zone.fence_picket == ((0.6, 0.4), (0.65, 0.5))
+    assert cam.zone.fence_pickets == (
+        ((0.6, 0.4), (0.65, 0.5)),
+        ((0.55, 0.3), (0.58, 0.38)),
+    )
 
 
-def test_fence_picket_defaults_to_none(tmp_path):
+def test_fence_pickets_defaults_to_empty(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",
         "cameras:\n  - id: cam01\n    fence: [[0.1, 0.9], [0.6, 0.2]]\n    outside: right\n",
     )
     cam = load_cameras_config(path).by_id("cam01")
-    assert cam.zone.fence_picket is None
+    assert cam.zone.fence_pickets == ()
 
 
-def test_fence_picket_needs_exactly_two_points(tmp_path):
+def test_fence_pickets_entry_needs_exactly_two_points(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",
-        "cameras:\n  - id: cam01\n    fence_picket: [[0.1, 0.1], [0.2, 0.2], [0.3, 0.3]]\n",
+        "cameras:\n  - id: cam01\n    fence_pickets:\n"
+        "      - [[0.1, 0.1], [0.2, 0.2], [0.3, 0.3]]\n",
     )
-    with pytest.raises(ConfigError, match="fence_picket needs exactly 2 points"):
+    with pytest.raises(ConfigError, match="fence_pickets entry needs exactly 2 points"):
         load_cameras_config(path)
 
 

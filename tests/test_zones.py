@@ -334,7 +334,7 @@ def test_estimated_speed_mps_none_for_non_positive_dt():
 
 
 # --------------------------------------------------------------------------
-# fence_picket angle-correction: projects along a traced picket's own tilt
+# fence_pickets angle-correction: projects along a traced picket's own tilt
 # instead of assuming the fence/fence_bottom pair is vertical at the same row.
 # --------------------------------------------------------------------------
 
@@ -343,7 +343,7 @@ def test_fence_separation_at_y_uses_picket_angle_when_configured():
     # Top rail and base are both vertical (x=0.5 / x=0.6), but the picket
     # itself is tilted -- its projection crosses the top rail at a DIFFERENT
     # row than the base point, not row 0.5.
-    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)))
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.4), (0.65, 0.5)),))
     # origin = (0.6, 0.5); direction = (0.6-0.65, 0.4-0.5) = (-0.05, -0.1);
     # crosses fence (x=0.5) at t=2 -> point (0.5, 0.3).
     # dx_px = -0.1*320 = -32, dy_px = -0.2*240 = -48 -> hypot = ~57.69px.
@@ -355,7 +355,7 @@ def test_fence_separation_at_y_uses_picket_angle_when_configured():
 def test_fence_separation_at_y_falls_back_without_picket_crossing():
     # A picket direction that never crosses the top rail within its segment
     # range must fall back to the naive same-row method, not return None.
-    zone = _calibrated_zone(fence_picket=((0.6, 0.5), (0.65, 0.5)))  # horizontal, never rises
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.5), (0.65, 0.5)),))  # horizontal
     assert fence_separation_at_y(0.5, zone, frame_width=320, frame_height=240) == pytest.approx(
         32.0
     )
@@ -363,7 +363,7 @@ def test_fence_separation_at_y_falls_back_without_picket_crossing():
 
 def test_fence_separation_at_y_ignores_picket_when_not_configured():
     zone = _calibrated_zone()
-    assert zone.fence_picket is None
+    assert zone.fence_pickets == ()
     assert fence_separation_at_y(0.5, zone, frame_width=320, frame_height=240) == pytest.approx(
         32.0
     )
@@ -377,48 +377,91 @@ def test_fence_separation_at_y_ignores_picket_when_not_configured():
 
 
 def test_picket_direction_full_tilt_at_its_own_row():
-    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)), depth_cutoff=0.1)
-    assert _picket_direction_at_y(0.5, zone) == pytest.approx((-0.05, -0.1))
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.4), (0.65, 0.5)),), depth_cutoff=0.1)
+    assert _picket_direction_at_y(0.5, zone) == pytest.approx((-0.5, -1.0))
 
 
 def test_picket_direction_upright_at_depth_cutoff():
-    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)), depth_cutoff=0.1)
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.4), (0.65, 0.5)),), depth_cutoff=0.1)
     dx, dy = _picket_direction_at_y(0.1, zone)
     assert dx == pytest.approx(0.0)
-    assert dy == pytest.approx(-0.1)
+    assert dy == pytest.approx(-1.0)
 
 
 def test_picket_direction_interpolates_halfway():
-    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)), depth_cutoff=0.1)
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.4), (0.65, 0.5)),), depth_cutoff=0.1)
     # halfway between the picket's own row (0.5) and depth_cutoff (0.1) is 0.3.
     dx, dy = _picket_direction_at_y(0.3, zone)
-    assert dx == pytest.approx(-0.025)
-    assert dy == pytest.approx(-0.1)
+    assert dx == pytest.approx(-0.25, rel=1e-4)
+    assert dy == pytest.approx(-1.0)
 
 
 def test_picket_direction_clamps_beyond_depth_cutoff():
-    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)), depth_cutoff=0.1)
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.4), (0.65, 0.5)),), depth_cutoff=0.1)
     dx, dy = _picket_direction_at_y(0.0, zone)
     assert dx == pytest.approx(0.0)
 
 
 def test_picket_direction_clamps_nearer_than_its_own_row():
-    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)), depth_cutoff=0.1)
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.4), (0.65, 0.5)),), depth_cutoff=0.1)
     dx, dy = _picket_direction_at_y(0.9, zone)
-    assert dx == pytest.approx(-0.05)
+    assert dx == pytest.approx(-0.5, rel=1e-4)
 
 
-def test_picket_direction_none_without_fence_picket():
+def test_picket_direction_none_without_fence_pickets():
     zone = _calibrated_zone()
     assert _picket_direction_at_y(0.5, zone) is None
 
 
+def test_picket_direction_ignores_degenerate_horizontal_picket():
+    # A horizontal (or inverted) picket carries no usable tilt information.
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.5), (0.65, 0.5)),), depth_cutoff=0.1)
+    assert _picket_direction_at_y(0.5, zone) is None
+
+
+def test_picket_direction_interpolates_piecewise_across_multiple_pickets():
+    # Two real pickets at different depths: |ratio| 0.28 at row 0.9969 (close),
+    # 0.20 at row 0.7392 (far) -- matches the real non-linear tilt measured
+    # 2026-09-05. A row exactly between them must interpolate BETWEEN these
+    # two samples, not toward some unrelated depth_cutoff/vanishing point.
+    zone = _calibrated_zone(
+        fence_pickets=(
+            ((0.3453, 0.5711), (0.4649, 0.9969)),
+            ((0.4102, 0.366), (0.4832, 0.7392)),
+        ),
+        depth_cutoff=0.05,
+    )
+    dx_near, _ = _picket_direction_at_y(0.9969, zone)
+    dx_far, _ = _picket_direction_at_y(0.7392, zone)
+    assert dx_near == pytest.approx(-0.2809, abs=1e-3)
+    assert dx_far == pytest.approx(-0.1956, abs=1e-3)
+    mid_y = (0.9969 + 0.7392) / 2
+    dx_mid, _ = _picket_direction_at_y(mid_y, zone)
+    # near is the MOST tilted (most negative); far is closest to upright (least negative).
+    assert dx_near < dx_mid < dx_far
+
+
+def test_picket_direction_clamps_beyond_farthest_of_several_pickets():
+    zone = _calibrated_zone(
+        fence_pickets=(
+            ((0.3453, 0.5711), (0.4649, 0.9969)),
+            ((0.4102, 0.366), (0.4832, 0.7392)),
+        ),
+        depth_cutoff=0.05,
+    )
+    dx_at_farthest, _ = _picket_direction_at_y(0.7392, zone)
+    dx_beyond, _ = _picket_direction_at_y(0.6, zone)
+    # Beyond the farthest real sample, tilt keeps tapering toward zero (from
+    # below, since dx_at_farthest is negative) rather than jumping straight there.
+    assert dx_at_farthest < dx_beyond <= 0.0
+
+
 def test_picket_direction_falls_back_to_full_tilt_on_degenerate_span():
     # depth_cutoff at/beyond the picket's own row leaves no room to
-    # interpolate -- return the raw (unmodified) direction rather than divide
-    # by a non-positive span.
-    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)), depth_cutoff=0.5)
-    assert _picket_direction_at_y(0.5, zone) == pytest.approx((-0.05, -0.1))
+    # interpolate -- clamp to the raw (unmodified) ratio at that row rather
+    # than divide by a non-positive span.
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.4), (0.65, 0.5)),), depth_cutoff=0.5)
+    assert _picket_direction_at_y(0.5, zone) == pytest.approx((-0.5, -1.0))
 
 
 # --------------------------------------------------------------------------
@@ -456,18 +499,18 @@ def test_fence_vanishing_point_none_without_both_lines():
 def test_picket_direction_prefers_vanishing_point_over_depth_cutoff():
     zone = CameraZone(
         fence=_CONVERGING_FENCE, fence_bottom=_CONVERGING_BOTTOM, outside="right",
-        depth_cutoff=0.05, ignore=(), fence_picket=((0.6, 0.6), (0.65, 0.7)),
+        depth_cutoff=0.05, ignore=(), fence_pickets=(((0.6, 0.6), (0.65, 0.7)),),
     )
     # Cap should be the vanishing point's y (-0.2), not depth_cutoff (0.05) --
     # at row 0.7 (the picket's own base row) tilt is still full strength.
     dx, dy = _picket_direction_at_y(0.7, zone)
-    assert dx == pytest.approx(-0.05)
+    assert dx == pytest.approx(-0.5, rel=1e-4)
 
 
 def test_picket_direction_falls_back_to_depth_cutoff_when_no_vanishing_point():
     # Parallel lines have no vanishing point -- must fall back to depth_cutoff,
     # matching the pre-vanishing-point behaviour exactly.
-    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)), depth_cutoff=0.1)
+    zone = _calibrated_zone(fence_pickets=(((0.6, 0.4), (0.65, 0.5)),), depth_cutoff=0.1)
     dx, dy = _picket_direction_at_y(0.1, zone)
     assert dx == pytest.approx(0.0)
 

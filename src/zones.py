@@ -185,7 +185,7 @@ MIN_FENCE_SEPARATION_PX = 4.0
 # corpus-wide check found per-camera medians up to 6.93m and a single-frame
 # outlier of 18.73m, all traced to low-px/m rows). PROVISIONAL: picked as a
 # conservative starting point, not fit to labelled data yet -- re-check once
-# a second camera's fence_picket gives real numbers to validate against.
+# a second camera's fence_pickets gives real numbers to validate against.
 MIN_PIXELS_PER_METRE = 15.0
 
 
@@ -294,38 +294,56 @@ def fence_vanishing_point(zone: CameraZone) -> Point | None:
 
 
 def _picket_direction_at_y(y: float, zone: CameraZone) -> Point | None:
-    """The picket's on-screen tilt direction, upright-corrected for depth.
+    """The picket tilt direction at row `y`, interpolated across every traced
+    picket plus a synthetic "fully upright" anchor at the far cap.
 
-    A real picket's apparent tilt is a near-camera perspective effect: poles
-    close to the camera lean the most, and lean progressively less the
-    farther away they are, converging to upright (vertical) at the edge of
-    where this camera's geometry is trusted at all. `fence_picket` is only
-    ever traced at ONE row (wherever the tilt was clearly visible to trace),
-    so its raw direction is only valid there -- using it unmodified at every
-    row overcorrects distant subjects. This linearly shrinks the horizontal
-    (tilt) component from full strength at the picket's own row down to zero
-    (purely vertical) at the fence's own perspective vanishing point (see
-    `fence_vanishing_point`) -- a geometrically principled cap derived from
-    what's actually visible on screen, falling back to `zone.depth_cutoff`
-    when no valid vanishing point exists (e.g. the two lines are parallel).
-    Rows nearer than the picket's own keep the full tilt; rows at or beyond
-    the cap are fully upright.
+    A real picket's apparent tilt is a near-camera perspective effect, but
+    NOT a linear one: measured 2026-09-05 across 3 real pickets on the same
+    camera, the tilt ratio (horizontal-to-vertical) dropped sharply near the
+    camera (0.28 -> 0.20) then nearly flattened out further away (0.20 ->
+    0.196) despite a similar row gap -- a single point + linear taper to a
+    cap gets this wrong in both directions. `zone.fence_pickets` is
+    deliberately plural: each traced picket contributes one (row, tilt
+    ratio) sample, piecewise-linearly interpolated between neighbours by
+    row; only beyond the nearest/farthest sample does this fall back to
+    clamping (nearest) or tapering linearly to zero at the far cap (see
+    `fence_vanishing_point`, falling back to `zone.depth_cutoff` when no
+    valid vanishing point exists). None if no picket is traced at all.
     """
-    if zone.fence_picket is None:
+    if not zone.fence_pickets:
         return None
-    top_point, base_point = zone.fence_picket
-    dx = top_point[0] - base_point[0]
-    dy = top_point[1] - base_point[1]
     cap_y = zone.depth_cutoff
     vanishing_point = fence_vanishing_point(zone)
-    if vanishing_point is not None and vanishing_point[1] < base_point[1]:
+    samples: list[tuple[float, float]] = []
+    for top_point, base_point in zone.fence_pickets:
+        dx = top_point[0] - base_point[0]
+        dy = top_point[1] - base_point[1]
+        if dy >= 0:
+            continue  # degenerate (horizontal or inverted) picket -- ignore
+        # Ratio for a direction of the form (ratio, -1.0): proportional to
+        # (dx, dy) only via a POSITIVE scalar (-1/dy, since dy < 0), which is
+        # what keeps the ray pointing up toward the top rail, not down.
+        samples.append((base_point[1], -dx / dy))
+    if not samples:
+        return None
+    samples.sort(key=lambda s: s[0])
+    nearest_row = samples[-1][0]
+    if vanishing_point is not None and vanishing_point[1] < nearest_row:
         cap_y = vanishing_point[1]
-    span = base_point[1] - cap_y
-    if span <= 1e-9:
-        return (dx, dy)
-    fraction = (y - cap_y) / span
-    fraction = max(0.0, min(1.0, fraction))
-    return (dx * fraction, dy)
+    if cap_y < samples[0][0]:
+        samples = [(cap_y, 0.0), *samples]
+    if y <= samples[0][0]:
+        ratio = samples[0][1]
+    elif y >= samples[-1][0]:
+        ratio = samples[-1][1]
+    else:
+        ratio = samples[0][1]
+        for (y0, r0), (y1, r1) in zip(samples, samples[1:], strict=False):
+            if y0 <= y <= y1:
+                fraction = (y - y0) / (y1 - y0)
+                ratio = r0 + fraction * (r1 - r0)
+                break
+    return (ratio, -1.0)
 
 
 def fence_separation_at_y(
@@ -333,7 +351,7 @@ def fence_separation_at_y(
 ) -> float | None:
     """Pixel separation between the top-rail and base fence lines at row `y`.
 
-    Prefers projecting along `zone.fence_picket`'s own on-screen angle (one
+    Prefers projecting along `zone.fence_pickets`' own on-screen angle (each
     hand-traced picket's top-to-base edge) when configured: pairing the two
     lines at the SAME row silently assumes a picket renders perfectly
     vertical in frame, which is false whenever the camera looks down the

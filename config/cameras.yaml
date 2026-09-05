@@ -180,6 +180,18 @@ cameras:
     # re-confirmed directly for this line, not re-derived.
     fence_bottom:
       [[0.5028, 0.0688], [0.4992, 0.3003], [0.4953, 0.5318], [0.4914, 0.7633], [0.4875, 0.9948]]
+    # 2026-09-05: fence_pickets -- 3 traces of the same real post (a green
+    # mesh panel edge, NOT the thin diagonal tensioning wire next to it) at
+    # decreasing distance from the camera, over data/history/cam06/8468.mp4
+    # (daylight; the original 8467.mp4 trace turned out to be an outlier
+    # angle/mistrace, see repo memory). Confirms tilt does NOT taper
+    # linearly with depth (measured ratio 0.28 -> 0.20 -> 0.196) -- used to
+    # angle-correct pixels-per-metre calibration; see
+    # src/zones.py::_picket_direction_at_y.
+    fence_pickets:
+      - [[0.3453, 0.5711], [0.4649, 0.9969]]
+      - [[0.3907, 0.4188], [0.4762, 0.8445]]
+      - [[0.4102, 0.366], [0.4832, 0.7392]]
   - id: cam07
     aliases: ["MOTIONVIEWER 7"]
     order: 8

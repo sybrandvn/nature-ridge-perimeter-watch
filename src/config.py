@@ -185,14 +185,19 @@ class CameraZone:
     # yet -- see docs/plan.md "Fence base line + metric features".
     fence_bottom: tuple[Point, ...] | None = None
     fence_height_m: float = 2.0
-    # A single picket's own edge (top point, base point), tracing its real
-    # on-screen tilt. The naive ruler pairs `fence`/`fence_bottom` at the SAME
-    # row, which silently assumes a picket renders perfectly vertical in
-    # frame -- false whenever the camera looks down at an angle. When set,
-    # `src.zones.fence_separation_at_y` projects along this picket's own
-    # angle instead of straight up, before falling back to the naive same-row
-    # method if no camera has one traced yet.
-    fence_picket: tuple[Point, Point] | None = None
+    # One or more traced pickets (each a top point, base point pair), tracing
+    # their real on-screen tilt at whatever depth each was still clearly
+    # visible. The naive ruler pairs `fence`/`fence_bottom` at the SAME row,
+    # which silently assumes a picket renders perfectly vertical in frame --
+    # false whenever the camera looks down at an angle. When set,
+    # `src.zones.fence_separation_at_y` projects along the picket angle
+    # interpolated for that row instead of straight up, before falling back
+    # to the naive same-row method if no camera has any traced yet.
+    # Deliberately plural: measured 2026-09-05 that tilt does NOT taper
+    # linearly with depth (drops sharply near the camera, flattens out
+    # further away) -- a single point + linear taper gets this wrong in both
+    # directions, so multiple real samples are interpolated between instead.
+    fence_pickets: tuple[tuple[Point, Point], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -329,7 +334,7 @@ _ZONE_FIELDS = (
     "ignore",
     "fence_bottom",
     "fence_height_m",
-    "fence_picket",
+    "fence_pickets",
 )
 
 
@@ -433,13 +438,17 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
     if fence_height_m <= 0.0:
         raise ConfigError(f"cameras.yaml: {camera_id!r} fence_height_m must be > 0")
 
-    raw_fence_picket = entry.get("fence_picket")
-    fence_picket: tuple[Point, Point] | None = None
-    if raw_fence_picket is not None:
-        if not isinstance(raw_fence_picket, list) or len(raw_fence_picket) != 2:
-            raise ConfigError(f"cameras.yaml: {camera_id!r} fence_picket needs exactly 2 points")
-        top_pt, base_pt = (_parse_point(camera_id, "fence_picket", p) for p in raw_fence_picket)
-        fence_picket = (top_pt, base_pt)
+    raw_fence_pickets = entry.get("fence_pickets") or []
+    if not isinstance(raw_fence_pickets, list):
+        raise ConfigError(f"cameras.yaml: {camera_id!r} fence_pickets must be a list")
+    fence_pickets: list[tuple[Point, Point]] = []
+    for picket in raw_fence_pickets:
+        if not isinstance(picket, list) or len(picket) != 2:
+            raise ConfigError(
+                f"cameras.yaml: {camera_id!r} each fence_pickets entry needs exactly 2 points"
+            )
+        top_pt, base_pt = (_parse_point(camera_id, "fence_pickets", p) for p in picket)
+        fence_pickets.append((top_pt, base_pt))
 
     return CameraZone(
         fence=fence,
@@ -448,7 +457,7 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
         ignore=ignore,
         fence_bottom=fence_bottom,
         fence_height_m=fence_height_m,
-        fence_picket=fence_picket,
+        fence_pickets=tuple(fence_pickets),
     )
 
 

@@ -75,21 +75,17 @@ cameras:
         fence_bottom:
           [[0.5038, 0.1927], [0.4892, 0.3935], [0.4748, 0.5943], [0.4601, 0.7951], [0.4456, 0.9958]]
       - effective_from: "2026-08-05T17:22:15Z"
-        fence: [[0.4365, 0.1052], [0.1135, 0.999]]
+        # 2026-09-05: RE-TRACED -- the old line here was only 2 points (every
+        # other camera's top line has >=3) and clearly imprecise. Confirmed
+        # no SECOND remount within this era first (message_id 21989, 2026-08-05
+        # right after the remount, vs 22635, 2026-08-26 -- framing is
+        # pixel-for-pixel identical). Retraced by the user over the same
+        # data/history/cam01a/22635.mp4. `outside: right` re-confirmed.
+        fence: [[0.4013, 0.174], [0.3309, 0.3797], [0.2597, 0.5854], [0.1887, 0.7911], [0.118, 0.9969]]
         outside: right
         depth_cutoff: 0.05
-        # 2026-09-05: user flagged this line as WRONG (only 2 points -- no
-        # other camera's top line has fewer than 3). fence_bottom below is
-        # confirmed correct. Checked for a SECOND remount within this era by
-        # comparing message_id 21989 (2026-08-05, right after the remount)
-        # against 22635 (2026-08-26) -- framing is pixel-for-pixel identical,
-        # so there's no further move; this line is just an imprecise original
-        # trace. NOT YET RE-TRACED -- data/reports/fence_trace_2026-09-05/
-        # cam01a_new_era_top_retrace.png is a clean frame for it.
         # 2026-09-05: fence_bottom, traced by the user over
-        # data/history/cam01a/22635.mp4 -- user flagged the TOP line above as
-        # now wrong (the base trace is correct); not yet re-traced, see
-        # docs/handoff.md/session notes before trusting the top line here.
+        # data/history/cam01a/22635.mp4.
         fence_bottom:
           [[0.4233, 0.1042], [0.4167, 0.3268], [0.4102, 0.5495], [0.4037, 0.7721], [0.3972, 0.9948]]
   # Confirmed by the user 2026-08-28: faces the OPPOSITE way to most perimeter
@@ -229,20 +225,12 @@ cameras:
   - id: cam09
     aliases: ["MOTIONVIEWER 9"]
     order: 10
-    # Drawn from data/history/cam09/11680.mp4, a fresh daylight clip fetched
-    # because the original triggers were all at local dusk. Real wire-mesh
-    # fence overgrown with vine (both present, not either/or). Open ground
-    # to the left, first point to last.
-    # 2026-09-05: user flagged this line as WRONG when checked against
-    # data/history/cam09/3501.mp4 (the new fence_bottom's own source clip) --
-    # confirmed by rendering both: this line tracks the VINE STEM, not the
-    # wire mesh underneath it. Checked framing across the full clip history
-    # (3501 2023-11-25, 10979 2025-01-12, both show the mesh clearly at the
-    # same position) -- no evidence of a remount, 11680 (2025-02-04) just
-    # happened to catch unusually heavy vine growth obscuring the mesh that
-    # clip. NOT YET RE-TRACED -- data/reports/fence_trace_2026-09-05/
-    # cam09_3501_top_retrace.png is a clean frame for it.
-    fence: [[0.4451, 0.0417], [0.3843, 0.2802], [0.3225, 0.5188], [0.2605, 0.7573], [0.1997, 0.9958]]
+    # 2026-09-05: RE-TRACED -- the original line (drawn from
+    # data/history/cam09/11680.mp4, a heavily vine-overgrown frame) tracked
+    # the vine stem, not the wire mesh underneath it. Retraced by the user
+    # over data/history/cam09/3501.mp4 (2023-11-25, same clip fence_bottom
+    # below came from). `outside: right` re-confirmed via side_name.
+    fence: [[0.4948, 0.2198], [0.4262, 0.4133], [0.3566, 0.6068], [0.2871, 0.8003], [0.2186, 0.9938]]
     outside: right
     depth_cutoff: 0.05
     # 2026-09-05: fence_bottom, traced by the user over data/history/cam09/3501.mp4.
@@ -346,6 +334,13 @@ cameras:
     fence: [[0.3616, 0.0], [0.4024, 0.2497], [0.4437, 0.4995], [0.485, 0.7492], [0.5257, 0.999]]
     outside: left
     depth_cutoff: 0.05
+    # 2026-09-05: fence_bottom, traced by the user over data/history/cam15/18162.mp4.
+    # Runs close to parallel with the top rail, offset by ~0.1 in x -- consistent
+    # with this camera's close, near-top-down mount on the fence post itself
+    # (also a documented wind/storm camera -- cam15/18948-18949). `outside: left`
+    # re-confirmed via side_name against the same reference points as the top line.
+    fence_bottom:
+      [[0.2593, 0.0], [0.3077, 0.2492], [0.3564, 0.4984], [0.4051, 0.7477], [0.4534, 0.9969]]
   # Confirmed by the user 2026-08-28: reversed, same as cam01b -- open ground
   # in frame is the interior side, not exterior. Usually illuminated at night
   # by a yard spotlight, same as cam01b.

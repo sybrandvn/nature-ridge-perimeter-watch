@@ -73,6 +73,7 @@ from src.features import (  # noqa: E402
     is_daylight,
     is_twilight,
 )
+from src.ground_calibration import GroundCalibration, calibrate  # noqa: E402
 from src.reference_bg import (  # noqa: E402
     era_of,
     load_manifest,
@@ -103,6 +104,12 @@ COLOR_BLOB = (200, 200, 0)
 COLOR_DISCARDED = (90, 90, 90)
 COLOR_FENCE = (0, 255, 255)
 COLOR_FENCE_BOTTOM = (0, 140, 255)
+COLOR_METRIC = (0, 255, 0)
+
+# Ground-distance marks drawn along the fence base line when a camera opts in
+# to metric calibration. Anything past the camera's own max_range_m is simply
+# not drawn, so the ruler shows exactly how far the camera can actually measure.
+METRIC_RULER_TICKS_M = (2, 5, 10, 15, 20, 25, 30, 40, 50)
 COLOR_OUTSIDE = (0, 0, 255)
 COLOR_INSIDE = (0, 255, 0)
 COLOR_IGNORE = (110, 110, 110)
@@ -153,7 +160,46 @@ def _draw_dashed_rect(
             cv2.line(img, (px0, py0), (px1, py1), color, thickness)
 
 
-def _zone_layers(width: int, height: int, zone: CameraZone) -> tuple[np.ndarray, np.ndarray]:
+def _draw_metric_ruler(
+    ink: np.ndarray, calib: GroundCalibration | None, scale: int
+) -> None:
+    """Mark real ground distances along the fence base line.
+
+    Each tick also gets the fence's own height drawn at that range, following
+    the true vertical direction, which makes the perspective foreshortening
+    visible: if a tick's fence bar looks wrong next to the real fence in the
+    footage, the calibration is wrong.
+    """
+    if calib is None:
+        return
+    for metres in METRIC_RULER_TICKS_M:
+        row = calib.row_at_distance(float(metres))
+        if row is None:
+            continue
+        base = calib.base_point_at_row(row)
+        if base is None:
+            continue
+        base_px = (int(round(base[0] * scale)), int(round(base[1] * scale)))
+        top = calib.fence_top_above(base)
+        if top is not None:
+            cv2.line(
+                ink,
+                base_px,
+                (int(round(top[0] * scale)), int(round(top[1] * scale))),
+                COLOR_METRIC,
+                1,
+            )
+        cv2.circle(ink, base_px, 3, COLOR_METRIC, -1)
+        _text(ink, f"{metres}m", (base_px[0] + 6, base_px[1] + 4), color=COLOR_METRIC, scale=0.35)
+
+
+def _zone_layers(
+    width: int,
+    height: int,
+    zone: CameraZone,
+    calib: GroundCalibration | None = None,
+    scale: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
     """Static zone artwork as (tint, ink) layers, built once per clip.
 
     `tint` is blended in flat; `ink` is copied where non-black, so the fence
@@ -196,6 +242,8 @@ def _zone_layers(width: int, height: int, zone: CameraZone) -> tuple[np.ndarray,
                 cv2.line(ink, a, b, COLOR_FENCE_BOTTOM, 2)
             for p in bottom_px:
                 cv2.circle(ink, p, 3, COLOR_FENCE_BOTTOM, -1)
+
+        _draw_metric_ruler(ink, calib, scale)
 
         (ax, ay), (bx, by) = classification_fence[0], classification_fence[-1]
         dx, dy = bx - ax, by - ay
@@ -460,6 +508,8 @@ def render_clip(
 
     source_fps = cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS) or 10.0
     width, height = detection.frame_width * scale, detection.frame_height * scale
+    # None unless this camera opted in via `metric_calibration` in cameras.yaml.
+    calib = calibrate(zone, detection.frame_width, detection.frame_height)
     hud_height = 165
     overrides = [
         f"{name}={value}"
@@ -472,7 +522,7 @@ def render_clip(
         )
         if value != DEFAULTS[name]
     ]
-    tint, ink = _zone_layers(width, height, zone)
+    tint, ink = _zone_layers(width, height, zone, calib, scale)
     # Sun-time is an independent check on the colour statistic: a dawn clip can sit
     # under the colour gate and still be broad daylight (cam03 at 05:55 in November).
     # Dusk/dawn TWILIGHT (still not full daylight by the sun-time table, but not deep
@@ -595,6 +645,8 @@ def render_clip(
             blob_width_px = 0.0
             light_overlap: float | None = None
             estimated_height: float | None = None
+            metric_distance: float | None = None
+            metric_height: float | None = None
             if detected.largest is not None and detected.centroid is not None:
                 scaled = (detected.largest * scale).astype(np.int32)
                 history.append(
@@ -653,6 +705,22 @@ def render_clip(
                     color=box_color,
                     scale=0.4,
                 )
+                if calib is not None:
+                    # Feet row, not the centroid: the ground plane is what
+                    # carries the scale, so the box's base is the only part of
+                    # it whose depth is actually known.
+                    base_px = (raw_box[0] + raw_box[2] / 2.0, float(raw_box[1] + raw_box[3]))
+                    metric_distance = calib.distance_m(base_px)
+                    metric_height = calib.height_m(base_px, float(raw_box[1]))
+                    if metric_distance is not None:
+                        _text(
+                            canvas,
+                            f"{metric_distance:.1f}m away"
+                            + (f", {metric_height:.2f}m tall" if metric_height else ""),
+                            (x, y + h + 24),
+                            color=COLOR_METRIC,
+                            scale=0.4,
+                        )
                 blob_width_px = float(cv2.boundingRect(detected.largest)[2])
                 if prev_centroid is not None and blob_width_px > 0:
                     step = np.hypot(
@@ -722,6 +790,23 @@ def render_clip(
                 (
                     "estimated height (fence ruler)",
                     f"{estimated_height:.2f}m" if estimated_height is not None else "uncalibrated",
+                ),
+                (
+                    "ground plane (distance / height)",
+                    (
+                        "camera not opted in"
+                        if calib is None
+                        else (
+                            f"{metric_distance:.1f}m"
+                            + (
+                                f" / {metric_height:.2f}m"
+                                if metric_height is not None
+                                else " / height n/a"
+                            )
+                            if metric_distance is not None
+                            else f"out of range (max {calib.max_range_m:.0f}m)"
+                        )
+                    ),
                 ),
                 (
                     "instant speed (body/frame)",

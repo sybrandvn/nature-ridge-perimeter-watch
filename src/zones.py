@@ -261,6 +261,38 @@ def is_grounded_at_fence(y: float, zone: CameraZone) -> bool:
     return min(ys) <= y <= max(ys)
 
 
+def _topmost_segment(polyline: Sequence[Point]) -> tuple[Point, Point]:
+    """The segment reaching furthest toward the top of frame (smallest y),
+    regardless of which end of the polyline it's stored at -- some cameras'
+    points run top-to-bottom, others (e.g. cam08) bottom-to-top."""
+    return min(
+        zip(polyline, polyline[1:], strict=False),
+        key=lambda seg: min(seg[0][1], seg[1][1]),
+    )
+
+
+def fence_vanishing_point(zone: CameraZone) -> Point | None:
+    """Where the top-rail and base fence lines converge if extended.
+
+    Real parallel fence lines (top rail, ground line) recede to a single
+    perspective vanishing point -- a natural, camera-specific "this is as far
+    as the fence usefully recedes" row, used to cap picket-tilt correction
+    instead of an unrelated `depth_cutoff`. Extrapolates each line's own
+    topmost traced segment (see `_topmost_segment`); returns None if either
+    line is missing, has fewer than 2 points, or the two are parallel.
+    """
+    if (
+        zone.fence is None
+        or zone.fence_bottom is None
+        or len(zone.fence) < 2
+        or len(zone.fence_bottom) < 2
+    ):
+        return None
+    seg_a = _topmost_segment(zone.fence)
+    seg_b = _topmost_segment(zone.fence_bottom)
+    return _line_intersection(seg_a[0], seg_a[1], seg_b[0], seg_b[1])
+
+
 def _picket_direction_at_y(y: float, zone: CameraZone) -> Point | None:
     """The picket's on-screen tilt direction, upright-corrected for depth.
 
@@ -272,20 +304,26 @@ def _picket_direction_at_y(y: float, zone: CameraZone) -> Point | None:
     so its raw direction is only valid there -- using it unmodified at every
     row overcorrects distant subjects. This linearly shrinks the horizontal
     (tilt) component from full strength at the picket's own row down to zero
-    (purely vertical) at `zone.depth_cutoff` -- the existing "this camera's
-    geometry stops being trustworthy here" row, reused rather than inventing
-    a second cutoff. Rows nearer than the picket's own keep the full tilt;
-    rows at or beyond depth_cutoff are fully upright.
+    (purely vertical) at the fence's own perspective vanishing point (see
+    `fence_vanishing_point`) -- a geometrically principled cap derived from
+    what's actually visible on screen, falling back to `zone.depth_cutoff`
+    when no valid vanishing point exists (e.g. the two lines are parallel).
+    Rows nearer than the picket's own keep the full tilt; rows at or beyond
+    the cap are fully upright.
     """
     if zone.fence_picket is None:
         return None
     top_point, base_point = zone.fence_picket
     dx = top_point[0] - base_point[0]
     dy = top_point[1] - base_point[1]
-    span = base_point[1] - zone.depth_cutoff
+    cap_y = zone.depth_cutoff
+    vanishing_point = fence_vanishing_point(zone)
+    if vanishing_point is not None and vanishing_point[1] < base_point[1]:
+        cap_y = vanishing_point[1]
+    span = base_point[1] - cap_y
     if span <= 1e-9:
         return (dx, dy)
-    fraction = (y - zone.depth_cutoff) / span
+    fraction = (y - cap_y) / span
     fraction = max(0.0, min(1.0, fraction))
     return (dx * fraction, dy)
 

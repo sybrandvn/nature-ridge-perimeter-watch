@@ -10,6 +10,7 @@ from src.zones import (
     estimated_speed_mps,
     estimated_width_m,
     fence_separation_at_y,
+    fence_vanishing_point,
     in_fence_band,
     in_ignore_region,
     is_beyond_depth_cutoff,
@@ -418,6 +419,57 @@ def test_picket_direction_falls_back_to_full_tilt_on_degenerate_span():
     # by a non-positive span.
     zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)), depth_cutoff=0.5)
     assert _picket_direction_at_y(0.5, zone) == pytest.approx((-0.05, -0.1))
+
+
+# --------------------------------------------------------------------------
+# fence_vanishing_point: where the top-rail and base lines converge if
+# extended -- a geometrically-derived cap, preferred over depth_cutoff.
+# --------------------------------------------------------------------------
+
+# fence and fence_bottom converge (extrapolated) at (0.5667, -0.2) -- above
+# the frame, but still a well-defined intersection of the two lines.
+_CONVERGING_FENCE = ((0.5, 0.2), (0.4, 0.8))
+_CONVERGING_BOTTOM = ((0.6, 0.2), (0.65, 0.8))
+
+
+def test_fence_vanishing_point_computes_convergence():
+    zone = CameraZone(
+        fence=_CONVERGING_FENCE, fence_bottom=_CONVERGING_BOTTOM, outside="right",
+        depth_cutoff=0.0, ignore=(),
+    )
+    point = fence_vanishing_point(zone)
+    assert point[0] == pytest.approx(0.5667, abs=1e-3)
+    assert point[1] == pytest.approx(-0.2, abs=1e-3)
+
+
+def test_fence_vanishing_point_none_when_parallel():
+    zone = _calibrated_zone()  # fence and fence_bottom are both vertical
+    assert fence_vanishing_point(zone) is None
+
+
+def test_fence_vanishing_point_none_without_both_lines():
+    zone = CameraZone(fence=None, fence_bottom=_CONVERGING_BOTTOM, outside="right",
+                       depth_cutoff=0.0, ignore=())
+    assert fence_vanishing_point(zone) is None
+
+
+def test_picket_direction_prefers_vanishing_point_over_depth_cutoff():
+    zone = CameraZone(
+        fence=_CONVERGING_FENCE, fence_bottom=_CONVERGING_BOTTOM, outside="right",
+        depth_cutoff=0.05, ignore=(), fence_picket=((0.6, 0.6), (0.65, 0.7)),
+    )
+    # Cap should be the vanishing point's y (-0.2), not depth_cutoff (0.05) --
+    # at row 0.7 (the picket's own base row) tilt is still full strength.
+    dx, dy = _picket_direction_at_y(0.7, zone)
+    assert dx == pytest.approx(-0.05)
+
+
+def test_picket_direction_falls_back_to_depth_cutoff_when_no_vanishing_point():
+    # Parallel lines have no vanishing point -- must fall back to depth_cutoff,
+    # matching the pre-vanishing-point behaviour exactly.
+    zone = _calibrated_zone(fence_picket=((0.6, 0.4), (0.65, 0.5)), depth_cutoff=0.1)
+    dx, dy = _picket_direction_at_y(0.1, zone)
+    assert dx == pytest.approx(0.0)
 
 
 # --------------------------------------------------------------------------

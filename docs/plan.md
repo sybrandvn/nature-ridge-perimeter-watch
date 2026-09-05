@@ -456,6 +456,16 @@ access before the bot ships.
     geometry (staying inside, never crossing) are the two existing ingredients closest to a
     `resident_candidate` rule — not yet assembled into one, and `resident` currently has NO rule
     of its own in `scripts.backtest.classify` at all (falls through to `unclassified`).
+  - **Daytime de-escalation for a known-benign-but-unidentified person (2026-09-05, user).**
+    cam14/3495 is a neighbour's worker: not a resident (not identified/authorized on this
+    property), not a guard, borderline "almost an intruder" by appearance alone, but genuinely
+    not a threat. User's framing: it's fine for the system to still flag this kind of daytime
+    sighting, but the alert priority should be de-escalated rather than treated as a full
+    incident-level alert, specifically because it's daytime (`is_daylight`/`is_twilight` already
+    exist as the signal to key this on). No `VALID_LABELS` class fits a known-benign
+    non-resident visitor today — labelled `unknown` with a note rather than forcing it into
+    `resident`/`incident`. Not designed or implemented; needs an actual alert-priority/escalation
+    concept (Phase 4 territory) before this can be more than a note.
 
 
 

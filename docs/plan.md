@@ -436,18 +436,27 @@ access before the bot ships.
       ("uncalibrated") instead of a wrong number -- not attempted, needs its own
       threshold-on-labelled-data pass. The inside/outside classification improvement from
       `fence_bottom` itself is unaffected by this finding -- only the metric-scale features are.
-    - **`fence_picket` angle-correction shipped 2026-09-05 (user insight).** A second likely
+    - **`fence_pickets` angle-correction shipped 2026-09-05 (user insight).** A second likely
       contributor to the phase-5 blowup, distinct from the far-field-noise root cause above:
       pairing `fence`/`fence_bottom` at the SAME image row (as `fence_separation_at_y` always
       did) silently assumes a picket renders perfectly vertical in frame -- false whenever the
-      camera looks down the fence at an angle. New `CameraZone.fence_picket` (one hand-traced
-      picket's top point + base point) lets `fence_separation_at_y` project along that picket's
-      real on-screen direction to find where it actually crosses the top rail, instead of
-      assuming the crossing is directly above. Falls back to the old same-row method when no
-      picket is traced -- every camera is byte-identical until one is added. **Not yet validated
-      against real data** -- no camera has a `fence_picket` traced yet; the next step is tracing
-      one on cam06 (the only camera with a full phase-5 baseline to compare against) and
-      re-running the height-clustering check to see whether it actually tightens the result.
+      camera looks down the fence at an angle. New `CameraZone.fence_pickets` (plural -- see
+      below) lets `fence_separation_at_y` project along the interpolated picket direction to
+      find where it actually crosses the top rail, instead of assuming the crossing is directly
+      above. Falls back to the old same-row method when no picket is traced -- every camera is
+      byte-identical until one is added. The upright-taper cap prefers `fence_vanishing_point()`
+      (where `fence`/`fence_bottom` actually converge if extended) over `depth_cutoff` when a
+      valid convergence exists.
+    - **cam06 validated with 3 real pickets, and the model upgraded as a result (2026-09-05).**
+      Traced 3 pickets at different depths on the same camera (over
+      `data/history/cam06/8468.mp4`, replacing an earlier mistrace on a bad/outlier clip,
+      8467.mp4). Measured tilt ratio: 0.28 (closest) -> 0.20 -> 0.196 (farthest) -- **does NOT
+      taper linearly with depth** (drops sharply near the camera, nearly flattens further out).
+      `CameraZone.fence_picket` (singular) was therefore generalised to `fence_pickets` (plural):
+      each traced picket contributes one (row, tilt ratio) sample, piecewise-linearly
+      interpolated between neighbours, only falling back to clamping/linear-taper-to-cap beyond
+      the nearest/farthest real sample. Not yet re-run against the phase-5 height-clustering
+      check with this corrected model -- next step if this is picked up again.
 - **Flashlight-vs-subject side divergence as a guard-specific signal (2026-09-04, user + this
   session's re-derivation)**: the user's insight — "guards are on the inside, they can cross the
   line since they are visible through the fence if they walk close, they shine their flashlight

@@ -253,6 +253,35 @@ def is_grounded_at_fence(y: float, zone: CameraZone) -> bool:
     return min(ys) <= y <= max(ys)
 
 
+def _picket_direction_at_y(y: float, zone: CameraZone) -> Point | None:
+    """The picket's on-screen tilt direction, upright-corrected for depth.
+
+    A real picket's apparent tilt is a near-camera perspective effect: poles
+    close to the camera lean the most, and lean progressively less the
+    farther away they are, converging to upright (vertical) at the edge of
+    where this camera's geometry is trusted at all. `fence_picket` is only
+    ever traced at ONE row (wherever the tilt was clearly visible to trace),
+    so its raw direction is only valid there -- using it unmodified at every
+    row overcorrects distant subjects. This linearly shrinks the horizontal
+    (tilt) component from full strength at the picket's own row down to zero
+    (purely vertical) at `zone.depth_cutoff` -- the existing "this camera's
+    geometry stops being trustworthy here" row, reused rather than inventing
+    a second cutoff. Rows nearer than the picket's own keep the full tilt;
+    rows at or beyond depth_cutoff are fully upright.
+    """
+    if zone.fence_picket is None:
+        return None
+    top_point, base_point = zone.fence_picket
+    dx = top_point[0] - base_point[0]
+    dy = top_point[1] - base_point[1]
+    span = base_point[1] - zone.depth_cutoff
+    if span <= 1e-9:
+        return (dx, dy)
+    fraction = (y - zone.depth_cutoff) / span
+    fraction = max(0.0, min(1.0, fraction))
+    return (dx * fraction, dy)
+
+
 def fence_separation_at_y(
     y: float, zone: CameraZone, frame_width: int, frame_height: int
 ) -> float | None:
@@ -264,9 +293,11 @@ def fence_separation_at_y(
     vertical in frame, which is false whenever the camera looks down the
     fence at an angle -- confirmed to matter in practice (2026-09-05: a
     corpus-wide height-calibration check clustered correctly only on cam06,
-    whose base line happens to be near-vertical already). Falls back to the
-    naive same-row method when no picket is traced yet, or the picket's
-    projection never crosses the top rail.
+    whose base line happens to be near-vertical already). The picket's tilt
+    is itself depth-adjusted (see `_picket_direction_at_y`) rather than
+    applied uniformly at every row. Falls back to the naive same-row method
+    when no picket is traced yet, or the picket's projection never crosses
+    the top rail.
 
     None when the camera has no `fence_bottom` traced yet, `y` falls outside
     the base line's own range (see `is_grounded_at_fence`), or the separation
@@ -277,9 +308,8 @@ def fence_separation_at_y(
     if not is_grounded_at_fence(y, zone):
         return None
     origin = (_fence_x_at_y(y, zone.fence_bottom), y)
-    if zone.fence_picket is not None:
-        top_point, base_point = zone.fence_picket
-        direction = (top_point[0] - base_point[0], top_point[1] - base_point[1])
+    direction = _picket_direction_at_y(y, zone)
+    if direction is not None:
         crossing = _project_along_picket(origin, direction, zone.fence)
         if crossing is not None:
             dx_px = (crossing[0] - origin[0]) * frame_width

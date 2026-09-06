@@ -279,6 +279,33 @@ def test_absurdly_tall_subjects_are_refused():
     assert cal.height_m(base, tall[1]) is None
 
 
+def test_enforce_limits_false_returns_raw_implausible_height():
+    """For measuring HOW implausible a reading is (a physics-gate feature),
+    not for reporting a number anyone should trust -- see
+    scripts.spike._metric_plausibility_features."""
+    cam = _SyntheticCamera()
+    cal = calibrate(_synthetic_zone(cam), WIDTH, HEIGHT)
+    base = cam.project((0.0, 12.0, 0.0))
+    true_h = MAX_SUBJECT_HEIGHT_M + 1.5
+    tall = cam.project((0.0, 12.0, true_h))
+    assert cal.height_m(base, tall[1], enforce_limits=False) == pytest.approx(true_h, rel=1e-5)
+
+
+def test_enforce_limits_false_still_refuses_off_plane():
+    cal = calibrate(_synthetic_zone(), WIDTH, HEIGHT)
+    above = cal.horizon_vp[1] - 5.0
+    assert cal.height_m((WIDTH / 2, above), above - 10.0, enforce_limits=False) is None
+
+
+def test_enforce_limits_false_ignores_max_range():
+    cam = _SyntheticCamera()
+    cal = calibrate(_synthetic_zone(cam, metric_max_range_m=5.0), WIDTH, HEIGHT)
+    base = cam.project((0.0, 20.0, 0.0))  # beyond the 5m cap
+    top = cam.project((0.0, 20.0, 1.8))
+    assert cal.height_m(base, top[1]) is None  # capped by max_range with limits on
+    assert cal.height_m(base, top[1], enforce_limits=False) == pytest.approx(1.8, rel=1e-5)
+
+
 def test_row_at_distance_round_trips():
     cal = calibrate(_synthetic_zone(), WIDTH, HEIGHT)
     for target in (5.0, 12.0, 25.0):

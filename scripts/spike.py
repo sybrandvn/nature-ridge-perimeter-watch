@@ -71,6 +71,7 @@ from src.features import (  # noqa: E402
     solidity,
     time_of_day,
 )
+from src.ground_calibration import MAX_SUBJECT_HEIGHT_M, calibrate  # noqa: E402
 from src.zones import (  # noqa: E402
     median_fence_distance,
     outside_pixel_fraction,
@@ -108,6 +109,9 @@ FEATURE_COLUMNS = (
     "recovered_fraction",
     "scenery_motion_fraction",
     "has_reference_background",
+    "implausible_height_fraction",
+    "off_plane_fraction",
+    "uncalibrated",
 )
 
 
@@ -1368,6 +1372,59 @@ def detect_clip(
     )
 
 
+def _metric_plausibility_features(
+    considered: list[FrameDetection], zone: CameraZone, frame_width: int, frame_height: int
+) -> dict[str, float]:
+    """How often this clip's tracked blob implies an impossible real-world
+    height, or sits somewhere the ground-plane model says isn't the ground at
+    all (see `src.ground_calibration`) -- a physics gate meant to catch
+    flare/rain/branch artifacts before they reach the shape-based rules, not a
+    trustworthy height measurement (compare `estimated_height_m`, which is
+    the older per-row-ruler estimate, still reported separately).
+
+    Only meaningful when this camera has opted in to metric calibration
+    (`zone.metric_calibration`); `uncalibrated=1.0` otherwise, and the other
+    two are 0.0 rather than misleadingly "clean".
+
+    Genuine bg-diff hits only (excludes recovered/reverse-filled frames),
+    matching every other per-frame feature in this module -- a hallucinated
+    continuation box says nothing about the real subject's shape.
+    """
+    cal = calibrate(zone, frame_width, frame_height)
+    if cal is None:
+        return {
+            "implausible_height_fraction": 0.0,
+            "off_plane_fraction": 0.0,
+            "uncalibrated": 1.0,
+        }
+    genuine = 0
+    implausible = 0
+    off_plane = 0
+    for detected in considered:
+        if detected.largest is None or detected.recovered or detected.filled_by_reverse:
+            continue
+        genuine += 1
+        x, y, w, h = cv2.boundingRect(detected.largest)
+        base = (x + w / 2.0, float(y + h))
+        if cal.ground_point(base) is None:
+            off_plane += 1
+            continue
+        height = cal.height_m(base, float(y), enforce_limits=False)
+        if height is None or height > MAX_SUBJECT_HEIGHT_M:
+            implausible += 1
+    if genuine == 0:
+        return {
+            "implausible_height_fraction": 0.0,
+            "off_plane_fraction": 0.0,
+            "uncalibrated": 0.0,
+        }
+    return {
+        "implausible_height_fraction": implausible / genuine,
+        "off_plane_fraction": off_plane / genuine,
+        "uncalibrated": 0.0,
+    }
+
+
 def extract_clip_features(
     video_path: str,
     zone: CameraZone,
@@ -1571,6 +1628,7 @@ def extract_clip_features(
         ),
         "scenery_motion_fraction": detection.scenery_motion_fraction,
         "has_reference_background": float(detection.has_reference_background),
+        **_metric_plausibility_features(considered, zone, frame_width, frame_height),
     }
 
 

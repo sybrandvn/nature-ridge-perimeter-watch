@@ -1116,9 +1116,25 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
         "path_length",
         "jitter",
         "persistence",
+        "implausible_height_fraction",
+        "off_plane_fraction",
+        "uncalibrated",
     ):
         assert key in result
     assert result["persistence"] > 0
+
+
+def test_extract_clip_features_uncalibrated_when_zone_has_no_pickets(monkeypatch, tmp_path):
+    # _ZONE has no fence_bottom/fence_pickets/metric_calibration -- the physics
+    # gate must report "uncalibrated" rather than a misleadingly clean 0.0.
+    frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result["uncalibrated"] == 1.0
+    assert result["implausible_height_fraction"] == 0.0
+    assert result["off_plane_fraction"] == 0.0
 
 
 def test_extract_clip_features_ignores_ir_warmup_brightness_swing(monkeypatch, tmp_path):

@@ -148,17 +148,26 @@ class GroundCalibration:
             return None
         return distance
 
-    def height_m(self, base_px, top_row: float) -> float | None:
+    def height_m(
+        self, base_px, top_row: float, *, enforce_limits: bool = True
+    ) -> float | None:
         """Real height of something standing at `base_px` whose top edge is at
         image row `top_row`.
 
         Assumes the subject stands on the ground plane; a bird on the fence or
         a light on a pole will read as a tall subject standing further away.
+
+        `enforce_limits=False` skips the `MAX_SUBJECT_HEIGHT_M` clamp and the
+        `max_range_m` cap, returning the raw geometric answer instead of None
+        -- for measuring HOW implausible a reading is (e.g. an
+        `implausible_height_fraction` feature), not for reporting a number
+        anyone should trust. Still None if the point is off the ground plane
+        entirely or the solution is geometrically invalid (behind the camera).
         """
         ground = self.ground_point(base_px)
         if ground is None:
             return None
-        if self.distance_m(base_px) is None:
+        if enforce_limits and self.distance_m(base_px) is None:
             return None
         # The subject's top lies on the image line from its base toward the
         # vertical vanishing point, at the box's top row.
@@ -173,7 +182,9 @@ class GroundCalibration:
             np.column_stack([ray_top, -self._up]), ground, rcond=None
         )
         along_ray, height = float(solution[0]), float(solution[1])
-        if along_ray <= 0 or not 0.0 < height <= MAX_SUBJECT_HEIGHT_M:
+        if along_ray <= 0 or height <= 0:
+            return None
+        if enforce_limits and height > MAX_SUBJECT_HEIGHT_M:
             return None
         return height
 

@@ -47,6 +47,35 @@ def test_classify_guard_wins_over_environment_blob_count():
     assert backtest.classify(features) == "guard_candidate"
 
 
+def test_classify_environment_candidate_on_implausible_height():
+    features = _features(uncalibrated=0.0, implausible_height_fraction=0.6)
+    assert backtest.classify(features) == "environment_candidate"
+
+
+def test_classify_implausible_height_does_not_gate_at_or_below_threshold():
+    features = _features(uncalibrated=0.0, implausible_height_fraction=0.5)
+    assert backtest.classify(features) != "environment_candidate"
+
+
+def test_classify_implausible_height_ignored_when_uncalibrated():
+    # cam01b/cam15/cam16 have no usable picket trace -- must fall through to
+    # the pixel-space rules exactly as before, never silently suppress.
+    features = _features(uncalibrated=1.0, implausible_height_fraction=1.0)
+    assert backtest.classify(features) != "environment_candidate"
+
+
+def test_classify_implausible_height_ignored_when_key_absent():
+    # Callers that never ran the metric gate (feature dict predates it) must
+    # behave exactly as before -- missing key is not the same as 0.0.
+    features = _features()
+    assert backtest.classify(features) == "unclassified"
+
+
+def test_classify_guard_wins_over_implausible_height():
+    features = _features(uncalibrated=0.0, implausible_height_fraction=1.0, green_light_ratio=0.2)
+    assert backtest.classify(features) == "guard_candidate"
+
+
 def test_classify_environment_wins_over_animal_incident_shape():
     # high blob_count AND a fence-crossing geometry read -- environment_candidate
     # takes priority over the animal/incident geometry rule.

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 
@@ -97,6 +98,58 @@ def test_rank_and_write_scores_and_writes_only_unlabelled(tmp_path: Path):
     ids_path = out_path.with_suffix(".message_ids")
     assert ids_path.exists()
     assert set(ids_path.read_text().split()) == {"3", "4"}
+
+
+def _write_video(path: Path, num_frames: int, fps: float = 5.0) -> str:
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (16, 12))
+    try:
+        for i in range(num_frames):
+            writer.write(np.full((12, 16, 3), i * 10 % 255, dtype=np.uint8))
+    finally:
+        writer.release()
+    return str(path)
+
+
+def test_rank_and_write_drops_sub_1s_clip_with_an_event_sibling(tmp_path: Path):
+    short_path = _write_video(tmp_path / "short.mp4", num_frames=2)  # 0.4s @ 5fps
+    long_path = _write_video(tmp_path / "long.mp4", num_frames=10)  # 2.0s @ 5fps
+    caption = "Cam Alert: (Initial) NATURE RIDGE COMPLEX, MOTIONVIEWER 1 @ 01-01-26 00:00:00"
+    rows = [
+        _detected_row("cam01", 1, "animal", aspect_ratio=0.5, jitter=1.0),
+        _detected_row("cam01", 2, "guard", aspect_ratio=1.2, green_light_ratio=0.3),
+        _detected_row(
+            "cam01", 3, None, aspect_ratio=0.5, jitter=1.0, caption=caption, file_path=short_path
+        ),
+        _detected_row(
+            "cam01", 4, None, aspect_ratio=0.5, jitter=1.0, caption=caption, file_path=long_path
+        ),
+    ]
+
+    queue = rc.rank_and_write(rows, top_per_camera=10, out_path=str(tmp_path / "candidates.csv"))
+
+    assert {r["message_id"] for r in queue} == {4}  # the short sibling is dropped
+
+
+def test_rank_and_write_keeps_sub_1s_clip_with_no_sibling(tmp_path: Path):
+    short_path = _write_video(tmp_path / "short.mp4", num_frames=2)  # 0.4s @ 5fps
+    rows = [
+        _detected_row("cam01", 1, "animal", aspect_ratio=0.5, jitter=1.0),
+        _detected_row("cam01", 2, "guard", aspect_ratio=1.2, green_light_ratio=0.3),
+        _detected_row(
+            "cam01",
+            3,
+            None,
+            aspect_ratio=0.5,
+            jitter=1.0,
+            caption="Cam Alert: (Initial) NATURE RIDGE COMPLEX, MOTIONVIEWER 1 @ 01-01-26 00:00:00",
+            file_path=short_path,
+        ),
+    ]
+
+    queue = rc.rank_and_write(rows, top_per_camera=10, out_path=str(tmp_path / "candidates.csv"))
+
+    assert {r["message_id"] for r in queue} == {3}  # no sibling -- kept despite being short
+
 
 
 def test_rank_and_write_raises_without_labelled_rows(tmp_path: Path):

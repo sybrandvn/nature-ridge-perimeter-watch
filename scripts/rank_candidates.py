@@ -367,6 +367,29 @@ def rank_and_write(
         for r in detected
         if not r["label"] and r.get("startup_state") not in ("blank", "duplicate")
     ]
+
+    # A sub-1s clip whose embedded alert timestamp is shared by another
+    # file-having clip anywhere in the corpus is a redundant review slot --
+    # checked against the labelled corpus first: every animal/incident/resident
+    # clip under 1s (4 of 33) already has such a sibling, so this never drops
+    # the only representation of a real event. Sharing the timestamp is
+    # sufficient on its own, without a literal frame match: some of these short
+    # clips are themselves corrupt/burst recordings (a real declared sub-second
+    # duration, not a metadata bug -- see cam07/18985) that would never pass
+    # _frames_prefix_match, but the event is still fully covered by the sibling.
+    event_counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        key = _event_key(row["camera_id"], row.get("caption"))
+        if key is not None:
+            event_counts[key] += 1
+
+    def _is_redundant_short_clip(row: dict[str, Any]) -> bool:
+        key = _event_key(row["camera_id"], row.get("caption"))
+        if key is None or event_counts[key] < 2:
+            return False
+        return clip_duration_seconds(row.get("file_path") or "") < 1.0
+
+    unlabelled = [r for r in unlabelled if not _is_redundant_short_clip(r)]
     unlabelled = prefer_longest_per_event(unlabelled)
     queue = stratified_top_n(unlabelled, top_n=top_per_camera)
 

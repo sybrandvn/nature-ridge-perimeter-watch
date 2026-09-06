@@ -140,6 +140,21 @@ def outside_pixel_fraction(points: Sequence[Point], zone: CameraZone) -> float:
     return sum(1 for c in relevant if c == "outside") / len(relevant)
 
 
+def zone_classifiable_fraction(points: Sequence[Point], zone: CameraZone) -> float:
+    """Fraction of `points` that yielded a real inside/outside verdict.
+
+    Disambiguates `outside_pixel_fraction`'s 0.0, which means EITHER "every
+    classifiable point was inside" OR "nothing was classifiable at all"
+    (whole blob in an ignore region, beyond the depth cutoff, or the camera
+    has no fence line). Any rule that reads 0.0 as evidence of "inside" must
+    check this first, or it will suppress blobs it never actually classified.
+    """
+    if not points:
+        return 0.0
+    classifications = [classify_zone(p, zone) for p in points]
+    return sum(1 for c in classifications if c in ("outside", "inside")) / len(points)
+
+
 def track_crosses_fence(track: Sequence[Point], zone: CameraZone) -> bool:
     """True if a track's centroids appear on both sides of the fence line.
 

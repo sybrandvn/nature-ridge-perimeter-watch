@@ -22,6 +22,7 @@ from src.zones import (
     signed_side,
     subject_base_y,
     track_crosses_fence,
+    zone_classifiable_fraction,
 )
 
 # Vertical fence at x=0.5, spanning the frame top to bottom -- the typical shape
@@ -134,6 +135,42 @@ def test_outside_pixel_fraction_excludes_ignored_and_ambiguous():
 def test_outside_pixel_fraction_empty_relevant_set_is_zero():
     zone = CameraZone(fence=None, outside=None, depth_cutoff=0.0, ignore=())
     assert outside_pixel_fraction([(0.5, 0.5)], zone) == 0.0
+
+
+def test_zone_classifiable_fraction_all_classifiable():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    points = [(0.3, 0.5), (0.7, 0.5)]
+    assert zone_classifiable_fraction(points, zone) == pytest.approx(1.0)
+
+
+def test_zone_classifiable_fraction_distinguishes_inside_from_unclassifiable():
+    """Both cases give outside_pixel_fraction 0.0; only this tells them apart."""
+    fenced = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    all_inside = [(0.7, 0.5), (0.8, 0.5)]
+    assert outside_pixel_fraction(all_inside, fenced) == 0.0
+    assert zone_classifiable_fraction(all_inside, fenced) == pytest.approx(1.0)
+
+    no_fence = CameraZone(fence=None, outside=None, depth_cutoff=0.0, ignore=())
+    assert outside_pixel_fraction(all_inside, no_fence) == 0.0
+    assert zone_classifiable_fraction(all_inside, no_fence) == 0.0
+
+
+def test_zone_classifiable_fraction_counts_ignored_and_ambiguous_against_total():
+    polygon = ((0.6, 0.0), (1.0, 0.0), (1.0, 1.0), (0.6, 1.0))
+    zone = CameraZone(
+        fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.3, ignore=(polygon,)
+    )
+    points = [
+        (0.3, 0.1),  # beyond depth cutoff -> ambiguous
+        (0.9, 0.5),  # inside ignore polygon -> ignored
+        (0.55, 0.5),  # classifiable
+    ]
+    assert zone_classifiable_fraction(points, zone) == pytest.approx(1 / 3)
+
+
+def test_zone_classifiable_fraction_empty_points_is_zero():
+    zone = CameraZone(fence=_VERTICAL_FENCE, outside="left", depth_cutoff=0.0, ignore=())
+    assert zone_classifiable_fraction([], zone) == 0.0
 
 
 def test_track_crosses_fence_detects_side_change():

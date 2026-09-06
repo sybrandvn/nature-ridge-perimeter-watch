@@ -77,6 +77,7 @@ from src.zones import (  # noqa: E402
     median_fence_distance,
     outside_pixel_fraction,
     track_crosses_fence,
+    zone_classifiable_fraction,
 )
 
 FEATURE_COLUMNS = (
@@ -87,6 +88,7 @@ FEATURE_COLUMNS = (
     "time_of_day",
     "is_daylight",
     "outside_pixel_fraction",
+    "zone_classifiable_fraction",
     "aspect_ratio",
     "solidity",
     "saturation_ratio",
@@ -1697,6 +1699,7 @@ def extract_clip_features(
 
     return {
         "outside_pixel_fraction": outside_pixel_fraction(points, zone),
+        "zone_classifiable_fraction": zone_classifiable_fraction(points, zone),
         "aspect_ratio": aspect_ratio(best_contour),
         "solidity": solidity(best_contour),
         "saturation_ratio": saturation_ratio(best_frame, best_contour),

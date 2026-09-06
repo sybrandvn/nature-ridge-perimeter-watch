@@ -76,6 +76,40 @@ def test_classify_guard_wins_over_implausible_height():
     assert backtest.classify(features) == "guard_candidate"
 
 
+def test_classify_inside_only_blob_is_guard_candidate():
+    # The guard patrols inside the fence -- a blob the geometry actually
+    # classified, and classified entirely inside, is a guard not an unknown.
+    features = _features(zone_classifiable_fraction=1.0, outside_pixel_fraction=0.0)
+    assert backtest.classify(features) == "guard_candidate"
+
+
+def test_classify_inside_only_rule_needs_classifiable_points():
+    # outside_pixel_fraction is 0.0 for BOTH "all inside" and "nothing was
+    # classifiable" -- without the classifiable guard this would confidently
+    # suppress a blob that was never actually classified.
+    features = _features(zone_classifiable_fraction=0.0, outside_pixel_fraction=0.0)
+    assert backtest.classify(features) == "unclassified"
+
+
+def test_classify_inside_only_rule_does_not_override_incident():
+    # Must be the LAST rule: a clip already reading as outside/far from the
+    # fence stays an incident_candidate.
+    features = _features(
+        zone_classifiable_fraction=1.0,
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.5,
+        color_fraction=0.0,
+    )
+    assert backtest.classify(features) == "incident_candidate"
+
+
+def test_classify_inside_only_rule_does_not_override_environment():
+    features = _features(
+        zone_classifiable_fraction=1.0, outside_pixel_fraction=0.0, blob_count=11
+    )
+    assert backtest.classify(features) == "environment_candidate"
+
+
 def test_classify_environment_wins_over_animal_incident_shape():
     # high blob_count AND a fence-crossing geometry read -- environment_candidate
     # takes priority over the animal/incident geometry rule.

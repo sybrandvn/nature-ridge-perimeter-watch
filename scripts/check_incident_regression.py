@@ -17,10 +17,10 @@ not present in a fresh clone/CI), same reasoning as scripts/backtest.py's own
 main(). Run this by hand after any change to classify() or its features, and
 before opting any new camera in to metric_calibration.
 
-SUPPRESSED = {"environment_candidate", "no_motion", "unclassified"} -- these are
-the categories docs/plan.md and this session's routing plan both suppress from
+SUPPRESSED = {"guard_candidate", "environment_candidate", "no_motion",
+"unclassified"} -- these are the categories the routing plan suppresses from
 the alert channel entirely. Every incident EVENT must have at least one clip
-that avoids all three; this script is the automated guardrail for that, so a
+that avoids all of them; this script is the automated guardrail for that, so a
 threshold change that quietly drops one is caught immediately rather than
 discovered against live footage later.
 
@@ -43,7 +43,7 @@ from src import db  # noqa: E402
 from src.config import load_app_config, load_cameras_config  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "incident_regression.jsonl"
-SUPPRESSED = {"environment_candidate", "no_motion", "unclassified"}
+SUPPRESSED = {"guard_candidate", "environment_candidate", "no_motion", "unclassified"}
 
 
 def main() -> None:

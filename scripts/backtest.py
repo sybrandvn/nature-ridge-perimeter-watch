@@ -65,6 +65,38 @@ Rules:
     current tracker -- this rule is effectively dead, the persistent-tracking
     work from 2026-08-30 smooths out the erratic jitter it used to key on.
     Left in place, not removed, pending a decision on a replacement.)
+  - guard_candidate (inside-only fallback): zone_classifiable_fraction > 0 and
+    outside_pixel_fraction == 0.0 (added 2026-09-06). Deliberately the LAST
+    rule, so it can only ever reclassify what would otherwise fall through to
+    `unclassified` -- it cannot override any positive classification above.
+    The guard patrols INSIDE the fence, so a blob the zone geometry actually
+    classified, and classified entirely inside, is a guard rather than an
+    unknown. Requires zone_classifiable_fraction > 0 because
+    outside_pixel_fraction returns 0.0 for BOTH "all inside" and "nothing was
+    classifiable" (whole blob in an ignore region / beyond depth_cutoff) --
+    without that guard this rule would confidently suppress blobs it never
+    actually classified.
+    Measured at EVENT level on the 416-clip labelled corpus (217 events,
+    grouped by shared physical trigger via scripts.label._event_key, since a
+    startup_state=blank precursor clip is expected to read as nothing on its
+    own): 0/5 incident events lost, 145/193 currently-unclassified guard clips
+    become a confident guard_candidate. This is why the event-level view
+    matters -- per clip, 3 of 10 incident clips DO read fully inside
+    (cam06/21519, cam09/21521, cam10/21523), but in all three cases the
+    sibling clip of the same event reads fully outside, so no incident event
+    is lost.
+
+REJECTED, do not re-add without new data: gating the HIGH-priority incident
+channel on `metric_aspect` (height/width in metres). It looked strong --
+AUC 0.816 separating the 5 alerting incident events from the 49 alerting
+guard+environment ones, and a `metric_aspect < 1.0` gate would have cut
+false alerts in the incident channel from 25 events to 16 while keeping all
+5 incidents. It was rejected because the LOWEST incident values are the
+crawling ones -- cam10/21524 "2 men crawling away" at 1.08, cam09/21522
+"2 men crawling and shuffling toward the fence" at 1.14 -- i.e. crawlers sit
+at the very bottom of the range, only 0.08 above the threshold. Crawling
+under the fence is the signature threat this system exists to catch, so a
+thin margin there is not worth a 36% false-alert reduction.
   - no_motion: extract_clip_features found nothing to track
   - unclassified: motion detected but none of the above rules fired
 
@@ -114,6 +146,7 @@ REPORT_COLUMNS = (
     "jitter",
     "persistence",
     "outside_pixel_fraction",
+    "zone_classifiable_fraction",
     "median_fence_distance",
     "color_fraction",
     "path_length",
@@ -156,6 +189,11 @@ def classify(features: dict[str, float] | None) -> str:
         return "animal_candidate" if features["color_fraction"] > 0.15 else "incident_candidate"
     if features["jitter"] > 50 and features["solidity"] < 0.85:
         return "insect_candidate"
+    if (
+        features.get("zone_classifiable_fraction", 0.0) > 0.0
+        and features["outside_pixel_fraction"] == 0.0
+    ):
+        return "guard_candidate"
     return "unclassified"
 
 

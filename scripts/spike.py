@@ -103,6 +103,8 @@ FEATURE_COLUMNS = (
     "green_light_ratio",
     "green_light_flicker",
     "warmup_flashlight_ratio",
+    "warmup_track_fraction",
+    "warmup_subject_left",
     "flashlight_subject_fraction",
     "row_normalised_area",
     "edge_density",
@@ -1392,6 +1394,87 @@ def detect_clip(
     )
 
 
+def _warmup_motion_features(
+    detection: ClipDetection, frame_width: int, frame_height: int
+) -> dict[str, float]:
+    """Track whatever is moving in the DROPPED IR-flare frames, and decide
+    whether it carried on into the scored frames or left before they began.
+
+    The warmup frames are dropped because a global IR gain step dwarfs any
+    subject in consecutive-frame differencing. Normalising each frame by its
+    own median cancels that step, after which a subject walking close to the
+    camera is plainly visible -- verified on cam06/21377, where the guard shows
+    as a 97x136 blob tracking left and out of the bottom-left corner.
+
+    The useful signal is not "was something moving in the warmup" (an intruder
+    moves there too -- measured incident p50 0.54, guard p50 0.43, so it
+    separates nothing on its own). It is whether that subject CONTINUED into
+    the scored frames. If it did, the scored track is the same object and has
+    more evidence behind it. If it did not, the subject left before scoring
+    started and whatever the scored frames locked onto is a different thing --
+    a vine, a wind-blown bush, a camera artifact on the final frame.
+    """
+    zeros = {
+        "warmup_track_fraction": 0.0,
+        "warmup_subject_left": 0.0,
+    }
+    dropped = detection.dropped_frames
+    if len(dropped) < 2:
+        return zeros
+
+    grey = []
+    for frame in dropped:
+        g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        median = float(np.median(g))
+        grey.append(g * (100.0 / median) if median > 1 else g)
+
+    frame_area = float(frame_width * frame_height)
+    track: list[tuple[float, float, int, int, int, int]] = []
+    for previous, current in zip(grey, grey[1:], strict=False):
+        diff = cv2.absdiff(current, previous)
+        mask = cv2.morphologyEx(
+            (diff > 25).astype(np.uint8) * 255, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)
+        )
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        best = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(best)
+        x, y, w, h = cv2.boundingRect(best)
+        # A blob spanning most of both axes IS the gain step, not a subject.
+        if w > 0.6 * frame_width and h > 0.6 * frame_height:
+            continue
+        if not 0.01 * frame_area <= area <= 0.35 * frame_area:
+            continue
+        track.append((x + w / 2.0, y + h / 2.0, x, y, w, h))
+
+    if not track:
+        return zeros
+
+    fraction = len(track) / (len(grey) - 1)
+    last_cx, last_cy, x, y, w, h = track[-1]
+
+    first_scored = next(
+        (
+            fd
+            for fd in detection.frames
+            if fd.largest is not None and not fd.recovered and not fd.filled_by_reverse
+        ),
+        None,
+    )
+    continued = False
+    if first_scored is not None:
+        sx, sy, sw, sh = cv2.boundingRect(first_scored.largest)
+        gap = float(np.hypot((sx + sw / 2.0) - last_cx, (sy + sh / 2.0) - last_cy))
+        diagonal = float(np.hypot(frame_width, frame_height))
+        continued = gap <= 0.25 * diagonal
+
+    return {
+        "warmup_track_fraction": fraction,
+        "warmup_subject_left": 0.0 if continued else 1.0,
+    }
+
+
 def _metric_track_features(
     considered: list[FrameDetection],
     zone: CameraZone,
@@ -1760,6 +1843,7 @@ def extract_clip_features(
             0.0 if is_daylight_color else green_light_flicker(whole_frame_green_ratios)
         ),
         "warmup_flashlight_ratio": warmup_flashlight_ratio,
+        **_warmup_motion_features(detection, frame_width, frame_height),
         "flashlight_subject_fraction": (
             0.0
             if is_daylight_color or not frames_with_box

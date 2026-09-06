@@ -130,6 +130,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
+from src.features import is_daylight  # noqa: E402
+from src.reference_bg import (  # noqa: E402
+    era_of,
+    load_manifest,
+    load_reference_image,
+    reference_for,
+)
 
 ExtractFn = Callable[..., "dict[str, float] | None"]
 
@@ -218,12 +225,30 @@ def iter_clips_with_files(
         }
 
 
+def _reference_background(entries, root, camera, timestamp):
+    """This camera's reference background for the clip's era and lighting, or
+    None when nothing covers it. Same resolution as scripts/render_debug.py,
+    so the screening run and the render agree on what the detector saw."""
+    if not entries or timestamp is None:
+        return None
+    entry = reference_for(
+        entries,
+        camera.id,
+        timestamp,
+        era=era_of(camera, timestamp),
+        daylight=is_daylight(timestamp),
+    )
+    return None if entry is None else load_reference_image(Path(root), entry)
+
+
 def run_backtest(
     conn: Any,
     cameras: CamerasConfig,
     *,
     camera_id: str | None = None,
     labelled_only: bool = False,
+    reference_entries: Any = None,
+    reference_root: str = "data/reference_bg",
     extract_fn: ExtractFn = extract_clip_features,
 ) -> Iterator[dict[str, Any]]:
     unknown_cameras: set[str] = set()
@@ -232,7 +257,13 @@ def run_backtest(
         if camera is None:
             unknown_cameras.add(clip["camera_id"])
             continue
-        features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]))
+        extra: dict[str, Any] = {}
+        reference = _reference_background(
+            reference_entries, reference_root, camera, clip["timestamp"]
+        )
+        if reference is not None:
+            extra["reference_background"] = reference
+        features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]), **extra)
         row = {
             "channel_id": clip["channel_id"],
             "message_id": clip["message_id"],
@@ -266,14 +297,32 @@ def main() -> None:  # pragma: no cover - requires real downloaded footage
         help="Restrict to clips with a human label -- for before/after regression"
         " runs against the ~400-clip labelled corpus instead of all downloaded history",
     )
+    parser.add_argument(
+        "--reference-bg",
+        default="data/reference_bg",
+        help="per-camera reference background directory (build with scripts/build_reference_bg.py)",
+    )
+    parser.add_argument(
+        "--no-reference-bg",
+        action="store_true",
+        help="disable the reference-background scenery veto, for before/after comparison",
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
     cameras_cfg = load_cameras_config("config/cameras.yaml")
     conn = db.connect(app_cfg.db_path)
 
+    reference_entries = [] if args.no_reference_bg else load_manifest(args.reference_bg)
     rows = list(
-        run_backtest(conn, cameras_cfg, camera_id=args.camera, labelled_only=args.labelled_only)
+        run_backtest(
+            conn,
+            cameras_cfg,
+            camera_id=args.camera,
+            labelled_only=args.labelled_only,
+            reference_entries=reference_entries,
+            reference_root=args.reference_bg,
+        )
     )
     conn.close()
 

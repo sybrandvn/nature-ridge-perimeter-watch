@@ -20,6 +20,19 @@ Rules:
     AUC 0.933. Higher thresholds trade recall for guard false-fire; 10 is the
     highest threshold with zero animal+incident leak (cam15/15454's porcupine
     sits at exactly blob_count=10).)
+  - environment_candidate (metric physics gate): implausible_height_fraction > 0.5
+    (added 2026-09-06, checked right after blob_count, same reasoning -- a
+    physically-impossible reading should route to "not a real subject" before
+    the shape rules get a chance to call it animal/incident). Measured on 416
+    labelled clips through src.ground_calibration (15 of 18 cameras opted in):
+    incident's own worst clip sits at 0.333, so 0.5 has real margin; 0/10
+    incident and 0/8 calibrated-animal leak. Catches 4/91 calibrated environment
+    clips outright, TWO of which (cam12/4032, cam10/4045) were previously
+    misrouted as incident_candidate -- a genuine, non-redundant catch, not a
+    duplicate of blob_count (verified by checking each catch's prior category).
+    Only fires for calibrated cameras (`uncalibrated == 0.0`); the 3 without a
+    usable picket trace (cam01b, cam15, cam16) are untouched by this rule and
+    fall through to the pixel-space rules exactly as before.
   - animal_candidate / incident_candidate: outside_pixel_fraction > 0.6 and
     median_fence_distance > 0.1, split further by color_fraction > 0.15
     (re-derived 2026-09-04, replacing the old aspect_ratio<0.95 rule -- its
@@ -105,6 +118,9 @@ REPORT_COLUMNS = (
     "color_fraction",
     "path_length",
     "blob_count",
+    "implausible_height_fraction",
+    "off_plane_fraction",
+    "uncalibrated",
 )
 
 
@@ -112,14 +128,20 @@ def classify(features: dict[str, float] | None) -> str:
     """Pure rule lookup -- see the module docstring for what each rule means and
     where its thresholds come from. `guard_candidate` is checked first since
     most rules below assume a real flashlight sighting has already been pulled
-    out. `environment_candidate` is checked next, before the shape-based rules,
-    so a stormy/windy clip's scattered blobs don't get read as a shape
-    signal."""
+    out. `environment_candidate` (both the blob_count and the metric physics
+    gate) is checked next, before the shape-based rules, so a stormy/windy
+    clip's scattered blobs -- or a geometrically-impossible reading -- don't
+    get read as a shape signal."""
     if features is None:
         return "no_motion"
     if features["green_light_ratio"] > 0.05 or features["green_light_flicker"] > 0.02:
         return "guard_candidate"
     if features["blob_count"] > 10:
+        return "environment_candidate"
+    if (
+        features.get("uncalibrated", 1.0) == 0.0
+        and features.get("implausible_height_fraction", 0.0) > 0.5
+    ):
         return "environment_candidate"
     if features["outside_pixel_fraction"] > 0.6 and features["median_fence_distance"] > 0.1:
         return "animal_candidate" if features["color_fraction"] > 0.15 else "incident_candidate"
@@ -128,18 +150,23 @@ def classify(features: dict[str, float] | None) -> str:
     return "unclassified"
 
 
-def iter_clips_with_files(conn: Any, *, camera_id: str | None = None) -> Iterator[dict[str, Any]]:
+def iter_clips_with_files(
+    conn: Any, *, camera_id: str | None = None, labelled_only: bool = False
+) -> Iterator[dict[str, Any]]:
     for row in db.iter_clips(conn, camera_id=camera_id):
         if not row["file_path"]:
             continue
         label_row = db.get_label(conn, row["channel_id"], row["message_id"])
+        label = label_row["label"] if label_row is not None else None
+        if labelled_only and label is None:
+            continue
         yield {
             "channel_id": row["channel_id"],
             "message_id": row["message_id"],
             "camera_id": row["camera_id"],
             "timestamp": row["timestamp"],
             "file_path": row["file_path"],
-            "label": label_row["label"] if label_row is not None else None,
+            "label": label,
         }
 
 
@@ -148,10 +175,11 @@ def run_backtest(
     cameras: CamerasConfig,
     *,
     camera_id: str | None = None,
+    labelled_only: bool = False,
     extract_fn: ExtractFn = extract_clip_features,
 ) -> Iterator[dict[str, Any]]:
     unknown_cameras: set[str] = set()
-    for clip in iter_clips_with_files(conn, camera_id=camera_id):
+    for clip in iter_clips_with_files(conn, camera_id=camera_id, labelled_only=labelled_only):
         camera = cameras.by_id(clip["camera_id"])
         if camera is None:
             unknown_cameras.add(clip["camera_id"])
@@ -184,13 +212,21 @@ def main() -> None:  # pragma: no cover - requires real downloaded footage
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--camera", default=None, help="Restrict to one camera id")
     parser.add_argument("--out", required=True, help="Output CSV path")
+    parser.add_argument(
+        "--labelled-only",
+        action="store_true",
+        help="Restrict to clips with a human label -- for before/after regression"
+        " runs against the ~400-clip labelled corpus instead of all downloaded history",
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
     cameras_cfg = load_cameras_config("config/cameras.yaml")
     conn = db.connect(app_cfg.db_path)
 
-    rows = list(run_backtest(conn, cameras_cfg, camera_id=args.camera))
+    rows = list(
+        run_backtest(conn, cameras_cfg, camera_id=args.camera, labelled_only=args.labelled_only)
+    )
     conn.close()
 
     write_csv(rows, args.out)

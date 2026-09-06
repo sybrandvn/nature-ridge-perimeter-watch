@@ -65,6 +65,15 @@ MAX_CAMERA_HEIGHT_M = 30.0
 # number that looks measured.
 MAX_SUBJECT_HEIGHT_M = 4.0
 
+# Every camera on this site is the same model, so the intrinsics are identical
+# and only the mounting differs (pitch, yaw, roll, height above ground).
+# Measured on cam06 -- the one camera with enough traced pickets to derive it
+# from its own geometry. Corroborated independently 2026-09-06: the focal
+# length that makes all 15 traced cameras' mounting heights most consistent is
+# ~180px, within 4% of this. Used only when a camera has a single picket; with
+# two or more, that camera's own geometry gives f directly and this is ignored.
+FLEET_FOCAL_PX = 187.34
+
 _EPS = 1e-9
 
 
@@ -229,6 +238,37 @@ def _vertical_vanishing_point(
     return np.linalg.solve(normal_sum, rhs)
 
 
+def _vertical_vp_from_known_focal(
+    focal: float,
+    horizon_vp: np.ndarray,
+    picket: tuple[Point, Point],
+    centre: np.ndarray,
+    width: float,
+    height: float,
+) -> np.ndarray | None:
+    """Vertical vanishing point from ONE picket plus an already-known focal.
+
+    With two pickets, their meeting point gives vz and the conjugacy
+    ``(vz-c).(vh-c) = -f^2`` then yields f. With f known up front that same
+    equation runs backwards: it constrains vz to a line, and a single traced
+    picket supplies the second line, so the two intersect at a point.
+
+    This is what lets a camera with only one picket calibrate at all. The
+    picket is still needed -- it carries the camera's roll, which varies from
+    0 to ~13 degrees across this fleet and is worth ~20% of absolute scale, so
+    assuming zero roll instead is not good enough.
+    """
+    top, base = picket
+    origin = np.array([top[0] * width, top[1] * height])
+    direction = np.array([base[0] * width - origin[0], base[1] * height - origin[1]])
+    to_horizon = horizon_vp - centre
+    denom = float(direction @ to_horizon)
+    if abs(denom) < _EPS:
+        return None
+    along = (-focal * focal - float((origin - centre) @ to_horizon)) / denom
+    return origin + along * direction
+
+
 def _precision_limit_m(
     calibration_probe, frame_width: int, frame_height: int
 ) -> float:
@@ -267,8 +307,9 @@ def calibrate(
         return None
     if len(zone.fence) < 2 or len(zone.fence_bottom) < 2:
         return None
-    # Two pickets is the minimum that defines a vertical vanishing point.
-    if len(zone.fence_pickets) < 2:
+    # At least one picket is always required: it is the only thing that carries
+    # the camera's roll (see `_vertical_vp_from_known_focal`).
+    if not zone.fence_pickets:
         return None
 
     width, height = float(frame_width), float(frame_height)
@@ -282,16 +323,25 @@ def calibrate(
     if horizon_vp is None:
         return None
 
-    vertical_vp = _vertical_vanishing_point(zone.fence_pickets, frame_width, frame_height)
-    if vertical_vp is None:
-        return None
-
-    # Perpendicular world directions are conjugate about the image of the
-    # absolute conic; with a centred principal point that reduces to this.
-    focal_sq = -float((vertical_vp - centre) @ (horizon_vp - centre))
-    if not np.isfinite(focal_sq) or focal_sq <= 0:
-        return None
-    focal = float(np.sqrt(focal_sq))
+    if len(zone.fence_pickets) >= 2:
+        vertical_vp = _vertical_vanishing_point(
+            zone.fence_pickets, frame_width, frame_height
+        )
+        if vertical_vp is None:
+            return None
+        # Perpendicular world directions are conjugate about the image of the
+        # absolute conic; with a centred principal point that reduces to this.
+        focal_sq = -float((vertical_vp - centre) @ (horizon_vp - centre))
+        if not np.isfinite(focal_sq) or focal_sq <= 0:
+            return None
+        focal = float(np.sqrt(focal_sq))
+    else:
+        focal = zone.metric_focal_px or FLEET_FOCAL_PX
+        vertical_vp = _vertical_vp_from_known_focal(
+            focal, horizon_vp, zone.fence_pickets[0], centre, width, height
+        )
+        if vertical_vp is None:
+            return None
 
     k_inv = np.linalg.inv(
         np.array([[focal, 0, centre[0]], [0, focal, centre[1]], [0, 0, 1.0]])

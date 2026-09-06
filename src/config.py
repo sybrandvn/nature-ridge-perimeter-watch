@@ -207,6 +207,11 @@ class CameraZone:
     # `ground_calibration.DEFAULT_MAX_RANGE_M`. The effective cap is also
     # limited by how much distance one pixel row is worth near the horizon.
     metric_max_range_m: float | None = None
+    # Override the shared `ground_calibration.FLEET_FOCAL_PX`. Only consulted
+    # when this camera has exactly one traced picket -- with two or more, the
+    # focal length comes from the camera's own geometry. Set this only for a
+    # camera that is genuinely a different model to the rest of the fleet.
+    metric_focal_px: float | None = None
 
 
 @dataclass(frozen=True)
@@ -346,6 +351,7 @@ _ZONE_FIELDS = (
     "fence_pickets",
     "metric_calibration",
     "metric_max_range_m",
+    "metric_focal_px",
 )
 
 
@@ -472,6 +478,13 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
                 f"cameras.yaml: {camera_id!r} metric_max_range_m must be > 0"
             )
 
+    raw_focal = entry.get("metric_focal_px")
+    metric_focal_px: float | None = None
+    if raw_focal is not None:
+        metric_focal_px = float(raw_focal)
+        if metric_focal_px <= 0.0:
+            raise ConfigError(f"cameras.yaml: {camera_id!r} metric_focal_px must be > 0")
+
     return CameraZone(
         fence=fence,
         outside=outside,
@@ -482,6 +495,7 @@ def _parse_zone(camera_id: str, entry: dict[str, Any]) -> CameraZone:
         fence_pickets=tuple(fence_pickets),
         metric_calibration=metric_calibration,
         metric_max_range_m=metric_max_range_m,
+        metric_focal_px=metric_focal_px,
     )
 
 

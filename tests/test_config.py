@@ -262,6 +262,24 @@ def test_metric_max_range_must_be_positive(tmp_path):
         load_cameras_config(path)
 
 
+def test_metric_focal_px_override_parses(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    fence: [[0.1, 0.9], [0.6, 0.2]]\n"
+        "    outside: right\n    metric_focal_px: 210.5\n",
+    )
+    assert load_cameras_config(path).by_id("cam01").zone.metric_focal_px == 210.5
+
+
+def test_metric_focal_px_must_be_positive(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        "cameras:\n  - id: cam01\n    metric_focal_px: -1\n",
+    )
+    with pytest.raises(ConfigError, match="metric_focal_px must be > 0"):
+        load_cameras_config(path)
+
+
 def test_zones_dated_history_picks_geometry_by_timestamp(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",

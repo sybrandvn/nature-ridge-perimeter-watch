@@ -16,6 +16,7 @@ import pytest
 from src.config import CameraZone
 from src.ground_calibration import (
     DEFAULT_MAX_RANGE_M,
+    FLEET_FOCAL_PX,
     MAX_SUBJECT_HEIGHT_M,
     calibrate,
 )
@@ -135,9 +136,29 @@ def test_returns_none_without_fence_bottom():
     assert calibrate(_synthetic_zone(fence_bottom=None), WIDTH, HEIGHT) is None
 
 
-def test_returns_none_with_fewer_than_two_pickets():
+def test_returns_none_with_no_pickets():
+    """A picket is always required: it is the only thing carrying camera roll,
+    which varies enough across the real fleet to matter (~20% of scale)."""
     zone = _synthetic_zone()
-    one = CameraZone(
+    none = CameraZone(
+        fence=zone.fence,
+        outside=zone.outside,
+        depth_cutoff=zone.depth_cutoff,
+        ignore=zone.ignore,
+        fence_bottom=zone.fence_bottom,
+        fence_height_m=zone.fence_height_m,
+        fence_pickets=(),
+        metric_calibration=True,
+    )
+    assert calibrate(none, WIDTH, HEIGHT) is None
+
+
+def test_single_picket_with_known_focal_recovers_truth():
+    """One picket plus an already-known focal length is enough: the conjugacy
+    that normally derives f instead pins the vertical vanishing point."""
+    cam = _SyntheticCamera(focal=200.0, cam_h=3.0, tilt_deg=25.0)
+    zone = _synthetic_zone(cam)
+    single = CameraZone(
         fence=zone.fence,
         outside=zone.outside,
         depth_cutoff=zone.depth_cutoff,
@@ -146,8 +167,58 @@ def test_returns_none_with_fewer_than_two_pickets():
         fence_height_m=zone.fence_height_m,
         fence_pickets=zone.fence_pickets[:1],
         metric_calibration=True,
+        metric_focal_px=200.0,
     )
-    assert calibrate(one, WIDTH, HEIGHT) is None
+    cal = calibrate(single, WIDTH, HEIGHT)
+    assert cal is not None
+    assert cal.focal_px == pytest.approx(200.0)
+    assert cal.camera_height_m == pytest.approx(3.0, rel=1e-5)
+    px = cam.project((0.4, 14.0, 0.0))
+    assert cal.distance_m(px) == pytest.approx(math.hypot(0.4, 14.0), rel=1e-5)
+
+
+def test_single_picket_matches_multi_picket_result():
+    cam = _SyntheticCamera(focal=200.0, cam_h=3.0, tilt_deg=25.0)
+    zone = _synthetic_zone(cam)
+    multi = calibrate(zone, WIDTH, HEIGHT)
+    single = calibrate(
+        CameraZone(
+            fence=zone.fence,
+            outside=zone.outside,
+            depth_cutoff=zone.depth_cutoff,
+            ignore=zone.ignore,
+            fence_bottom=zone.fence_bottom,
+            fence_height_m=zone.fence_height_m,
+            fence_pickets=zone.fence_pickets[1:2],
+            metric_calibration=True,
+            metric_focal_px=200.0,
+        ),
+        WIDTH,
+        HEIGHT,
+    )
+    assert single.camera_height_m == pytest.approx(multi.camera_height_m, rel=1e-5)
+
+
+def test_single_picket_falls_back_to_fleet_focal():
+    cam = _SyntheticCamera(focal=FLEET_FOCAL_PX, cam_h=2.6, tilt_deg=30.0)
+    zone = _synthetic_zone(cam)
+    cal = calibrate(
+        CameraZone(
+            fence=zone.fence,
+            outside=zone.outside,
+            depth_cutoff=zone.depth_cutoff,
+            ignore=zone.ignore,
+            fence_bottom=zone.fence_bottom,
+            fence_height_m=zone.fence_height_m,
+            fence_pickets=zone.fence_pickets[:1],
+            metric_calibration=True,
+        ),
+        WIDTH,
+        HEIGHT,
+    )
+    assert cal is not None
+    assert cal.focal_px == pytest.approx(FLEET_FOCAL_PX)
+    assert cal.camera_height_m == pytest.approx(2.6, rel=1e-5)
 
 
 def test_returns_none_when_pickets_are_all_parallel():

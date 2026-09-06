@@ -71,6 +71,35 @@ def test_classify_warmup_flashlight_absent_key_is_safe():
     assert backtest.classify(_features()) == "unclassified"
 
 
+def test_is_blinding_foreground_none_features_is_false():
+    assert backtest.is_blinding_foreground(None) is False
+
+
+def test_is_blinding_foreground_on_white_blob():
+    assert backtest.is_blinding_foreground(_features(blob_white_fraction=0.5)) is True
+
+
+def test_is_blinding_foreground_on_long_flare():
+    assert backtest.is_blinding_foreground(_features(long_flare_frames=20)) is True
+
+
+def test_is_blinding_foreground_false_below_both_thresholds():
+    features = _features(blob_white_fraction=0.1, long_flare_frames=5)
+    assert backtest.is_blinding_foreground(features) is False
+
+
+def test_is_blinding_foreground_absent_keys_is_safe():
+    assert backtest.is_blinding_foreground(_features()) is False
+
+
+def test_is_blinding_foreground_independent_of_category():
+    # A guard can be genuinely present AND the lens genuinely obstructed --
+    # this is never folded into classify()'s mutually-exclusive chain.
+    features = _features(green_light_ratio=0.2, blob_white_fraction=0.9)
+    assert backtest.classify(features) == "guard_candidate"
+    assert backtest.is_blinding_foreground(features) is True
+
+
 def test_classify_environment_candidate_on_blob_count():
     assert backtest.classify(_features(blob_count=11)) == "environment_candidate"
 

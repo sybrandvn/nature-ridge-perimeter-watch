@@ -121,6 +121,14 @@ thin margin there is not worth a 36% false-alert reduction.
   - no_motion: extract_clip_features found nothing to track
   - unclassified: motion detected but none of the above rules fired
 
+`is_blinding_foreground` (added 2026-09-06) is a SEPARATE, independent flag,
+not part of the category chain above: a bright vegetation/web obstruction
+against the lens (`blob_white_fraction >= 0.4`) or an IR ramp that never
+naturally settled (`long_flare_frames >= 18`) means the camera needs physical
+cleaning, regardless of whatever category the clip also gets -- a guard can
+still be genuinely present and correctly `guard_candidate` in the very same
+clip. See its own docstring for the measured zero-leak numbers.
+
 Known limits (read before trusting a "storm" claim from this tool -- there
 isn't one): there is no separate `storm` label and none should be added --
 a storm/wind/rain trigger is just one cause of an `environment` clip (user
@@ -166,7 +174,14 @@ ExtractFn = Callable[..., "dict[str, float] | None"]
 # drops whatever was added last (recovered_fraction and longest_detection_run
 # were both being computed and discarded before 2026-09-06), and re-running the
 # scoring pass just to see one more column wastes minutes.
-_IDENTITY_COLUMNS = ("channel_id", "message_id", "camera_id", "label", "category")
+_IDENTITY_COLUMNS = (
+    "channel_id",
+    "message_id",
+    "camera_id",
+    "label",
+    "category",
+    "blinding_foreground",
+)
 _NON_NUMERIC = ("channel_id", "message_id", "camera_id", "label", "time_of_day", "is_daylight")
 REPORT_COLUMNS = (
     *_IDENTITY_COLUMNS,
@@ -205,6 +220,29 @@ def classify(features: dict[str, float] | None) -> str:
     ):
         return "guard_candidate"
     return "unclassified"
+
+
+def is_blinding_foreground(features: dict[str, float] | None) -> bool:
+    """True if a bright obstruction (vegetation, a web) right against the lens
+    is dominating the tracked blob -- a maintenance signal (clean the camera),
+    independent of and orthogonal to `classify()`'s category: a clip can be
+    BOTH a real guard sighting AND blinding (e.g. the guard is still visible
+    via their flashlight past the obstruction), so this is never folded into
+    the mutually-exclusive category chain above.
+
+    Measured 2026-09-06 on the full labelled corpus: `blob_white_fraction`'s
+    max ever seen is 0.182 for animal and 0.310 for incident, both well under
+    0.4; `long_flare_frames` (the ABSOLUTE frame count the IR ramp never
+    settled within, not the fraction -- that's capped at 40% of every clip
+    and common everywhere) crossing 18 is similarly rare outside this pattern.
+    Combined: 7/10 of a hand-picked blinding debug set caught, ZERO leak into
+    animal or incident, 14.5% guard / 29.3% environment / 20% resident false-fire.
+    """
+    if features is None:
+        return False
+    return features.get("blob_white_fraction", 0.0) >= 0.4 or (
+        features.get("long_flare_frames", 0.0) >= 18
+    )
 
 
 def iter_clips_with_files(
@@ -272,8 +310,9 @@ def run_backtest(
             "camera_id": clip["camera_id"],
             "label": clip["label"],
             "category": classify(features),
+            "blinding_foreground": is_blinding_foreground(features),
         }
-        for col in REPORT_COLUMNS[5:]:
+        for col in REPORT_COLUMNS[6:]:
             row[col] = None if features is None else features.get(col)
         yield row
     for camera_id_ in sorted(unknown_cameras):

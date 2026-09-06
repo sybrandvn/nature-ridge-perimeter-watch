@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
+from scripts.backtest import is_blinding_foreground  # noqa: E402
 from scripts.label import _event_key  # noqa: E402
 from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
@@ -368,6 +369,14 @@ def rank_and_write(
         if not r["label"] and r.get("startup_state") not in ("blank", "duplicate")
     ]
 
+    # A blinding-foreground clip (bright obstruction dominating the tracked
+    # blob, or an IR ramp that never settled -- see
+    # scripts.backtest.is_blinding_foreground) is a maintenance issue, not an
+    # incident/animal lead: measured zero leak into either class, so excluding
+    # it here never costs a real sighting. It still gets its own review queue
+    # via write_maintenance_candidates below.
+    unlabelled = [r for r in unlabelled if not is_blinding_foreground(r)]
+
     # A sub-1s clip whose embedded alert timestamp is shared by another
     # file-having clip anywhere in the corpus is a redundant review slot --
     # checked against the labelled corpus first: every animal/incident/resident
@@ -409,12 +418,51 @@ def rank_and_write(
     return queue
 
 
+def write_maintenance_candidates(
+    rows: list[dict[str, Any]], *, top_per_camera: int, out_path: str
+) -> list[dict[str, Any]]:
+    """Every detected clip flagged `is_blinding_foreground` (see
+    scripts.backtest), any label state -- this is a "camera needs cleaning"
+    report, not an incident lead, so an already-labelled guard/environment
+    clip still belongs here. Ranked by whichever of the two triggering
+    features reads more extreme, per-camera stratified same as the main
+    queue."""
+    detected = [r for r in rows if r.get("detected") and is_blinding_foreground(r)]
+    detected = prefer_longest_per_event(detected)
+    for row in detected:
+        row["maintenance_score"] = max(
+            row.get("blob_white_fraction", 0.0), row.get("long_flare_frames", 0.0) / 50.0
+        )
+    queue = stratified_top_n(detected, score_key="maintenance_score", top_n=top_per_camera)
+
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    columns = (*REPORT_COLUMNS[:1], "maintenance_score", *REPORT_COLUMNS[1:])
+    with open(out_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        for row in queue:
+            writer.writerow({col: row.get(col, "") for col in columns})
+
+    ids_path = str(Path(out_path).with_suffix(".message_ids"))
+    with open(ids_path, "w") as f:
+        for row in queue:
+            f.write(f"{row['message_id']}\n")
+
+    print(f"wrote {len(queue)} maintenance candidates to {out_path} and {ids_path}")
+    return queue
+
+
 def main() -> None:  # pragma: no cover - requires the real corpus/db
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--camera", default=None, help="restrict to one camera id")
     parser.add_argument("--top-per-camera", type=int, default=25)
     parser.add_argument("--workers", type=int, default=1, help="1 runs single-process")
     parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "--maintenance-out",
+        default=None,
+        help="also write a blinding-foreground ('camera needs cleaning') review queue here",
+    )
     parser.add_argument(
         "--reference-bg",
         default="data/reference_bg",
@@ -449,6 +497,10 @@ def main() -> None:  # pragma: no cover - requires the real corpus/db
 
     print(f"detected: {sum(1 for r in rows if r.get('detected'))}/{len(rows)}")
     rank_and_write(rows, top_per_camera=args.top_per_camera, out_path=args.out)
+    if args.maintenance_out:
+        write_maintenance_candidates(
+            rows, top_per_camera=args.top_per_camera, out_path=args.maintenance_out
+        )
 
 
 if __name__ == "__main__":

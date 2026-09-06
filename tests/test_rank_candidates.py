@@ -151,6 +151,35 @@ def test_rank_and_write_keeps_sub_1s_clip_with_no_sibling(tmp_path: Path):
     assert {r["message_id"] for r in queue} == {3}  # no sibling -- kept despite being short
 
 
+def test_rank_and_write_excludes_blinding_foreground(tmp_path: Path):
+    rows = [
+        _detected_row("cam01", 1, "animal", aspect_ratio=0.5, jitter=1.0),
+        _detected_row("cam01", 2, "guard", aspect_ratio=1.2, green_light_ratio=0.3),
+        _detected_row("cam01", 3, None, aspect_ratio=0.5, jitter=1.0, blob_white_fraction=0.9),
+        _detected_row("cam01", 4, None, aspect_ratio=0.5, jitter=1.0),
+    ]
+
+    queue = rc.rank_and_write(rows, top_per_camera=10, out_path=str(tmp_path / "candidates.csv"))
+
+    assert {r["message_id"] for r in queue} == {4}  # 3 is blinding-foreground, excluded
+
+
+def test_write_maintenance_candidates_only_blinding_rows(tmp_path: Path):
+    rows = [
+        _detected_row("cam01", 1, "animal", aspect_ratio=0.5, jitter=1.0),
+        _detected_row("cam01", 2, "guard", blob_white_fraction=0.9),
+        _detected_row("cam01", 3, None, long_flare_frames=20),
+        _detected_row("cam01", 4, None, aspect_ratio=0.5, jitter=1.0),
+    ]
+
+    queue = rc.write_maintenance_candidates(
+        rows, top_per_camera=10, out_path=str(tmp_path / "maintenance.csv")
+    )
+
+    # both the labelled guard clip and the unlabelled one belong here -- this
+    # is a "clean the camera" report, not an incident review queue
+    assert {r["message_id"] for r in queue} == {2, 3}
+
 
 def test_rank_and_write_raises_without_labelled_rows(tmp_path: Path):
     rows = [_detected_row("cam01", 1, None)]

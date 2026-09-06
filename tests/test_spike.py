@@ -33,6 +33,9 @@ class FakeCapture:
         self._idx += 1
         return True, frame
 
+    def get(self, _prop) -> float:
+        return 10.0  # matches extract_clip_features' own "or 10.0" fallback
+
     def release(self) -> None:
         pass
 
@@ -1121,6 +1124,12 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
         "height_consistency",
         "depth_progression",
         "depth_range_m",
+        "subject_height_m",
+        "subject_width_m",
+        "subject_area_m2",
+        "metric_aspect",
+        "distance_median_m",
+        "speed_mps",
         "uncalibrated",
     ):
         assert key in result
@@ -1141,6 +1150,12 @@ def test_extract_clip_features_uncalibrated_when_zone_has_no_pickets(monkeypatch
     assert result["height_consistency"] == 0.0
     assert result["depth_progression"] == 0.0
     assert result["depth_range_m"] == 0.0
+    assert result["subject_height_m"] == 0.0
+    assert result["subject_width_m"] == 0.0
+    assert result["subject_area_m2"] == 0.0
+    assert result["metric_aspect"] == 0.0
+    assert result["distance_median_m"] == 0.0
+    assert result["speed_mps"] == 0.0
 
 
 # cam06's real, already-validated geometry (src/ground_calibration.py's tests
@@ -1180,6 +1195,28 @@ def test_extract_clip_features_depth_progression_higher_for_steady_travel(monkey
     assert steady_result["uncalibrated"] == 0.0
     assert oscillating_result["uncalibrated"] == 0.0
     assert steady_result["depth_progression"] > oscillating_result["depth_progression"]
+
+
+def test_extract_clip_features_computes_scale_invariant_metric_size(monkeypatch, tmp_path):
+    frames = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _CALIBRATED_ZONE)
+
+    assert result["uncalibrated"] == 0.0
+    # A real, positive real-world size and range -- not asserting exact values
+    # (this 8x8px square isn't a real subject), just that the ground-plane
+    # geometry produced sane, usable numbers rather than 0.0 defaults.
+    assert result["subject_height_m"] > 0.0
+    assert result["subject_width_m"] > 0.0
+    # median(height*width) vs median(height)*median(width) -- close but not
+    # exactly equal, so a loose proportionality check, not exact equality.
+    assert result["subject_area_m2"] == pytest.approx(
+        result["subject_height_m"] * result["subject_width_m"], rel=0.2
+    )
+    assert result["metric_aspect"] > 0.0
+    assert result["distance_median_m"] > 0.0
+    assert result["speed_mps"] > 0.0
 
 
 def test_extract_clip_features_ignores_ir_warmup_brightness_swing(monkeypatch, tmp_path):

@@ -123,6 +123,12 @@ REPORT_COLUMNS = (
     "height_consistency",
     "depth_progression",
     "depth_range_m",
+    "subject_height_m",
+    "subject_width_m",
+    "subject_area_m2",
+    "metric_aspect",
+    "distance_median_m",
+    "speed_mps",
     "uncalibrated",
 )
 

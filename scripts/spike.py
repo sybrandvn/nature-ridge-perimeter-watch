@@ -115,6 +115,12 @@ FEATURE_COLUMNS = (
     "height_consistency",
     "depth_progression",
     "depth_range_m",
+    "subject_height_m",
+    "subject_width_m",
+    "subject_area_m2",
+    "metric_aspect",
+    "distance_median_m",
+    "speed_mps",
     "uncalibrated",
 )
 
@@ -1377,7 +1383,11 @@ def detect_clip(
 
 
 def _metric_track_features(
-    considered: list[FrameDetection], zone: CameraZone, frame_width: int, frame_height: int
+    considered: list[FrameDetection],
+    zone: CameraZone,
+    frame_width: int,
+    frame_height: int,
+    fps: float,
 ) -> dict[str, float]:
     """Metric features from the ground-plane model (see `src.ground_calibration`),
     computed in one pass over genuine bg-diff frames (excludes recovered/
@@ -1413,6 +1423,23 @@ def _metric_track_features(
     depth_range_m -- max minus min ground-plane distance across the clip,
     in real metres. Separates a subject traversing the view from one milling
     in place at a single range.
+
+    subject_height_m / subject_width_m / subject_area_m2 / metric_aspect --
+    median real-world size over plausible frames only (excludes anything
+    already counted in implausible_height_fraction). Scale-invariant
+    replacements for `row_normalised_area`/`aspect_ratio`, which conflate a
+    near subject with a far one -- a human stays ~1.6-1.9m and ~3:1 upright
+    regardless of range, an animal does not. Width comes from the ground
+    distance between the bbox's two bottom corners, not a pixel ruler.
+
+    distance_median_m -- median ground-plane distance across the clip.
+
+    speed_mps -- median frame-to-frame ground-plane displacement divided by
+    real elapsed time (uses `fps` and the actual frame-index gap between
+    genuine detections, since recovered/reverse-filled frames in between are
+    excluded). Real walking is ~1.4 m/s, running 3-5 m/s -- unlike
+    `normalised_speed` (body-widths per frame), this is comparable across
+    subjects of different sizes and ranges.
     """
     zeros = {
         "implausible_height_fraction": 0.0,
@@ -1420,6 +1447,12 @@ def _metric_track_features(
         "height_consistency": 0.0,
         "depth_progression": 0.0,
         "depth_range_m": 0.0,
+        "subject_height_m": 0.0,
+        "subject_width_m": 0.0,
+        "subject_area_m2": 0.0,
+        "metric_aspect": 0.0,
+        "distance_median_m": 0.0,
+        "speed_mps": 0.0,
     }
     cal = calibrate(zone, frame_width, frame_height)
     if cal is None:
@@ -1430,20 +1463,38 @@ def _metric_track_features(
     off_plane = 0
     heights: list[float] = []
     distances: list[float] = []
+    widths: list[float] = []
+    aspects: list[float] = []
+    areas: list[float] = []
+    ground_tracks: list[tuple[int, np.ndarray]] = []
     for detected in considered:
         if detected.largest is None or detected.recovered or detected.filled_by_reverse:
             continue
         genuine += 1
         x, y, w, h = cv2.boundingRect(detected.largest)
         base = (x + w / 2.0, float(y + h))
-        if cal.ground_point(base) is None:
+        ground = cal.ground_point(base)
+        if ground is None:
             off_plane += 1
             continue
+        ground_tracks.append((detected.index, ground))
         height = cal.height_m(base, float(y), enforce_limits=False)
         if height is None or height > MAX_SUBJECT_HEIGHT_M:
             implausible += 1
-        elif height > 0:
-            heights.append(height)
+            continue
+        if height <= 0:
+            continue
+        heights.append(height)
+        left = cal.ground_point((float(x), float(y + h)))
+        right = cal.ground_point((float(x + w), float(y + h)))
+        if left is None or right is None:
+            continue
+        width = float(np.linalg.norm(right - left))
+        if width <= 0:
+            continue
+        widths.append(width)
+        aspects.append(height / width)
+        areas.append(height * width)
         distance = cal.distance_m(base)
         if distance is not None:
             distances.append(distance)
@@ -1451,12 +1502,25 @@ def _metric_track_features(
     if genuine == 0:
         return {**zeros, "uncalibrated": 0.0}
 
+    speeds: list[float] = []
+    if fps > 0:
+        for (idx_a, ga), (idx_b, gb) in zip(ground_tracks, ground_tracks[1:], strict=False):
+            dt = (idx_b - idx_a) / fps
+            if dt > 0:
+                speeds.append(float(np.linalg.norm(gb - ga)) / dt)
+
     return {
         "implausible_height_fraction": implausible / genuine,
         "off_plane_fraction": off_plane / genuine,
         "height_consistency": area_stability(heights),
         "depth_progression": depth_progression(distances),
         "depth_range_m": max(distances) - min(distances) if len(distances) >= 2 else 0.0,
+        "subject_height_m": float(np.median(heights)) if heights else 0.0,
+        "subject_width_m": float(np.median(widths)) if widths else 0.0,
+        "subject_area_m2": float(np.median(areas)) if areas else 0.0,
+        "metric_aspect": float(np.median(aspects)) if aspects else 0.0,
+        "distance_median_m": float(np.median(distances)) if distances else 0.0,
+        "speed_mps": float(np.median(speeds)) if speeds else 0.0,
         "uncalibrated": 0.0,
     }
 
@@ -1512,6 +1576,10 @@ def extract_clip_features(
     )
     if detection is None:
         return None
+
+    # Real elapsed time between frames for speed_mps -- detect_clip itself
+    # only tracks frame INDEX, not wall-clock spacing.
+    fps = cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS) or 10.0
 
     frame_width, frame_height = detection.frame_width, detection.frame_height
     considered = detection.frames
@@ -1664,7 +1732,7 @@ def extract_clip_features(
         ),
         "scenery_motion_fraction": detection.scenery_motion_fraction,
         "has_reference_background": float(detection.has_reference_background),
-        **_metric_track_features(considered, zone, frame_width, frame_height),
+        **_metric_track_features(considered, zone, frame_width, frame_height, fps),
     }
 
 

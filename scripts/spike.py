@@ -80,6 +80,7 @@ from src.ground_calibration import (  # noqa: E402
     calibrate,
 )
 from src.zones import (  # noqa: E402
+    classify_zone,
     median_fence_distance,
     outside_pixel_fraction,
     track_crosses_fence,
@@ -103,8 +104,7 @@ FEATURE_COLUMNS = (
     "green_light_ratio",
     "green_light_flicker",
     "warmup_flashlight_ratio",
-    "warmup_track_fraction",
-    "warmup_subject_left",
+    "warmup_outside_fraction",
     "flashlight_subject_fraction",
     "row_normalised_area",
     "edge_density",
@@ -1395,10 +1395,10 @@ def detect_clip(
 
 
 def _warmup_motion_features(
-    detection: ClipDetection, frame_width: int, frame_height: int
+    detection: ClipDetection, zone: CameraZone, frame_width: int, frame_height: int
 ) -> dict[str, float]:
-    """Track whatever is moving in the DROPPED IR-flare frames, and decide
-    whether it carried on into the scored frames or left before they began.
+    """Track whatever is moving in the DROPPED IR-flare frames and classify
+    which side of the fence it was on.
 
     The warmup frames are dropped because a global IR gain step dwarfs any
     subject in consecutive-frame differencing. Normalising each frame by its
@@ -1406,18 +1406,26 @@ def _warmup_motion_features(
     camera is plainly visible -- verified on cam06/21377, where the guard shows
     as a 97x136 blob tracking left and out of the bottom-left corner.
 
-    The useful signal is not "was something moving in the warmup" (an intruder
-    moves there too -- measured incident p50 0.54, guard p50 0.43, so it
-    separates nothing on its own). It is whether that subject CONTINUED into
-    the scored frames. If it did, the scored track is the same object and has
-    more evidence behind it. If it did not, the subject left before scoring
-    started and whatever the scored frames locked onto is a different thing --
-    a vine, a wind-blown bush, a camera artifact on the final frame.
+    Only the zone verdict survives. Measured on 424 labelled clips by
+    leave-one-out AUC, adding features to the ranker baseline of 0.792:
+
+        warmup_outside_fraction            0.809  (+0.017)  <- kept
+        warmup_track_fraction              0.787  (-0.006)
+        warmup_zone_classifiable_fraction  0.791  (-0.001)
+        warmup_subject_left                0.773  (-0.019)
+        all four together                  0.779  (-0.014)
+
+    So "was something moving in the warmup" and "did it continue into the
+    scored frames" are both worthless -- an intruder moves and leaves there
+    just as readily as a guard. WHERE it moved is what carries information,
+    for the same reason `outside_frame_fraction` does: it is real independent
+    evidence even when the subject left before scoring started and no
+    flashlight was ever visible (cam06/21377 has zero warmup flashlight).
+
+    Not usable as a hard suppression rule: a fully-inside warmup track catches
+    97/205 guards but also 4/12 positives, so it stays a ranker input only.
     """
-    zeros = {
-        "warmup_track_fraction": 0.0,
-        "warmup_subject_left": 0.0,
-    }
+    zeros = {"warmup_outside_fraction": 0.0}
     dropped = detection.dropped_frames
     if len(dropped) < 2:
         return zeros
@@ -1446,32 +1454,24 @@ def _warmup_motion_features(
             continue
         if not 0.01 * frame_area <= area <= 0.35 * frame_area:
             continue
-        track.append((x + w / 2.0, y + h / 2.0, x, y, w, h))
+        track.append((x, y, w, h))
 
     if not track:
         return zeros
 
-    fraction = len(track) / (len(grey) - 1)
-    last_cx, last_cy, x, y, w, h = track[-1]
-
-    first_scored = next(
-        (
-            fd
-            for fd in detection.frames
-            if fd.largest is not None and not fd.recovered and not fd.filled_by_reverse
-        ),
-        None,
-    )
-    continued = False
-    if first_scored is not None:
-        sx, sy, sw, sh = cv2.boundingRect(first_scored.largest)
-        gap = float(np.hypot((sx + sw / 2.0) - last_cx, (sy + sh / 2.0) - last_cy))
-        diagonal = float(np.hypot(frame_width, frame_height))
-        continued = gap <= 0.25 * diagonal
+    # Same base-of-box convention and same geometry every scored side feature
+    # uses, so a warmup verdict is directly comparable to outside_frame_fraction.
+    verdicts = [
+        classify_zone(((bx + bw / 2.0) / frame_width, (by + bh) / frame_height), zone)
+        for bx, by, bw, bh in track
+    ]
+    classifiable = [v for v in verdicts if v in ("outside", "inside")]
+    if not classifiable:
+        return zeros
 
     return {
-        "warmup_track_fraction": fraction,
-        "warmup_subject_left": 0.0 if continued else 1.0,
+        "warmup_outside_fraction": sum(1 for v in classifiable if v == "outside")
+        / len(classifiable)
     }
 
 
@@ -1843,7 +1843,7 @@ def extract_clip_features(
             0.0 if is_daylight_color else green_light_flicker(whole_frame_green_ratios)
         ),
         "warmup_flashlight_ratio": warmup_flashlight_ratio,
-        **_warmup_motion_features(detection, frame_width, frame_height),
+        **_warmup_motion_features(detection, zone, frame_width, frame_height),
         "flashlight_subject_fraction": (
             0.0
             if is_daylight_color or not frames_with_box

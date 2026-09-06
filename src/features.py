@@ -322,6 +322,24 @@ def area_stability(areas: Sequence[float]) -> float:
     return math.sqrt(variance) / mean
 
 
+def depth_progression(distances: Sequence[float]) -> float:
+    """Net change in ground-plane distance, divided by the total distance
+    travelled back and forth (see `src.ground_calibration`).
+
+    A subject walking steadily along the fence line changes range in one
+    direction, so this stays near 1; one that mills in place, or an artifact
+    that never really moves in depth, drifts back and forth and stays near 0.
+    0.0 with fewer than 2 samples or no measured movement at all.
+    """
+    if len(distances) < 2:
+        return 0.0
+    steps = [abs(b - a) for a, b in zip(distances, distances[1:], strict=False)]
+    total_variation = sum(steps)
+    if total_variation <= 0:
+        return 0.0
+    return abs(distances[-1] - distances[0]) / total_variation
+
+
 def normalised_speed(centroids: Sequence[tuple[float, float]], blob_width: float) -> float:
     """Mean per-frame centroid displacement in blob-widths ("body lengths").
 

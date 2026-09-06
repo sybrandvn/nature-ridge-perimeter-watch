@@ -6,6 +6,7 @@ from src.features import (
     area_stability,
     aspect_ratio,
     color_saturation_fraction,
+    depth_progression,
     detect_stationary_light_mask,
     edge_density,
     flare_frames,
@@ -320,6 +321,27 @@ def test_area_stability_degenerate_inputs_are_zero():
     assert area_stability([]) == 0.0
     assert area_stability([50.0]) == 0.0
     assert area_stability([0.0, 0.0]) == 0.0
+
+
+def test_depth_progression_one_for_steady_one_way_travel():
+    assert depth_progression([1.0, 2.0, 3.0, 4.0]) == pytest.approx(1.0)
+
+
+def test_depth_progression_zero_for_no_net_movement():
+    # out then back to the start -- total variation is nonzero but net change is 0
+    assert depth_progression([5.0, 8.0, 5.0]) == pytest.approx(0.0)
+
+
+def test_depth_progression_partial_for_mixed_travel():
+    steady = depth_progression([1.0, 2.0, 3.0, 4.0])
+    mixed = depth_progression([1.0, 3.0, 2.0, 4.0])
+    assert 0.0 < mixed < steady
+
+
+def test_depth_progression_degenerate_inputs_are_zero():
+    assert depth_progression([]) == 0.0
+    assert depth_progression([5.0]) == 0.0
+    assert depth_progression([5.0, 5.0, 5.0]) == 0.0
 
 
 def test_normalised_speed_is_scale_invariant():

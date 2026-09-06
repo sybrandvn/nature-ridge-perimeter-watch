@@ -51,6 +51,7 @@ from src.features import (  # noqa: E402
     area_stability,
     aspect_ratio,
     color_saturation_fraction,
+    depth_progression,
     detect_stationary_light_mask,
     edge_density,
     flare_frames,
@@ -111,6 +112,9 @@ FEATURE_COLUMNS = (
     "has_reference_background",
     "implausible_height_fraction",
     "off_plane_fraction",
+    "height_consistency",
+    "depth_progression",
+    "depth_range_m",
     "uncalibrated",
 )
 
@@ -1372,34 +1376,60 @@ def detect_clip(
     )
 
 
-def _metric_plausibility_features(
+def _metric_track_features(
     considered: list[FrameDetection], zone: CameraZone, frame_width: int, frame_height: int
 ) -> dict[str, float]:
-    """How often this clip's tracked blob implies an impossible real-world
-    height, or sits somewhere the ground-plane model says isn't the ground at
-    all (see `src.ground_calibration`) -- a physics gate meant to catch
-    flare/rain/branch artifacts before they reach the shape-based rules, not a
-    trustworthy height measurement (compare `estimated_height_m`, which is
-    the older per-row-ruler estimate, still reported separately).
+    """Metric features from the ground-plane model (see `src.ground_calibration`),
+    computed in one pass over genuine bg-diff frames (excludes recovered/
+    reverse-filled, matching every other per-frame feature in this module --
+    a hallucinated continuation box says nothing about the real subject).
 
     Only meaningful when this camera has opted in to metric calibration
-    (`zone.metric_calibration`); `uncalibrated=1.0` otherwise, and the other
-    two are 0.0 rather than misleadingly "clean".
+    (`zone.metric_calibration`); `uncalibrated=1.0` otherwise and every other
+    key here is 0.0 rather than misleadingly "clean" or "consistent".
 
-    Genuine bg-diff hits only (excludes recovered/reverse-filled frames),
-    matching every other per-frame feature in this module -- a hallucinated
-    continuation box says nothing about the real subject's shape.
+    implausible_height_fraction / off_plane_fraction -- a physics gate: how
+    often the blob implies an impossible real-world height, or sits somewhere
+    the model says isn't the ground at all. Meant to catch flare/rain/branch
+    artifacts before they reach the shape-based rules, not to report a
+    trustworthy height (compare `estimated_height_m`, the older per-row-ruler
+    estimate, still reported separately).
+
+    height_consistency -- coefficient of variation of the RAW implied height
+    (enforce_limits=False) across frames where the base point is on the
+    ground plane. A real rigid subject keeps roughly the same real height
+    frame to frame; a rain streak, swaying branch or flare does not. LOWER is
+    more subject-like -- same convention as `src.features.area_stability`.
+    0.0 with fewer than 2 valid samples (no evidence of instability, not
+    "perfectly consistent").
+
+    depth_progression -- net ground-plane distance travelled, divided by the
+    total distance travelled back and forth. A guard patrolling the fence
+    line changes range steadily (ratio near 1); vegetation or a fixed-point
+    artifact does not translate in depth at all (ratio near 0, or 0.0 if
+    distance never measurably changed). Deliberately independent of the
+    guard's flashlight being visible, unlike `green_light_ratio`.
+
+    depth_range_m -- max minus min ground-plane distance across the clip,
+    in real metres. Separates a subject traversing the view from one milling
+    in place at a single range.
     """
+    zeros = {
+        "implausible_height_fraction": 0.0,
+        "off_plane_fraction": 0.0,
+        "height_consistency": 0.0,
+        "depth_progression": 0.0,
+        "depth_range_m": 0.0,
+    }
     cal = calibrate(zone, frame_width, frame_height)
     if cal is None:
-        return {
-            "implausible_height_fraction": 0.0,
-            "off_plane_fraction": 0.0,
-            "uncalibrated": 1.0,
-        }
+        return {**zeros, "uncalibrated": 1.0}
+
     genuine = 0
     implausible = 0
     off_plane = 0
+    heights: list[float] = []
+    distances: list[float] = []
     for detected in considered:
         if detected.largest is None or detected.recovered or detected.filled_by_reverse:
             continue
@@ -1412,15 +1442,21 @@ def _metric_plausibility_features(
         height = cal.height_m(base, float(y), enforce_limits=False)
         if height is None or height > MAX_SUBJECT_HEIGHT_M:
             implausible += 1
+        elif height > 0:
+            heights.append(height)
+        distance = cal.distance_m(base)
+        if distance is not None:
+            distances.append(distance)
+
     if genuine == 0:
-        return {
-            "implausible_height_fraction": 0.0,
-            "off_plane_fraction": 0.0,
-            "uncalibrated": 0.0,
-        }
+        return {**zeros, "uncalibrated": 0.0}
+
     return {
         "implausible_height_fraction": implausible / genuine,
         "off_plane_fraction": off_plane / genuine,
+        "height_consistency": area_stability(heights),
+        "depth_progression": depth_progression(distances),
+        "depth_range_m": max(distances) - min(distances) if len(distances) >= 2 else 0.0,
         "uncalibrated": 0.0,
     }
 
@@ -1628,7 +1664,7 @@ def extract_clip_features(
         ),
         "scenery_motion_fraction": detection.scenery_motion_fraction,
         "has_reference_background": float(detection.has_reference_background),
-        **_metric_plausibility_features(considered, zone, frame_width, frame_height),
+        **_metric_track_features(considered, zone, frame_width, frame_height),
     }
 
 

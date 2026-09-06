@@ -1118,6 +1118,9 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
         "persistence",
         "implausible_height_fraction",
         "off_plane_fraction",
+        "height_consistency",
+        "depth_progression",
+        "depth_range_m",
         "uncalibrated",
     ):
         assert key in result
@@ -1135,6 +1138,48 @@ def test_extract_clip_features_uncalibrated_when_zone_has_no_pickets(monkeypatch
     assert result["uncalibrated"] == 1.0
     assert result["implausible_height_fraction"] == 0.0
     assert result["off_plane_fraction"] == 0.0
+    assert result["height_consistency"] == 0.0
+    assert result["depth_progression"] == 0.0
+    assert result["depth_range_m"] == 0.0
+
+
+# cam06's real, already-validated geometry (src/ground_calibration.py's tests
+# cover calibrate() correctness in isolation) -- reused here just to get a
+# non-None GroundCalibration, so this test can check _metric_track_features'
+# own aggregation over frames, not the calibration math itself.
+_CALIBRATED_ZONE = CameraZone(
+    fence=((0.4532, 0.1427), (0.3171, 0.5688), (0.1809, 0.9948)),
+    outside="right",
+    depth_cutoff=0.05,
+    ignore=(),
+    fence_bottom=(
+        (0.5028, 0.0688),
+        (0.4992, 0.3003),
+        (0.4953, 0.5318),
+        (0.4914, 0.7633),
+        (0.4875, 0.9948),
+    ),
+    fence_pickets=(
+        ((0.3453, 0.5711), (0.4649, 0.9969)),
+        ((0.3907, 0.4188), (0.4762, 0.8445)),
+        ((0.4102, 0.366), (0.4832, 0.7392)),
+    ),
+    metric_calibration=True,
+)
+
+
+def test_extract_clip_features_depth_progression_higher_for_steady_travel(monkeypatch, tmp_path):
+    steady = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
+    oscillating = [_frame_with_square(pos) for pos in (5, 20, 8, 22, 6, 24)]
+
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(steady))
+    steady_result = spike.extract_clip_features(str(tmp_path / "a.mp4"), _CALIBRATED_ZONE)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(oscillating))
+    oscillating_result = spike.extract_clip_features(str(tmp_path / "b.mp4"), _CALIBRATED_ZONE)
+
+    assert steady_result["uncalibrated"] == 0.0
+    assert oscillating_result["uncalibrated"] == 0.0
+    assert steady_result["depth_progression"] > oscillating_result["depth_progression"]
 
 
 def test_extract_clip_features_ignores_ir_warmup_brightness_swing(monkeypatch, tmp_path):

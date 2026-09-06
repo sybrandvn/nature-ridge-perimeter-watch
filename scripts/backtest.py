@@ -120,6 +120,9 @@ REPORT_COLUMNS = (
     "blob_count",
     "implausible_height_fraction",
     "off_plane_fraction",
+    "height_consistency",
+    "depth_progression",
+    "depth_range_m",
     "uncalibrated",
 )
 

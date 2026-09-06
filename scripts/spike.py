@@ -89,6 +89,7 @@ FEATURE_COLUMNS = (
     "is_daylight",
     "outside_pixel_fraction",
     "zone_classifiable_fraction",
+    "outside_frame_fraction",
     "aspect_ratio",
     "solidity",
     "saturation_ratio",
@@ -1635,6 +1636,8 @@ def extract_clip_features(
     blob_count = 0
     frames_with_box = 0
     flashlight_bbox_frames = 0
+    classified_frames = 0
+    outside_frames = 0
 
     for detected in considered:
         whole_frame_green_ratios.append(
@@ -1683,6 +1686,17 @@ def extract_clip_features(
                 genuine_detected_indices.append(detected.index)
                 genuine_blob_areas.append(area)
                 genuine_centroids.append(detected.centroid)
+                # Per-frame side verdict. The single-best-frame
+                # `outside_pixel_fraction` below describes the clearest
+                # silhouette; this instead asks how much of the TRACK was
+                # spent outside, which is what separates a subject that was
+                # genuinely out there from one caught outside on a single
+                # frame (a beam sweep, or a guard leaning over the line).
+                frame_points = normalized_contour_points(contour, frame_width, frame_height)
+                if zone_classifiable_fraction(frame_points, zone) > 0.0:
+                    classified_frames += 1
+                    if outside_pixel_fraction(frame_points, zone) > 0.5:
+                        outside_frames += 1
 
     if best_contour is None or best_frame is None:
         best_contour, best_frame = best_contour_any, best_frame_any
@@ -1700,6 +1714,9 @@ def extract_clip_features(
     return {
         "outside_pixel_fraction": outside_pixel_fraction(points, zone),
         "zone_classifiable_fraction": zone_classifiable_fraction(points, zone),
+        "outside_frame_fraction": (
+            outside_frames / classified_frames if classified_frames else 0.0
+        ),
         "aspect_ratio": aspect_ratio(best_contour),
         "solidity": solidity(best_contour),
         "saturation_ratio": saturation_ratio(best_frame, best_contour),

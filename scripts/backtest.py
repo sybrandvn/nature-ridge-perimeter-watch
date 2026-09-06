@@ -147,6 +147,7 @@ REPORT_COLUMNS = (
     "persistence",
     "outside_pixel_fraction",
     "zone_classifiable_fraction",
+    "outside_frame_fraction",
     "median_fence_distance",
     "color_fraction",
     "path_length",

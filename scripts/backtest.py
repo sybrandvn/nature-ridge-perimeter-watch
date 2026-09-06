@@ -159,6 +159,8 @@ REPORT_COLUMNS = (
     "color_fraction",
     "path_length",
     "blob_count",
+    "recovered_fraction",
+    "scenery_motion_fraction",
     "implausible_height_fraction",
     "off_plane_fraction",
     "height_consistency",

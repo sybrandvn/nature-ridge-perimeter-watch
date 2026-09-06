@@ -34,11 +34,20 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
+from scripts.label import _event_key  # noqa: E402
 from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
+from src.features import is_daylight  # noqa: E402
+from src.reference_bg import (  # noqa: E402
+    era_of,
+    load_manifest,
+    load_reference_image,
+    reference_for,
+)
 
 ExtractFn = Callable[..., "dict[str, float] | None"]
 
@@ -83,8 +92,25 @@ def iter_clips_with_files(conn: Any, *, camera_id: str | None = None) -> Iterato
             "camera_id": row["camera_id"],
             "timestamp": row["timestamp"],
             "file_path": row["file_path"],
+            "caption": row["caption"],
             "label": label_row["label"] if label_row is not None else None,
         }
+
+
+def reference_background_for(entries, root, camera, timestamp):
+    """This camera's reference background for the clip's era and lighting, or
+    None when nothing covers it. Same resolution as scripts/render_debug.py and
+    scripts/backtest.py, so every tool scores the same signal the same way."""
+    if not entries or timestamp is None:
+        return None
+    entry = reference_for(
+        entries,
+        camera.id,
+        timestamp,
+        era=era_of(camera, timestamp),
+        daylight=is_daylight(timestamp),
+    )
+    return None if entry is None else load_reference_image(Path(root), entry)
 
 
 def collect_features(
@@ -92,6 +118,8 @@ def collect_features(
     cameras: CamerasConfig,
     *,
     camera_id: str | None = None,
+    reference_entries: Any = None,
+    reference_root: str = "data/reference_bg",
     extract_fn: ExtractFn = extract_clip_features,
 ) -> list[dict[str, Any]]:
     """Single-process feature collection -- the testable, injectable core. The
@@ -105,12 +133,20 @@ def collect_features(
         if camera is None:
             unknown_cameras.add(clip["camera_id"])
             continue
-        features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]))
+        extra: dict[str, Any] = {}
+        reference = reference_background_for(
+            reference_entries, reference_root, camera, clip["timestamp"]
+        )
+        if reference is not None:
+            extra["reference_background"] = reference
+        features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]), **extra)
         row = {
             "channel_id": clip["channel_id"],
             "message_id": clip["message_id"],
             "camera_id": clip["camera_id"],
             "timestamp": clip["timestamp"],
+            "caption": clip.get("caption"),
+            "file_path": clip["file_path"],
             "label": clip["label"],
             "detected": features is not None,
         }
@@ -123,11 +159,17 @@ def collect_features(
 
 
 _WORKER_CAMERAS: CamerasConfig | None = None
+_WORKER_REFERENCE_ENTRIES: Any = None
+_WORKER_REFERENCE_ROOT: str = "data/reference_bg"
 
 
-def _init_worker(cameras_path: str) -> None:
-    global _WORKER_CAMERAS
+def _init_worker(cameras_path: str, reference_root: str = "data/reference_bg") -> None:
+    global _WORKER_CAMERAS, _WORKER_REFERENCE_ENTRIES, _WORKER_REFERENCE_ROOT
     _WORKER_CAMERAS = load_cameras_config(cameras_path)
+    _WORKER_REFERENCE_ROOT = reference_root
+    # Loaded per worker rather than pickled across the fork: the manifest is
+    # small, the reference IMAGES it points at are not.
+    _WORKER_REFERENCE_ENTRIES = load_manifest(reference_root) if reference_root else []
 
 
 def _extract_worker(clip: dict[str, Any]) -> dict[str, Any]:
@@ -136,13 +178,23 @@ def _extract_worker(clip: dict[str, Any]) -> dict[str, Any]:
         "message_id": clip["message_id"],
         "camera_id": clip["camera_id"],
         "timestamp": clip["timestamp"],
+        "caption": clip.get("caption"),
+        "file_path": clip["file_path"],
         "label": clip["label"],
     }
     camera = _WORKER_CAMERAS.by_id(clip["camera_id"]) if _WORKER_CAMERAS else None
     features = None
     if camera is not None:
         try:
-            features = extract_clip_features(clip["file_path"], camera.zone_at(clip["timestamp"]))
+            extra: dict[str, Any] = {}
+            reference = reference_background_for(
+                _WORKER_REFERENCE_ENTRIES, _WORKER_REFERENCE_ROOT, camera, clip["timestamp"]
+            )
+            if reference is not None:
+                extra["reference_background"] = reference
+            features = extract_clip_features(
+                clip["file_path"], camera.zone_at(clip["timestamp"]), **extra
+            )
         except Exception:
             features = None
     row["detected"] = features is not None
@@ -152,12 +204,14 @@ def _extract_worker(clip: dict[str, Any]) -> dict[str, Any]:
 
 
 def _collect_features_parallel(
-    conn: Any, cameras_path: str, *, workers: int
+    conn: Any, cameras_path: str, *, workers: int, reference_root: str = "data/reference_bg"
 ) -> list[dict[str, Any]]:
     clips = list(iter_clips_with_files(conn))
     print(f"clips with a file: {len(clips)}")
     rows: list[dict[str, Any]] = []
-    with Pool(workers, initializer=_init_worker, initargs=(cameras_path,)) as pool:
+    with Pool(
+        workers, initializer=_init_worker, initargs=(cameras_path, reference_root)
+    ) as pool:
         for i, row in enumerate(pool.imap_unordered(_extract_worker, clips, chunksize=40)):
             rows.append(row)
             if i % 2000 == 0:
@@ -211,6 +265,45 @@ def leave_one_out_auc(x: np.ndarray, y: np.ndarray, **fit_kwargs: Any) -> float:
     return auc(scores[pos], scores[~pos])
 
 
+def clip_duration_seconds(file_path: str) -> float:
+    cap = cv2.VideoCapture(file_path)
+    try:
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+    finally:
+        cap.release()
+    return frame_count / fps if frame_count > 0 and fps > 0 else 0.0
+
+
+def prefer_longest_per_event(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse rows sharing an embedded alert timestamp (the same physical
+    trigger, per `scripts.label._event_key`) to just the longest clip.
+
+    A review queue should never spend a slot on an event's short startup-only
+    clip when its longer, more representative sibling exists -- reviewing the
+    short one on its own tells you nothing. Same rule and same helper as
+    `scripts.render_debug._prefer_longest_per_event`; rows with no parseable
+    event key are always kept.
+    """
+    best_by_key: dict[str, dict[str, Any]] = {}
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        key = _event_key(row["camera_id"], row.get("caption"))
+        if key is None:
+            result.append(row)
+            continue
+        existing = best_by_key.get(key)
+        if existing is None:
+            best_by_key[key] = row
+            result.append(row)
+        elif clip_duration_seconds(row.get("file_path") or "") > clip_duration_seconds(
+            existing.get("file_path") or ""
+        ):
+            result[result.index(existing)] = row
+            best_by_key[key] = row
+    return result
+
+
 def stratified_top_n(
     rows: list[dict[str, Any]],
     *,
@@ -260,6 +353,7 @@ def rank_and_write(
         row["score"] = round(float(score), 3)
 
     unlabelled = [r for r in detected if not r["label"]]
+    unlabelled = prefer_longest_per_event(unlabelled)
     queue = stratified_top_n(unlabelled, top_n=top_per_camera)
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -284,16 +378,36 @@ def main() -> None:  # pragma: no cover - requires the real corpus/db
     parser.add_argument("--top-per-camera", type=int, default=25)
     parser.add_argument("--workers", type=int, default=1, help="1 runs single-process")
     parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "--reference-bg",
+        default="data/reference_bg",
+        help="per-camera reference background directory (build with scripts/build_reference_bg.py)",
+    )
+    parser.add_argument(
+        "--no-reference-bg",
+        action="store_true",
+        help="disable the reference-background scenery veto, for before/after comparison",
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
     cameras_cfg = load_cameras_config("config/cameras.yaml")
     conn = db.connect(app_cfg.db_path)
 
+    reference_root = "" if args.no_reference_bg else args.reference_bg
+    reference_entries = [] if args.no_reference_bg else load_manifest(args.reference_bg)
     if args.workers > 1 and args.camera is None:
-        rows = _collect_features_parallel(conn, "config/cameras.yaml", workers=args.workers)
+        rows = _collect_features_parallel(
+            conn, "config/cameras.yaml", workers=args.workers, reference_root=reference_root
+        )
     else:
-        rows = collect_features(conn, cameras_cfg, camera_id=args.camera)
+        rows = collect_features(
+            conn,
+            cameras_cfg,
+            camera_id=args.camera,
+            reference_entries=reference_entries,
+            reference_root=args.reference_bg,
+        )
     conn.close()
 
     print(f"detected: {sum(1 for r in rows if r.get('detected'))}/{len(rows)}")

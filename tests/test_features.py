@@ -5,6 +5,7 @@ import pytest
 from src.features import (
     area_stability,
     aspect_ratio,
+    blob_white_fraction,
     color_saturation_fraction,
     depth_progression,
     detect_stationary_light_mask,
@@ -77,6 +78,19 @@ def test_saturation_ratio_near_zero_for_greyscale_content():
     frame = np.full((50, 50, 3), 128, dtype=np.uint8)  # uniform grey, zero saturation
     contour = _rect_contour(10, 10, 20, 20)
     assert saturation_ratio(frame, contour) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_blob_white_fraction_detects_overexposed_content():
+    frame = np.full((50, 50, 3), 50, dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (29, 29), (250, 250, 250), thickness=-1)  # overexposed
+    contour = _rect_contour(10, 10, 20, 20)
+    assert blob_white_fraction(frame, contour) > 0.9
+
+
+def test_blob_white_fraction_zero_for_dim_content():
+    frame = np.full((50, 50, 3), 50, dtype=np.uint8)
+    contour = _rect_contour(10, 10, 20, 20)
+    assert blob_white_fraction(frame, contour) == pytest.approx(0.0)
 
 
 def test_color_saturation_fraction_high_for_broad_daylight_colour():

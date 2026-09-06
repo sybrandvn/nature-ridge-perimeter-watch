@@ -69,6 +69,28 @@ def saturation_ratio(frame_bgr: np.ndarray, contour: np.ndarray) -> float:
     return float(pixels.mean()) / 255.0
 
 
+def blob_white_fraction(
+    frame_bgr: np.ndarray, contour: np.ndarray, *, brightness_threshold: int = 220
+) -> float:
+    """Fraction of the contour's own pixels reading near-white/overexposed.
+
+    A bright wind-blown obstruction (vegetation, a web) sitting right against
+    the lens saturates the sensor -- genuinely overexposed grey (near 255),
+    not just brightly lit. A real subject's skin/clothing/fur rarely reads
+    this way even under a flashlight. Measured 2026-09-06 on the labelled
+    corpus: animal's max across every clip is 0.182, incident's is 0.310 --
+    both well under the 0.4 threshold `classify()` uses, while several
+    known-blinding guard clips hit 0.94-1.00.
+    """
+    mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+    cv2.drawContours(mask, [contour], -1, color=255, thickness=-1)
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    pixels = gray[mask == 255]
+    if pixels.size == 0:
+        return 0.0
+    return float((pixels > brightness_threshold).mean())
+
+
 def color_saturation_fraction(frame_bgr: np.ndarray, *, saturation_threshold: int = 30) -> float:
     """Fraction of the WHOLE frame with HSV saturation above `saturation_threshold`.
 

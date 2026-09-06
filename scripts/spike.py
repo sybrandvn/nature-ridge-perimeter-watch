@@ -50,6 +50,7 @@ from src.features import (  # noqa: E402
     FLASHLIGHT_SUBJECT_THRESHOLD,
     area_stability,
     aspect_ratio,
+    blob_white_fraction,
     color_saturation_fraction,
     depth_progression,
     detect_stationary_light_mask,
@@ -108,6 +109,8 @@ FEATURE_COLUMNS = (
     "flashlight_subject_fraction",
     "row_normalised_area",
     "edge_density",
+    "blob_white_fraction",
+    "long_flare_frames",
     "path_length",
     "jitter",
     "persistence",
@@ -1729,6 +1732,7 @@ def extract_clip_features(
     whole_frame = _whole_frame_contour(frame_width, frame_height)
     motion_pixel_fraction = 0.0
     blob_count = 0
+    white_fraction = 0.0
     frames_with_box = 0
     flashlight_bbox_frames = 0
     classified_frames = 0
@@ -1765,6 +1769,13 @@ def extract_clip_features(
         if detected.recovered or detected.filled_by_reverse:
             non_genuine_frames += 1
         contour = detected.largest
+        if contour is not None:
+            # A bright vegetation/web obstruction against the lens genuinely
+            # overexposes the sensor (see blob_white_fraction's docstring) --
+            # checked on every frame with a box regardless of provenance,
+            # same reasoning as motion_pixel_fraction/blob_count above: a peak
+            # reading, since the obstruction only needs to appear once.
+            white_fraction = max(white_fraction, blob_white_fraction(detected.frame, contour))
         if contour is None:
             continue
         frames_with_box += 1
@@ -1851,6 +1862,8 @@ def extract_clip_features(
         ),
         "row_normalised_area": row_normalised_area(best_contour, ref_row),
         "edge_density": edge_density(best_frame, best_contour),
+        "blob_white_fraction": white_fraction,
+        "long_flare_frames": float(detection.warmup_dropped),
         "path_length": path_length(genuine_centroids),
         "jitter": jitter(genuine_centroids),
         "persistence": persistence(genuine_frames_detected, len(considered)),

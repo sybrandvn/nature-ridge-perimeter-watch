@@ -93,6 +93,7 @@ def iter_clips_with_files(conn: Any, *, camera_id: str | None = None) -> Iterato
             "file_path": row["file_path"],
             "caption": row["caption"],
             "label": label_row["label"] if label_row is not None else None,
+            "startup_state": label_row["startup_state"] if label_row is not None else None,
         }
 
 
@@ -147,6 +148,7 @@ def collect_features(
             "caption": clip.get("caption"),
             "file_path": clip["file_path"],
             "label": clip["label"],
+            "startup_state": clip.get("startup_state"),
             "detected": features is not None,
         }
         for feat in NUMERIC_FEATURES:
@@ -180,6 +182,7 @@ def _extract_worker(clip: dict[str, Any]) -> dict[str, Any]:
         "caption": clip.get("caption"),
         "file_path": clip["file_path"],
         "label": clip["label"],
+        "startup_state": clip.get("startup_state"),
     }
     camera = _WORKER_CAMERAS.by_id(clip["camera_id"]) if _WORKER_CAMERAS else None
     features = None
@@ -351,7 +354,19 @@ def rank_and_write(
     for row, score in zip(detected, scores, strict=True):
         row["score"] = round(float(score), 3)
 
-    unlabelled = [r for r in detected if not r["label"]]
+    # blank/duplicate rows have nothing worth reviewing on their own -- blank
+    # is empty content, duplicate is a literal frame-for-frame prefix of a
+    # longer sibling clip. Excluding them here (not just via
+    # prefer_longest_per_event) matters because that helper only collapses a
+    # pair when BOTH rows are in this same unlabelled/detected pool; a
+    # duplicate whose longer sibling has no file, wasn't detected, or is
+    # already labelled would otherwise stay in as a solo, uninformative
+    # candidate.
+    unlabelled = [
+        r
+        for r in detected
+        if not r["label"] and r.get("startup_state") not in ("blank", "duplicate")
+    ]
     unlabelled = prefer_longest_per_event(unlabelled)
     queue = stratified_top_n(unlabelled, top_n=top_per_camera)
 

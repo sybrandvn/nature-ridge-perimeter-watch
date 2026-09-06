@@ -270,6 +270,13 @@ cameras:
     # 2026-09-05: fence_bottom, traced by the user over data/history/cam08/4217.mp4.
     fence_bottom:
       [[0.4378, 0.1302], [0.4488, 0.3471], [0.46, 0.5641], [0.471, 0.781], [0.4819, 0.9979]]
+    # 2026-09-06: fence_pickets, traced by the user over the
+    # data/reports/picket_trace_2026-09-06/ screengrab -- initially missed on
+    # the first extraction pass (a chain of 1-4px anti-aliasing specks along
+    # the orange fence_bottom line's own edge nearly matched the same red
+    # threshold, but stayed well under the real trace's ~1400px size).
+    fence_pickets:
+      - [[0.3398, 0.4855], [0.4646, 0.9782]]
     # 2026-08-31: stationary background light (small greenish point, far down
     # the fence line) confirmed fixed across all 43 frames of
     # data/history/cam08/4055.mp4 -- pixel bbox never left x=[130,139],

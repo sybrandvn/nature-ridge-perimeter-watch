@@ -69,6 +69,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src import db  # noqa: E402
 from src.config import load_app_config  # noqa: E402
 from src.db import VALID_LABELS  # noqa: E402
+from src.features import sane_fps  # noqa: E402
 
 PromptFn = Callable[[Mapping], "tuple[str, str | None] | None"]  # None => quit
 BulkConfirmFn = Callable[[str, int], bool]
@@ -359,10 +360,14 @@ def _resolve_label(raw: str) -> str | None:
 
 
 def _clip_duration_seconds(path: str) -> float | None:
-    """Video duration in seconds, or None if the file is missing/unreadable."""
+    """Video duration in seconds, or None if the file is missing/unreadable.
+
+    ~2% of the corpus reports a corrupt container fps (1005 or 16000 against a
+    real 5) -- sane_fps clamps it so a genuinely long clip doesn't display an
+    absurd sub-second duration and get mistaken for a startup blip."""
     cap = cv2.VideoCapture(path)
     try:
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        fps = sane_fps(cap.get(cv2.CAP_PROP_FPS))
         frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
     finally:
         cap.release()

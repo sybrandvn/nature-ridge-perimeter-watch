@@ -152,6 +152,27 @@ def green_light_ratio(
 # If this much of a tracked box's own area is flashlight-hue pixels, the
 # tracked subject is the beam itself, not a person -- shared by the render
 # (relabels the box) and the model (a feature) so they never disagree.
+# These cameras record at 5 fps, but ~2% of the corpus carries corrupt fps
+# metadata -- measured values of 1005 and 16000 on a random 400-clip sample.
+# Anything derived from fps (real elapsed time, clip duration) is nonsense on
+# those clips unless the value is sanity-checked first.
+CAMERA_FPS = 5.0
+MAX_PLAUSIBLE_FPS = 60.0
+
+
+def sane_fps(raw_fps: float | None) -> float:
+    """A usable frame rate, falling back to `CAMERA_FPS` when the container's
+    metadata is missing or impossible.
+
+    Left unchecked this silently scaled `speed_mps` by up to 3200x on the
+    affected clips, which is exactly the kind of unbounded outlier a fitted
+    ranker latches onto (see the subject_width_m incident, 2026-09-06).
+    """
+    if not raw_fps or raw_fps <= 0 or raw_fps > MAX_PLAUSIBLE_FPS:
+        return CAMERA_FPS
+    return float(raw_fps)
+
+
 FLASHLIGHT_SUBJECT_THRESHOLD = 0.5
 
 

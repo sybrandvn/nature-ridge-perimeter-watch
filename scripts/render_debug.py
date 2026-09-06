@@ -72,6 +72,7 @@ from src.features import (  # noqa: E402
     ignore_region_mask,
     is_daylight,
     is_twilight,
+    sane_fps,
 )
 from src.ground_calibration import GroundCalibration, calibrate  # noqa: E402
 from src.reference_bg import (  # noqa: E402
@@ -506,7 +507,7 @@ def render_clip(
         max_flare_fraction=max_flare_fraction,
     )
 
-    source_fps = cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS) or 10.0
+    source_fps = sane_fps(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS))
     width, height = detection.frame_width * scale, detection.frame_height * scale
     # None unless this camera opted in via `metric_calibration` in cameras.yaml.
     calib = calibrate(zone, detection.frame_width, detection.frame_height)
@@ -878,10 +879,10 @@ def _clip_duration_seconds(file_path: str) -> float:
     cap = cv2.VideoCapture(file_path)
     try:
         frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        fps = sane_fps(cap.get(cv2.CAP_PROP_FPS))
     finally:
         cap.release()
-    return frame_count / fps if frame_count > 0 and fps > 0 else 0.0
+    return frame_count / fps if frame_count > 0 else 0.0
 
 
 def _prefer_longest_per_event(clips: list[dict]) -> list[dict]:

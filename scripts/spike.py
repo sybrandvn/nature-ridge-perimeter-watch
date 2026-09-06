@@ -68,12 +68,14 @@ from src.features import (  # noqa: E402
     path_length,
     persistence,
     row_normalised_area,
+    sane_fps,
     saturation_ratio,
     solidity,
     time_of_day,
 )
 from src.ground_calibration import (  # noqa: E402
     MAX_SUBJECT_HEIGHT_M,
+    MAX_SUBJECT_SPEED_MPS,
     MAX_SUBJECT_WIDTH_M,
     calibrate,
 )
@@ -100,6 +102,7 @@ FEATURE_COLUMNS = (
     "color_fraction",
     "green_light_ratio",
     "green_light_flicker",
+    "warmup_flashlight_ratio",
     "flashlight_subject_fraction",
     "row_normalised_area",
     "edge_density",
@@ -1514,7 +1517,11 @@ def _metric_track_features(
         for (idx_a, ga), (idx_b, gb) in zip(ground_tracks, ground_tracks[1:], strict=False):
             dt = (idx_b - idx_a) / fps
             if dt > 0:
-                speeds.append(float(np.linalg.norm(gb - ga)) / dt)
+                speed = float(np.linalg.norm(gb - ga)) / dt
+                # Nothing on this terrain outruns a sprint; a higher reading is
+                # a tracker jump between unrelated blobs, not a fast subject.
+                if speed <= MAX_SUBJECT_SPEED_MPS:
+                    speeds.append(speed)
 
     return {
         "implausible_height_fraction": implausible / genuine,
@@ -1585,8 +1592,9 @@ def extract_clip_features(
         return None
 
     # Real elapsed time between frames for speed_mps -- detect_clip itself
-    # only tracks frame INDEX, not wall-clock spacing.
-    fps = cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS) or 10.0
+    # only tracks frame INDEX, not wall-clock spacing. Sanitised because ~2% of
+    # this corpus reports impossible fps (1005, 16000).
+    fps = sane_fps(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS))
 
     frame_width, frame_height = detection.frame_width, detection.frame_height
     considered = detection.frames
@@ -1642,6 +1650,24 @@ def extract_clip_features(
     flashlight_bbox_frames = 0
     classified_frames = 0
     outside_frames = 0
+
+    # The guard's flashlight is often visible ONLY in the frames dropped for IR
+    # flare: they walk out of shot before the gain settles, so every scored
+    # frame afterwards contains just whatever moved next (a vine, a bush, a
+    # camera artifact on the last frame). Measured 2026-09-06 on the clips the
+    # user reviewed, the warmup green signal ran 76-97x the scored signal on
+    # exactly those guard clips. Scoring the dropped frames for the flashlight
+    # recovers the guard evidence without letting the flare-corrupted frames
+    # anywhere near the motion features.
+    warmup_flashlight_ratio = 0.0
+    if detection.dropped_frames:
+        warmup_colour = [color_saturation_fraction(f) for f in detection.dropped_frames]
+        warmup_daylight = sum(warmup_colour) / len(warmup_colour) > daylight_color_fraction
+        if not warmup_daylight:
+            warmup_flashlight_ratio = max(
+                green_light_ratio(f, whole_frame, exclude_mask=ignore_mask)
+                for f in detection.dropped_frames
+            )
 
     for detected in considered:
         whole_frame_green_ratios.append(
@@ -1733,6 +1759,7 @@ def extract_clip_features(
         "green_light_flicker": (
             0.0 if is_daylight_color else green_light_flicker(whole_frame_green_ratios)
         ),
+        "warmup_flashlight_ratio": warmup_flashlight_ratio,
         "flashlight_subject_fraction": (
             0.0
             if is_daylight_color or not frames_with_box

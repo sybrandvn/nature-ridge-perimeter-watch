@@ -41,7 +41,7 @@ from scripts.label import _event_key  # noqa: E402
 from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
-from src.features import is_daylight  # noqa: E402
+from src.features import is_daylight, sane_fps  # noqa: E402
 from src.reference_bg import (  # noqa: E402
     era_of,
     load_manifest,
@@ -268,10 +268,10 @@ def clip_duration_seconds(file_path: str) -> float:
     cap = cv2.VideoCapture(file_path)
     try:
         frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        fps = sane_fps(cap.get(cv2.CAP_PROP_FPS))
     finally:
         cap.release()
-    return frame_count / fps if frame_count > 0 and fps > 0 else 0.0
+    return frame_count / fps if frame_count > 0 else 0.0
 
 
 def prefer_longest_per_event(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

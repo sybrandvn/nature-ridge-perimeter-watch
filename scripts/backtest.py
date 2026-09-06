@@ -11,6 +11,27 @@ Rules:
     "DAYLIGHT GATE IS SELF-DEFEATING" in repo memory. Left unchanged anyway:
     every alternative gate design tried and rejected 2026-08-30, see
     "Daylight-gate fix investigated and ABANDONED" in repo memory.)
+  - guard_candidate (warmup flashlight): warmup_flashlight_ratio > 0.002
+    (added 2026-09-06). Fixes the dominant false-candidate mode found by
+    reviewing the first ranked queue by hand: the guard walks out of shot
+    BEFORE the IR gain settles, so every frame they appear in is dropped as
+    flare, and the scored frames contain only whatever moved next -- a vine, a
+    wind-blown bush, or a camera artifact on the final frame. Eight of the
+    eleven reviewed false candidates had exactly ONE genuine detection frame,
+    several of them the last scored frame.
+    `warmup_flashlight_ratio` scores the DROPPED frames for the flashlight (see
+    scripts.spike.extract_clip_features), which no other feature looks at.
+    Measured over the whole labelled corpus, with the same daylight gate the
+    other green-light features use: animal 11/11 exactly 0.0, incident max
+    0.00046, guard median 0.00049 and max 0.154. A 0.002 threshold sits 4.3x
+    above the highest positive and flags 118/283 guards with **0/21
+    animal+incident leak**.
+    Placed with the other guard rule, ABOVE the animal/incident geometry rule,
+    because these clips DO pass that geometry test -- that is exactly why they
+    reached the queue. Known risk, accepted: a genuine incident that a guard
+    responds to within the same clip would be routed to guard. The existing
+    green_light rule above already carries that same risk, and the 4.3x margin
+    is the mitigation; revisit if a labelled incident ever exceeds 0.002.
   - environment_candidate: blob_count > 10 (added 2026-08-31, checked before
     animal_candidate/incident_candidate/insect_candidate so a stormy/windy clip's
     scattered foliage blobs don't get read as a shape signal. Measured against
@@ -164,6 +185,8 @@ def classify(features: dict[str, float] | None) -> str:
     if features is None:
         return "no_motion"
     if features["green_light_ratio"] > 0.05 or features["green_light_flicker"] > 0.02:
+        return "guard_candidate"
+    if features.get("warmup_flashlight_ratio", 0.0) > 0.002:
         return "guard_candidate"
     if features["blob_count"] > 10:
         return "environment_candidate"

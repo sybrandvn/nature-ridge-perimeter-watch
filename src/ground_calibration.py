@@ -73,6 +73,11 @@ MAX_SUBJECT_HEIGHT_M = 4.0
 # a 20-sigma outlier in a fit with only 20 positive examples.
 MAX_SUBJECT_WIDTH_M = 4.0
 
+# Nothing on this terrain outruns a sprint. A higher reading means the tracker
+# jumped between two unrelated blobs, so the frame pair is discarded rather
+# than contributing a wild speed -- same bounding discipline as height/width.
+MAX_SUBJECT_SPEED_MPS = 15.0
+
 # Every camera on this site is the same model, so the intrinsics are identical
 # and only the mounting differs (pitch, yaw, roll, height above ground).
 # Measured on cam06 -- the one camera with enough traced pickets to derive it

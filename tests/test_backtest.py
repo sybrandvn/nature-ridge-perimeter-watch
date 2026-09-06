@@ -38,6 +38,39 @@ def test_classify_guard_candidate_on_flicker():
     assert backtest.classify(_features(green_light_flicker=0.05)) == "guard_candidate"
 
 
+def test_classify_guard_candidate_on_warmup_flashlight():
+    # The guard left before the IR gain settled, so their flashlight is only in
+    # the dropped frames -- every scored frame is whatever moved next.
+    assert backtest.classify(_features(warmup_flashlight_ratio=0.01)) == "guard_candidate"
+
+
+def test_classify_warmup_flashlight_beats_animal_incident_geometry():
+    # These clips DO pass the outside/far-from-fence geometry test -- that is
+    # why they reached the review queue in the first place.
+    features = _features(
+        warmup_flashlight_ratio=0.01,
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.5,
+        color_fraction=0.0,
+    )
+    assert backtest.classify(features) == "guard_candidate"
+
+
+def test_classify_warmup_flashlight_below_threshold_does_not_fire():
+    # incident's highest measured value is 0.00046; the threshold has margin.
+    features = _features(
+        warmup_flashlight_ratio=0.00046,
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.5,
+        color_fraction=0.0,
+    )
+    assert backtest.classify(features) == "incident_candidate"
+
+
+def test_classify_warmup_flashlight_absent_key_is_safe():
+    assert backtest.classify(_features()) == "unclassified"
+
+
 def test_classify_environment_candidate_on_blob_count():
     assert backtest.classify(_features(blob_count=11)) == "environment_candidate"
 

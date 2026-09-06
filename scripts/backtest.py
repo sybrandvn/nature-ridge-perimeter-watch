@@ -127,7 +127,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.spike import extract_clip_features  # noqa: E402
+from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
 from src.features import is_daylight  # noqa: E402
@@ -140,39 +140,16 @@ from src.reference_bg import (  # noqa: E402
 
 ExtractFn = Callable[..., "dict[str, float] | None"]
 
+# Identity/verdict columns, then EVERY numeric feature. Deliberately derived
+# from FEATURE_COLUMNS rather than hand-listed: a hand-picked subset silently
+# drops whatever was added last (recovered_fraction and longest_detection_run
+# were both being computed and discarded before 2026-09-06), and re-running the
+# scoring pass just to see one more column wastes minutes.
+_IDENTITY_COLUMNS = ("channel_id", "message_id", "camera_id", "label", "category")
+_NON_NUMERIC = ("channel_id", "message_id", "camera_id", "label", "time_of_day", "is_daylight")
 REPORT_COLUMNS = (
-    "channel_id",
-    "message_id",
-    "camera_id",
-    "label",
-    "category",
-    "aspect_ratio",
-    "solidity",
-    "green_light_ratio",
-    "green_light_flicker",
-    "jitter",
-    "persistence",
-    "outside_pixel_fraction",
-    "zone_classifiable_fraction",
-    "outside_frame_fraction",
-    "median_fence_distance",
-    "color_fraction",
-    "path_length",
-    "blob_count",
-    "recovered_fraction",
-    "scenery_motion_fraction",
-    "implausible_height_fraction",
-    "off_plane_fraction",
-    "height_consistency",
-    "depth_progression",
-    "depth_range_m",
-    "subject_height_m",
-    "subject_width_m",
-    "subject_area_m2",
-    "metric_aspect",
-    "distance_median_m",
-    "speed_mps",
-    "uncalibrated",
+    *_IDENTITY_COLUMNS,
+    *(c for c in FEATURE_COLUMNS if c not in _NON_NUMERIC),
 )
 
 

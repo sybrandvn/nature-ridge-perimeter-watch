@@ -64,20 +64,19 @@ NUMERIC_FEATURES = tuple(c for c in FEATURE_COLUMNS if c not in _NON_FEATURE_COL
 POSITIVE_LABELS = ("animal", "incident")
 NEGATIVE_LABELS = ("guard", "environment", "resident", "unknown")
 
+# Every numeric feature, not a hand-picked subset: the queue is a REVIEW
+# artifact, and the whole point of reviewing a candidate is being able to see
+# why it scored -- persistence/longest_detection_run to tell a sustained
+# subject from a one-frame streak, the metric columns to tell a small animal
+# from a person, recovered_fraction to spot a hallucinated track. Re-running
+# the 9-minute scoring pass just to add a column is not acceptable.
 REPORT_COLUMNS = (
     "score",
     "camera_id",
     "channel_id",
     "message_id",
     "timestamp",
-    "outside_pixel_fraction",
-    "aspect_ratio",
-    "blob_count",
-    "fence_crossed",
-    "area_stability",
-    "normalised_speed",
-    "saturation_ratio",
-    "green_light_ratio",
+    *NUMERIC_FEATURES,
 )
 
 

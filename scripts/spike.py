@@ -72,7 +72,11 @@ from src.features import (  # noqa: E402
     solidity,
     time_of_day,
 )
-from src.ground_calibration import MAX_SUBJECT_HEIGHT_M, calibrate  # noqa: E402
+from src.ground_calibration import (  # noqa: E402
+    MAX_SUBJECT_HEIGHT_M,
+    MAX_SUBJECT_WIDTH_M,
+    calibrate,
+)
 from src.zones import (  # noqa: E402
     median_fence_distance,
     outside_pixel_fraction,
@@ -1482,19 +1486,19 @@ def _metric_track_features(
             continue
         ground_tracks.append((detected.index, ground))
         height = cal.height_m(base, float(y), enforce_limits=False)
-        if height is None or height > MAX_SUBJECT_HEIGHT_M:
+        if height is None or height <= 0 or height > MAX_SUBJECT_HEIGHT_M:
             implausible += 1
             continue
-        if height <= 0:
-            continue
-        heights.append(height)
         left = cal.ground_point((float(x), float(y + h)))
         right = cal.ground_point((float(x + w), float(y + h)))
-        if left is None or right is None:
+        width = None if left is None or right is None else float(np.linalg.norm(right - left))
+        # Width is checked as strictly as height: an implausible width means
+        # this frame's whole metric reading is nonsense, so it counts as
+        # implausible rather than quietly contributing a garbage median.
+        if width is None or width <= 0 or width > MAX_SUBJECT_WIDTH_M:
+            implausible += 1
             continue
-        width = float(np.linalg.norm(right - left))
-        if width <= 0:
-            continue
+        heights.append(height)
         widths.append(width)
         aspects.append(height / width)
         areas.append(height * width)

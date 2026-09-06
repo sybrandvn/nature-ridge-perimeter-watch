@@ -65,6 +65,14 @@ MAX_CAMERA_HEIGHT_M = 30.0
 # number that looks measured.
 MAX_SUBJECT_HEIGHT_M = 4.0
 
+# Same reasoning for width, and it matters MORE: width comes from the ground
+# distance between the bbox's two BOTTOM corners, and near the horizon those
+# two corners back-project to wildly separated ground points. Left unbounded
+# this produced a 17.8m-wide, 65.8 sq m "subject" on cam02/18444 (a guard
+# walking inside with a flashlight), which then dominated the ranking model --
+# a 20-sigma outlier in a fit with only 20 positive examples.
+MAX_SUBJECT_WIDTH_M = 4.0
+
 # Every camera on this site is the same model, so the intrinsics are identical
 # and only the mounting differs (pitch, yaw, roll, height above ground).
 # Measured on cam06 -- the one camera with enough traced pickets to derive it

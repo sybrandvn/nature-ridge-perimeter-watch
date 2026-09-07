@@ -302,22 +302,45 @@ cameras:
   - id: cam09
     aliases: ["MOTIONVIEWER 9"]
     order: 10
-    # 2026-09-05: RE-TRACED -- the original line (drawn from
-    # data/history/cam09/11680.mp4, a heavily vine-overgrown frame) tracked
-    # the vine stem, not the wire mesh underneath it. Retraced by the user
-    # over data/history/cam09/3501.mp4 (2023-11-25, same clip fence_bottom
-    # below came from). `outside: right` re-confirmed via side_name.
-    fence: [[0.4948, 0.2198], [0.4262, 0.4133], [0.3566, 0.6068], [0.2871, 0.8003], [0.2186, 0.9938]]
-    outside: right
-    depth_cutoff: 0.05
-    # 2026-09-05: fence_bottom, traced by the user over data/history/cam09/3501.mp4.
-    fence_bottom:
-      [[0.5041, 0.2042], [0.4938, 0.4026], [0.4831, 0.601], [0.4727, 0.7995], [0.4624, 0.9979]]
-    # 2026-09-06: fence_pickets, traced by the user over the
-    # data/reports/picket_trace_2026-09-06/ screengrab (data/history/cam09/3501.mp4).
-    fence_pickets:
-      - [[0.3824, 0.5541], [0.4478, 0.9991]]
-    metric_calibration: true
+    # 2026-09-07: confirmed remounted -- user spotted this reviewing the
+    # cam06/21520 crawl-incident sweep clip (cam09/21522, 2026-07-21), traced
+    # a fresh independent line over data/history/cam09/10979.mp4
+    # (2025-01-12) and confirmed by eye it's a real shift, not the same
+    # panel's other edge (the agent's own first read of the overlay guessed
+    # the latter and was corrected). Dated per the user's own call: in effect
+    # from message_id 10979's timestamp onward. Old geometry (no
+    # effective_from) unchanged below; do not re-open that question without
+    # new evidence.
+    zones:
+      - # 2026-09-05: RE-TRACED -- the original line (drawn from
+        # data/history/cam09/11680.mp4, a heavily vine-overgrown frame) tracked
+        # the vine stem, not the wire mesh underneath it. Retraced by the user
+        # over data/history/cam09/3501.mp4 (2023-11-25, same clip fence_bottom
+        # below came from). `outside: right` re-confirmed via side_name.
+        fence: [[0.4948, 0.2198], [0.4262, 0.4133], [0.3566, 0.6068], [0.2871, 0.8003], [0.2186, 0.9938]]
+        outside: right
+        depth_cutoff: 0.05
+        # 2026-09-05: fence_bottom, traced by the user over data/history/cam09/3501.mp4.
+        fence_bottom:
+          [[0.5041, 0.2042], [0.4938, 0.4026], [0.4831, 0.601], [0.4727, 0.7995], [0.4624, 0.9979]]
+        # 2026-09-06: fence_pickets, traced by the user over the
+        # data/reports/picket_trace_2026-09-06/ screengrab (data/history/cam09/3501.mp4).
+        fence_pickets:
+          - [[0.3824, 0.5541], [0.4478, 0.9991]]
+        metric_calibration: true
+      - effective_from: "2025-01-12T16:22:45Z"
+        # 2026-09-07: traced by the user over data/history/cam09/10979.mp4
+        # (frame 100/201), the clip the user identified as when the fence
+        # moved. `outside: right` carried over unchanged -- same camera
+        # orientation, only the fence's own position shifted.
+        fence: [[0.4422, 0.0698], [0.3875, 0.3], [0.333, 0.5292], [0.278, 0.7594], [0.2234, 0.9896]]
+        outside: right
+        depth_cutoff: 0.05
+        fence_bottom:
+          [[0.4505, 0.0635], [0.439, 0.2969], [0.4273, 0.5292], [0.4158, 0.7625], [0.4045, 0.9958]]
+        fence_pickets:
+          - [[0.3312, 0.5563], [0.4062, 0.8865]]
+        metric_calibration: true
   - id: cam10
     aliases: ["MOTIONVIEWER 10"]
     order: 11

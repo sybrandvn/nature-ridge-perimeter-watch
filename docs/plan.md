@@ -5,6 +5,40 @@ labelled sample, then build the backfill → label → backtest calibration loop
 and delivery-reliability machinery are deferred until thresholds are proven. Alert modules ship as
 tested, manually-invokable functions only.
 
+## Checkpoint (2026-09-07): triage router built; classifier state re-measured
+
+Supersedes the stale figures below wherever they conflict. Full narrative in `docs/handoff.md`
+section #5; measurements in `/memories/repo/incident-findings.md`.
+
+**Triage now has three outputs, not one queue:** the incident/animal review queue
+(`scripts/rank_candidates.py --out`), a separate maintenance "clean this camera" queue
+(`--maintenance-out`), and a `blinding_foreground` flag in `scripts/backtest.py` that is
+deliberately *independent* of `category` — a clip can be a real guard sighting and an obstructed
+lens at the same time.
+
+**Classifier state, measured 2026-09-07 across 534 labelled clips** (this replaces every earlier
+recall number in this file):
+
+| true label | outcome |
+| --- | --- |
+| guard (376) | **71.8% correct** — 34.8% from the inside-only rule, 29.5% from warmup flashlight, 7.4% from green light. 8.8% leak to the alert channel |
+| environment (100) | 50% correct; **29 clips leak into the alert channel** |
+| incident (10) | 70% correct; 30% suppressed as guard, safe only at event level (5/5) |
+| animal (13) | 46.2% correct |
+| resident (10) | **no rule exists** |
+
+**The "guard recall is 8.7%" figure repeated throughout this repo is wrong** — it was only the
+`green_light` rule's own recall, measured before the two rules that now do the work existed.
+
+**Recall is no longer the bottleneck; leakage is.** The environment leak is the largest single
+false-alert source and is 55% concentrated on cam10.
+
+**One decision is waiting on the user** (see handoff #5 for the full table): adding an *upper*
+bound on `median_fence_distance` to the animal/incident rule would cut the environment leak from
+29 to 14 clips with all 5 incident events still alerting, at the cost of exactly one marginal
+animal event (cam10/7632). That breaks the standing "never lose an animal" constraint, so it is
+deliberately unshipped pending an explicit call.
+
 ## Checkpoint (2026-08-30): Phase 0 merged to `main`, needs work before Phase 1 starts
 Phase 0 (steps 1-14) is merged and tagged as a checkpoint, not a clean sign-off. Open items before
 Phase 1 work should build on this without inheriting stale numbers:
@@ -338,6 +372,13 @@ subjects (POPIA applies in South Africa). Worth a brief word with trustees on re
 access before the bot ships.
 
 ## Candidate refinements (not yet built, revisit with evidence)
+
+> **Status note (2026-09-07):** several items in this section are now partly or wholly built —
+> the dual fence lines shipped as `fence_bottom`, the fence-height/metric calibration shipped as
+> `src/ground_calibration.py`, and the flashlight-vs-subject idea produced a working feature
+> (`post_flash_red_shift`). Read the 2026-09-07 checkpoint at the top of this file and
+> `docs/handoff.md` section #5 before treating anything below as unbuilt.
+
 - **Dual fence lines (inside/outside band, not just one side-assignment line)**: on some cameras the
   guard passes close beside/under the fence, close enough that a single polyline's side test could
   misclassify that proximity as outside. Idea (2026-08-28, user): draw two polylines bounding the

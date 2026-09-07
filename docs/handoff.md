@@ -976,6 +976,8 @@ discovery result (n=1 incident) is too thin to judge `in_fence_band` on its own 
 - Gate 2 pass/fail — the standing decision, still the user's to make.
 - `guard_candidate` recall is 8.7%; the daylight gate is self-defeating and four fix attempts have
   failed. See `/memories/repo/nature-ridge-conventions.md` before attempting a fifth.
+  **SUPERSEDED 2026-09-07 — see session close #5. That 8.7% is this ONE rule's own recall, not the
+  system's: overall guard recall is now 71.8%.**
 - **`resident` has no rule at all** in `classify()`. Dog detection is the obvious route but zero
   dog-labelled clips exist — examples are needed first.
 - The first-frame `blob_count` spike bug above.
@@ -1006,8 +1008,37 @@ New features, all measured against the full labelled corpus before shipping:
 | `long_flare_frames` | raw `warmup_dropped` count (NOT the fraction — that's 30-60% in every class and useless) | ≥18 |
 | `post_flash_red_shift` | R/G after the brightness peak minus before it | **only guard ever exceeds 0.10** (guard max 0.581, environment 0.014, animal 0.038, incident 0.001) |
 
-### Immediate next step (highest value, well-evidenced)
+### Where classify() actually stands (measured 2026-09-07, 534 labelled clips)
 
+**Guard recall is 71.8% (270/376), not the 8.7% quoted elsewhere in this file** — that stale
+figure is the `green_light` rule's *own* recall and predates the two rules that now do the work:
+
+| rule | guards caught |
+| --- | --- |
+| R7 inside-only movement | 131 (34.8%) |
+| R2 warmup flashlight | 111 (29.5%) |
+| R1 green light (scored frames) | 28 (7.4%) |
+
+**Recall is no longer the bottleneck — leakage is.** Full confusion:
+
+| true label | result |
+| --- | --- |
+| guard (376) | 71.8% correct, **8.8% (33) leak into the animal/incident alert channel**, 6.1% → environment, 12.0% unclassified |
+| environment (100) | **only 50% caught**; 18% → incident channel, 15% → guard |
+| animal (13) | 46.2% correct, 23.1% unclassified |
+| incident (10) | 70% correct, **30% (3) suppressed as guard_candidate** |
+| resident (10) | no rule exists; 60% land in guard |
+
+Two things a new agent should weigh before adding more guard signal:
+
+1. **`environment` is the weak link now, not guard.** Half of it is missed and 18% reaches the
+   high-priority incident channel — a bigger false-alert source than guard misrouting.
+2. **3 of 10 incident clips are suppressed as `guard_candidate`.** This is the known, accepted
+   cost of ordering guard rules ahead of the geometry rules, and it is currently safe *only*
+   because every one of those incidents has a sibling clip that still alerts (event check 5/5).
+   That margin is thin — re-check it whenever a guard rule is added or an incident is labelled.
+
+### Immediate next step (highest value, well-evidenced)
 `post_flash_red_shift` is a **zero-leak guard identifier corpus-wide** but is currently only used
 by the maintenance queue. It is not yet a rule in `scripts/backtest.py::classify()`. Adding it as
 a `guard_candidate` rule is the obvious next move — measure recall / guard false-fire / positive

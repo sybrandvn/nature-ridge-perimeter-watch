@@ -7,10 +7,14 @@ real labelled footage, not invented for this script.
 Rules:
   - guard_candidate: green_light_ratio > 0.05 or green_light_flicker > 0.02
     (measured 2026-08-31 against the current tracker/detector on 200 labelled
-    guard clips: 8.7% recall, degraded from the doc's original 61% -- see
-    "DAYLIGHT GATE IS SELF-DEFEATING" in repo memory. Left unchanged anyway:
-    every alternative gate design tried and rejected 2026-08-30, see
-    "Daylight-gate fix investigated and ABANDONED" in repo memory.)
+    guard clips: 8.7% recall for THIS RULE ALONE, degraded from the doc's
+    original 61% -- see "DAYLIGHT GATE IS SELF-DEFEATING" in repo memory. Left
+    unchanged anyway: every alternative gate design tried and rejected
+    2026-08-30, see "Daylight-gate fix investigated and ABANDONED" in repo
+    memory. NOTE: this rule's own weakness is no longer the system's guard
+    recall -- measured 2026-09-07 across 376 labelled guard clips, classify()
+    reaches 71.8% guard recall overall, of which the inside-only rule supplies
+    34.8%, the warmup-flashlight rule 29.5%, and this rule only 7.4%.)
   - guard_candidate (warmup flashlight): warmup_flashlight_ratio > 0.002
     (added 2026-09-06). Fixes the dominant false-candidate mode found by
     reviewing the first ranked queue by hand: the guard walks out of shot

@@ -1,9 +1,9 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-07. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-07, session close #6)" at the very
-bottom, just above "Conventions"** — it has current state, a fresh full-corpus backtest run to
-work from, and the highest-value open question. `docs/plan.md` is the full plan and stays
+picking this up, start at "Handoff for a new agent (2026-09-07, session close #7)" at the very
+bottom, just above "Conventions"** — it has current state, the current measured classifier
+numbers, and the highest-value open question. `docs/plan.md` is the full plan and stays
 authoritative; this file is the short version of where things actually stand and what to do next.
 
 ## Where the project is
@@ -1179,6 +1179,152 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-07, session close #7)
+
+**Read this section first — it supersedes #6 for current state.** 557 tests passing, branch
+`feat/phase1-finalisation`, incident regression 5/5 events, nothing uncommitted. This session was
+a threshold-mining pass over the full-corpus data from #6, run to the user's stated priority
+order: never lose an incident, keep animals, minimise guard and environment, and improve the
+maintenance channel.
+
+### Headline: the alert channel is 30% smaller at zero cost to incidents or animals
+
+Measured end to end by re-scoring the whole labelled corpus through the shipped pipeline (not
+the analysis copy), at EVENT level over 351 labelled events:
+
+| | before | after |
+| --- | --- | --- |
+| incident events alerting | 5/5 | **5/5** |
+| incident CLIPS alerting | 7/10 | **7/10** |
+| animal events alerting | 13/19 | **13/19** |
+| animal CLIPS alerting | 15/37 | **15/37** |
+| guard leak into the alert channel | 39/222 (17.6%) | **26/222 (11.7%)** |
+| environment leak | 16/82 (19.5%) | **6/82 (7.3%)** |
+| alert channel size | 79 events | **55 events** |
+| environment correctly read as environment | 54/82 | **70/82** |
+
+**Not one protected-class clip changed category.** 46 clips moved, all of them guard/environment/
+unlabelled. Alert-channel precision goes 22.8% → 32.7% on labelled events. That last row also
+closes the "environment is the weak link now, not guard" finding from #5.
+
+### What shipped (3 commits)
+
+`b8ec6dd` — **`blob_count_median` and `motion_pixel_fraction_median`** in `scripts/spike.py`.
+Both existing features are a PEAK over frames, which is what a storm needs but also fires on a
+single flare-settle frame at the start of a quiet clip — the bug diagnosed in #5 and left unfixed
+because touching the peak thresholds needed a full re-validation. Adding the median alongside
+sidesteps that entirely: no existing value moves. The medians separate the protected classes
+better than the peaks they de-noise (motion_pixel_fraction AUC 0.236 → 0.271 inverted,
+blob_count 0.297 → 0.325), and the gap on the protected side is enormous — the worst real animal
+clip PEAKS at 0.907 whole-frame motion but has a MEDIAN of 0.0015.
+
+`79e426c` — **three gates in `scripts/backtest.py::classify()`**:
+
+1. `blob_count_median > 4` → `environment_candidate`, beside the existing peak `blob_count > 10`.
+2. `blob_white_fraction >= 0.4` inside the geometry rule → **a blinded lens never alerts**. Same
+   threshold `is_blinding_foreground` already uses, deliberately: when a bright obstruction is
+   against the lens, the "outside blob" IS the obstruction. The flag stays orthogonal for
+   reporting.
+3. `motion_pixel_fraction_median > 0.12` → sustained whole-frame motion is wind or an unsettled
+   IR ramp, not a compact intruder.
+
+`5cf2b82` — **`obstruction_windows()` in `scripts/rank_candidates.py`**, written as a
+`.windows.csv` sibling whenever `--maintenance-out` is given. See "the maintenance channel" below.
+
+### The methodology that matters more than the thresholds
+
+**Every threshold was chosen on PER-CLIP protected-class margin, not event-level survival.**
+Event level is the right place to MEASURE (per #6's truncated-preview finding), but a live system
+sees one clip at a time and cannot rely on a sibling covering for a suppressed one. Concretely:
+`blob_count_median > 3` and `> 2` both keep 5/5 incident EVENTS while silently gating the real
+incident clip `cam08/4054` (median exactly 4.0). That is why the shipped threshold is 4 and not
+the more aggressive value the event-level Pareto frontier preferred. The aggressive package
+(median 2 / mpf_median 0.10 / long-flare veto) reaches guard leak 19 and environment leak 3 —
+it is available and measured, and it costs that one incident clip.
+
+### Two things measured and deliberately NOT shipped
+
+- **Peak `motion_pixel_fraction` as the gate.** It is the single strongest discriminator in this
+  population (AUC 0.236, i.e. 0.764 inverted — better than anything else tried), and a 0.20 bound
+  drives guard leak to 24 and environment to 7 on its own. Rejected because its worst real
+  incident clip sits at 0.123 against a guard/environment median of 0.172, and every threshold
+  tight enough to be useful also costs an animal event. Worse, a real incident clip that does NOT
+  currently alert (`cam09/21521`) reads 0.308 — so a future incident CAN be up there. The median
+  is both safer and free.
+- **`long_flare_frames >= 18` as a fourth gate.** Buys only 1-2 more events, and `cam06/21520` —
+  the crawl incident, the signature threat this system exists to catch — sits at 15. Same
+  reasoning that rejected the `metric_aspect` gate. It stays a maintenance signal only.
+
+Also quick-checked and worthless as a `classify()` rule: `post_flash_red_shift` as a guard rule
+(the "immediate next step" #5 recommended). Swept 0.05–0.60 through the real rule order: it moves
+guard leak by at most 2 events, because the guards it identifies are almost all already caught by
+the rules above it. #5's "zero-leak corpus-wide" description is accurate but irrelevant at this
+position in the chain — measure a rule where it would actually sit, not corpus-wide.
+
+### The maintenance channel: the per-clip flag is not a work order
+
+**Measured, and it's a clean negative.** On the 16,554-clip corpus `is_blinding_foreground` fires
+on 8.9% of clips but shows almost no temporal clustering: P(next clip from the same camera also
+flagged | this one flagged) runs 0–19% per camera, and the longest consecutive run anywhere is 5.
+A spider web on a lens does not behave like that — it would flag every clip until someone wipes
+it off. So the per-clip flag measures transient bright events, and the 1,019-clip queue built on
+it is not something anyone can act on.
+
+**The RATE over a window is the signal.** Cameras sit at a 4–23% baseline and specific 14-day
+spans hit 25–58%. `obstruction_windows()` produces **30 windows across three years** — roughly one
+a month, which is a work list. The clearest case is cam07: 6.4% baseline, 43.1% across 66 clips
+over 2026-02-06..03-12, 27 flagged clips spread over 12 separate nights, `blob_white_fraction`
+0.41–0.93, `post_flash_red_shift` at or below 0.027 on every one (so not the guard's flashlight).
+Several of those same clips were also leaking into the alert channel as `incident_candidate`
+before gate 2 above — one physical obstruction showing up in both channels, which is
+corroboration rather than coincidence.
+
+`NO_MAINTENANCE_CAMERAS` is honoured for consistency, but **cam04 produces two strongly elevated
+windows (47.4% and 43.9% against a 9.1% baseline)** — that human override was made on the
+per-clip view and is worth re-checking against the windowed one.
+
+### Where the residual 32 leaking events are
+
+Heavily concentrated, and not evenly by exposure:
+
+| camera | leaking events | labelled events | rate |
+| --- | --- | --- | --- |
+| cam07 | 7 | 30 | 23% |
+| cam01b | 4 | 43 | 9% |
+| cam08 | 3 | 19 | 16% |
+| cam13 | 2 | 9 | 22% |
+| cam03 | 2 | 11 | 18% |
+
+**The likely cause is geometry, not thresholds, and #4's "only cam06 is calibrated" note is now
+STALE — all 18 cameras have a `fence_bottom`.** What is anomalous is the fraction of each
+camera's own guard clips reading `outside_pixel_fraction > 0.6`: the corpus norm is ~24%, but
+**cam01 reads 78.9% (15/19) and cam07 41.7% (15/36)**, with cam16 50% (n=8) and cam01a 41.7%.
+Either those two cameras' fence traces are wrong, or their guards genuinely patrol outside the
+fence there. That is a question for the user's own eyes on a couple of clips, not another
+threshold sweep, and it is the highest-value next step for cutting guard leak further.
+
+### Suggested next steps, in priority order
+
+1. **Check cam01's and cam07's fence geometry.** Highest leverage on the remaining leak, and it
+   is a visual question, not a statistical one.
+2. **Settle the wait-for-sibling design question** — still open from #6, still unmeasured, and
+   the numbers above make it sharper: an OR-across-siblings combiner buys recall the system
+   already has (5/5, 13/19) while making the leak worse.
+3. **Label more `environment` clips with notes.** Environment recall is now 85% and the leak is
+   down to 6 events, but there are still only 82 labelled environment events and just a handful
+   carry notes; the low-blob-count single-branch-oscillation population from #6 is still
+   unsolved and needs examples before it can be measured.
+4. The aggressive gate package is measured and sitting there if the user decides one incident
+   CLIP (never an event) is an acceptable price for guard leak 26→19 and environment 6→3.
+
+### Still open, unchanged by this session
+
+- Gate 2 pass/fail — the standing decision, still the user's to make.
+- **`resident` has no rule beyond the daylight split** of the inside-only fallback, and zero
+  dog-labelled clips exist.
+- 3 of 10 incident clips still read fully inside and are carried by their sibling. Not a
+  threshold problem — the crawling subject is at the fence base. Documented, not regressed.
 
 ## Handoff for a new agent (2026-09-07, session close #6)
 

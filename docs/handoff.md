@@ -1,9 +1,9 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-05. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-05, session close #3)" at the very
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-07. **If you are a new agent
+picking this up, start at "Handoff for a new agent (2026-09-07, session close #5)" at the very
 bottom, just above "Conventions"** — it has current state, the prioritised remaining work, and
-the two validation lessons that cost the most time recently. `docs/plan.md` is the full plan and
+the measurement traps that cost the most time recently. `docs/plan.md` is the full plan and
 stays authoritative; this file is the short version of where things actually stand and what to do
 next.
 
@@ -979,6 +979,97 @@ discovery result (n=1 incident) is too thin to judge `in_fence_band` on its own 
 - **`resident` has no rule at all** in `classify()`. Dog detection is the obvious route but zero
   dog-labelled clips exist — examples are needed first.
 - The first-frame `blob_count` spike bug above.
+
+## Handoff for a new agent (2026-09-07, session close #5)
+
+**Read this section first — it supersedes #4 for current state.** 523 tests passing, branch
+`feat/phase1-finalisation`, incident regression 5/5 events. Nothing is uncommitted.
+
+### What this session built
+
+Triage now has **three** independent outputs, not one queue:
+
+1. **Incident/animal queue** — `scripts/rank_candidates.py --out ...`. Now excludes
+   `startup_state` blank/duplicate rows, sub-1s clips that have an event sibling, and
+   blinding-foreground rows.
+2. **Maintenance queue** — `--maintenance-out ...`, `write_maintenance_candidates()`. A
+   "someone must physically clean this camera" report. Deliberately includes already-labelled
+   clips (a labelled guard clip can still show an obstructed lens).
+3. `blinding_foreground` column in `scripts/backtest.py` output, independent of `category` —
+   a clip can be a real guard sighting **and** have an obstructed lens.
+
+New features, all measured against the full labelled corpus before shipping:
+
+| feature | what it means | key numbers |
+| --- | --- | --- |
+| `blob_white_fraction` | tracked blob's overexposed-pixel fraction | animal max 0.182, incident max 0.310 → 0.4 threshold is zero-leak |
+| `long_flare_frames` | raw `warmup_dropped` count (NOT the fraction — that's 30-60% in every class and useless) | ≥18 |
+| `post_flash_red_shift` | R/G after the brightness peak minus before it | **only guard ever exceeds 0.10** (guard max 0.581, environment 0.014, animal 0.038, incident 0.001) |
+
+### Immediate next step (highest value, well-evidenced)
+
+`post_flash_red_shift` is a **zero-leak guard identifier corpus-wide** but is currently only used
+by the maintenance queue. It is not yet a rule in `scripts/backtest.py::classify()`. Adding it as
+a `guard_candidate` rule is the obvious next move — measure recall / guard false-fire / positive
+leak through the **real rule order** first (only rows the earlier rules don't already catch),
+exactly as the `warmup_flashlight_ratio` rule was validated. Expect a meaningful bite out of the
+still-low guard recall.
+
+### The open architectural item: tracking through the IR flare
+
+**Problem.** `detect_clip` computes `drop = flare_settle_index(...)` and throws away every frame
+before it (up to 40% of a clip). A guard who walks through frame during the IR gain ramp is
+invisible to scoring; the scored frames then lock onto whatever moved next (a vine, a bush, a
+final-frame artifact). This is the single biggest known source of false candidates.
+
+**User's decision on scope (2026-09-07):** compensate **inside the flare window only**. Do not
+touch the already-settled frames.
+
+**Why it's plausible:** already proven in-repo. `_warmup_motion_features` normalises each dropped
+frame by its own median (`g * 100/median`), cancelling the global gain step, and that recovered
+the cam06/21377 guard as a clear 97×136 blob from frames the detector had discarded.
+
+**Phase 0 — the cheap kill-check. Do this before writing any real code.** Repo memory records
+*two* prior illumination-compensation attempts that both destroyed the fragile-animal set:
+rooikat cam08/7360 went 256→51 hit pixels (−80%), porcupine cam15/15454 frame 22 went 98→4.
+Apply the compensation, count hit pixels on **cam08/7360, cam15/15454, cam05/18270**, and abandon
+if they degrade. Perhaps an hour, and it kills the idea cheaply if it's the same trap.
+
+**Phase 1 — implement behind a kwarg defaulting to today's behaviour** (zero blast radius until
+deliberately flipped). Build the background from settled frames only (they're trustworthy), then
+photometrically match each warmup frame to it — a per-frame affine (gain + offset) fit, not just
+median scaling — then difference and track normally. Tag those frames with a `from_warmup=True`
+provenance flag so every existing feature can opt in or out explicitly rather than silently
+shifting.
+
+**Phase 2 — validation battery.** Full suite green; incident regression 5/5; re-render **and
+numerically diff the entire standing `debug_render/` set** (the hard-won rule — forward/backward
+pass interactions have hidden regressions before); LOO AUC before/after; confirm nothing moved
+for clips that have no warmup frames.
+
+**Main risk:** IR flare is not purely global. The illuminator lights near objects far more than
+far ones, so the ramp is spatially non-uniform and a single affine fit may leave a residual
+gradient that reads as motion everywhere. That is exactly what sank both prior attempts. Honest
+odds ≈ 40%.
+
+### Also requested, not started
+
+- **Show the IR compensation in the debug renders** (`scripts/render_debug.py`) — the user wants
+  to see the normalised warmup frames rather than the raw flare. Natural to build alongside
+  Phase 1, and it is the cheapest way for a human to judge whether compensation is working.
+
+### Traps this session hit — read before proposing a new signal
+
+Three signals looked clean on hand-picked examples and died on base rate:
+`solidity==1.0` (60-92% in *every* class), the warmup *fraction*, and `warm_peak` (animal p50
+0.429 — it leaks 38% of animals). **Always check the protected classes' own distribution before
+believing a threshold derived from confirmed examples.**
+
+And the opposite failure, which cost more: two ideas were rejected because *I measured them
+wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a clip-wide **average**
+R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
+*then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
+describes a signal in temporal terms, measure the transition, not an aggregate.**
 
 ## Conventions
 

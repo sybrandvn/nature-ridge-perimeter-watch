@@ -1106,6 +1106,16 @@ for display (`ClipDetection.dropped_frame_compensated`) — this is the "even ou
 `ClipDetection.dropped_frame_box_is_photometric` tags which mechanism found each box, so
 `render_debug.py` can label a real diff-tracked box differently from an appearance-only guess.
 
+**Revised same day, per the user's own framing ("it settles, should we not read from that settled
+frame and normalise to that?"):** the fit walks backward from the settled frame rather than fitting
+each warmup frame independently against it. Frame `drop-1` (closest to settled) is matched
+directly against `background` — a small, well-conditioned fit — and every earlier frame is then
+matched against its own already-corrected neighbour, one small step at a time, back to frame 0.
+A frame near the start of a steep ramp (often near-black) fitting directly against the far-away
+settled background is a much larger, less reliable jump than a chain of small steps between
+frames that already resemble each other. The diff target for motion detection is unchanged
+(still the real `background`) — chaining only changes what each fit is computed against.
+
 **Deliberately scoped safe by construction, not just tested safe.** None of `frames`,
 `background`, `considered`, or any `FEATURE_COLUMNS` value is touched — the new code only
 populates `dropped_frame_boxes`/`dropped_frame_box_is_photometric`/`dropped_frame_compensated`,
@@ -1128,10 +1138,13 @@ scoring pipeline for a residual gradient to hide in.
   throughout, with a real tracked box (solid cyan, "real diff, brightness/colour corrected")
   following what looks like a subject moving down along the fence frame to frame, not a static
   artifact. Demo renders in `data/reports/debug_render/ir_flare_compensation/` (gitignored).
-- Did NOT re-render the full standing `debug_render/` set: the scored-frame numeric diff above
-  already proves nothing there can have moved (this change cannot touch a scored frame by
-  construction), so re-rendering 109 files would only refresh warmup-frame cosmetics, not
-  re-validate anything.
+- Re-render both attempts: the seeded/independent-fit version was numerically validated first
+  (89 clips, 0 mismatches) without touching the standing `debug_render/` set, since the scored-frame
+  diff already proved nothing scored could have moved. After the reverse/chained revision above,
+  the user asked for a full re-render, so all 112 files under `data/reports/debug_render/` were
+  regenerated in place (correct per-clip camera/timestamp/zone resolution, including the 4
+  oddly-named dated-camera-era files) — re-verified 0 errors, and the full suite plus
+  `scripts/check_incident_regression.py` (5/5) stayed green throughout.
 
 **Known limitation, honestly not solved:** this does not fully rescue `cam06/21520` (the crawling
 guy who dwells through most of his own clip's median background) — the unseeded fallback finds

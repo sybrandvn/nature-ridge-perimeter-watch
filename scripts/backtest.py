@@ -103,17 +103,20 @@ Rules:
     current tracker -- this rule is effectively dead, the persistent-tracking
     work from 2026-08-30 smooths out the erratic jitter it used to key on.
     Left in place, not removed, pending a decision on a replacement.)
-  - guard_candidate (inside-only fallback): zone_classifiable_fraction > 0 and
-    outside_pixel_fraction == 0.0 (added 2026-09-06). Deliberately the LAST
-    rule, so it can only ever reclassify what would otherwise fall through to
-    `unclassified` -- it cannot override any positive classification above.
-    The guard patrols INSIDE the fence, so a blob the zone geometry actually
-    classified, and classified entirely inside, is a guard rather than an
-    unknown. Requires zone_classifiable_fraction > 0 because
-    outside_pixel_fraction returns 0.0 for BOTH "all inside" and "nothing was
-    classifiable" (whole blob in an ignore region / beyond depth_cutoff) --
-    without that guard this rule would confidently suppress blobs it never
-    actually classified.
+  - guard_candidate (inside-only fallback) / resident_candidate: zone_classifiable_fraction
+    > 0 and outside_pixel_fraction == 0.0 (added 2026-09-06, split by real
+    `is_daylight` 2026-09-07). Deliberately the LAST rule, so it can only ever
+    reclassify what would otherwise fall through to `unclassified` -- it
+    cannot override any positive classification above. The guard patrols
+    INSIDE the fence, so a blob the zone geometry actually classified, and
+    classified entirely inside, is a guard rather than an unknown -- UNLESS
+    it happens in real daylight, in which case a resident going about their
+    business is at least as likely as a night patrol, so it reads
+    `resident_candidate` instead. Requires zone_classifiable_fraction > 0
+    because outside_pixel_fraction returns 0.0 for BOTH "all inside" and
+    "nothing was classifiable" (whole blob in an ignore region / beyond
+    depth_cutoff) -- without that guard this rule would confidently suppress
+    blobs it never actually classified.
     Measured at EVENT level on the 416-clip labelled corpus (217 events,
     grouped by shared physical trigger via scripts.label._event_key, since a
     startup_state=blank precursor clip is expected to read as nothing on its
@@ -123,6 +126,20 @@ Rules:
     (cam06/21519, cam09/21521, cam10/21523), but in all three cases the
     sibling clip of the same event reads fully outside, so no incident event
     is lost.
+    The daylight split deliberately uses the REAL `is_daylight(timestamp)`
+    signal (threaded into `features["is_daylight"]` by every caller of
+    `classify()`, not derived from the image), NOT `color_fraction` -- checked
+    first and rejected: `color_fraction > 0.15` on this same rule's hits would
+    reclassify 85/132 (64%) of currently-correct guard clips as resident,
+    because a guard's own flashlight raises whole-frame saturation the same
+    way ambient daylight does (the same "DAYLIGHT GATE IS SELF-DEFEATING"
+    confound as `green_light_ratio`'s own gate). With the real sun-time
+    signal instead, only 9/132 (6.8%) of guard's rule-7 hits are real
+    daylight, and both outcomes here are suppressed/non-alerting categories
+    either way -- this is a labelling-quality improvement with zero change to
+    what alerts. Only 2 of resident's 6 rule-7 hits are real daylight (n=2,
+    explicitly a LEAD not a certified split -- residents are seen at night
+    too, this only catches the subset that happens to be daylight).
 
 REJECTED, do not re-add without new data: gating the HIGH-priority incident
 channel on `metric_aspect` (height/width in metres). It looked strong --
@@ -242,7 +259,7 @@ def classify(features: dict[str, float] | None) -> str:
         features.get("zone_classifiable_fraction", 0.0) > 0.0
         and features["outside_pixel_fraction"] == 0.0
     ):
-        return "guard_candidate"
+        return "resident_candidate" if features.get("is_daylight", False) else "guard_candidate"
     return "unclassified"
 
 
@@ -328,6 +345,10 @@ def run_backtest(
         if reference is not None:
             extra["reference_background"] = reference
         features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]), **extra)
+        if features is not None and clip["timestamp"] is not None:
+            # classify() needs the real exogenous signal, not an image
+            # statistic -- see the module docstring's resident_candidate note.
+            features["is_daylight"] = is_daylight(clip["timestamp"])
         row = {
             "channel_id": clip["channel_id"],
             "message_id": clip["message_id"],

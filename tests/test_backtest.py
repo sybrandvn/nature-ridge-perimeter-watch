@@ -145,6 +145,23 @@ def test_classify_inside_only_blob_is_guard_candidate():
     assert backtest.classify(features) == "guard_candidate"
 
 
+def test_classify_inside_only_daylight_is_resident_candidate():
+    # Same inside-only geometry, but real daylight -- a resident going about
+    # their business is at least as likely as a night patrol.
+    features = _features(
+        zone_classifiable_fraction=1.0, outside_pixel_fraction=0.0, is_daylight=True
+    )
+    assert backtest.classify(features) == "resident_candidate"
+
+
+def test_classify_inside_only_daylight_key_absent_is_guard_candidate():
+    # Callers that never set is_daylight (feature dict predates it) must
+    # behave exactly as before -- missing key is not the same as daylight.
+    features = _features(zone_classifiable_fraction=1.0, outside_pixel_fraction=0.0)
+    assert "is_daylight" not in features
+    assert backtest.classify(features) == "guard_candidate"
+
+
 def test_classify_inside_only_rule_needs_classifiable_points():
     # outside_pixel_fraction is 0.0 for BOTH "all inside" and "nothing was
     # classifiable" -- without the classifiable guard this would confidently

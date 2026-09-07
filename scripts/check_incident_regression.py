@@ -17,7 +17,7 @@ not present in a fresh clone/CI), same reasoning as scripts/backtest.py's own
 main(). Run this by hand after any change to classify() or its features, and
 before opting any new camera in to metric_calibration.
 
-SUPPRESSED = {"guard_candidate", "environment_candidate", "no_motion",
+SUPPRESSED = {"guard_candidate", "resident_candidate", "environment_candidate", "no_motion",
 "unclassified"} -- these are the categories the routing plan suppresses from
 the alert channel entirely. Every incident EVENT must have at least one clip
 that avoids all of them; this script is the automated guardrail for that, so a
@@ -41,9 +41,16 @@ from scripts.backtest import classify  # noqa: E402
 from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import load_app_config, load_cameras_config  # noqa: E402
+from src.features import is_daylight  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "incident_regression.jsonl"
-SUPPRESSED = {"guard_candidate", "environment_candidate", "no_motion", "unclassified"}
+SUPPRESSED = {
+    "guard_candidate",
+    "resident_candidate",
+    "environment_candidate",
+    "no_motion",
+    "unclassified",
+}
 
 
 def main() -> None:
@@ -69,6 +76,8 @@ def main() -> None:
             continue
         zone = camera.zone_at(entry["timestamp"])
         features = extract_clip_features(row["file_path"], zone)
+        if features is not None and entry.get("timestamp"):
+            features["is_daylight"] = is_daylight(entry["timestamp"])
         category = classify(features)
         checked += 1
         suppressed = category in SUPPRESSED

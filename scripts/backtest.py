@@ -45,6 +45,23 @@ Rules:
     AUC 0.933. Higher thresholds trade recall for guard false-fire; 10 is the
     highest threshold with zero animal+incident leak (cam15/15454's porcupine
     sits at exactly blob_count=10).)
+  - environment_candidate (sustained scattered motion): blob_count_median > 4
+    (added 2026-09-07). The blob_count rule above is a PEAK over frames, which
+    is what a storm needs but also fires on a single flare-settle frame at the
+    start of an otherwise quiet clip -- a bug diagnosed but left unfixed on
+    2026-09-05 (cam04/10887 reads [16, 5, 5, 4, 3...], cam03/18512 reads
+    [20, 1, 1, 1, ...]). Rather than change the peak rule's already-validated
+    threshold, the median counterpart is added alongside it: it only rises when
+    the scattered motion actually PERSISTS, which is what wind does and a
+    settle transient does not. Measured at event level on the 678-clip / 351-
+    event labelled corpus, through this exact rule order: guard leak into the
+    alert channel 39 -> 32 events, environment leak 16 -> 9, with 5/5 incident
+    events, 7/7 incident CLIPS, 19 animal events and 15/15 animal clips all
+    unchanged. 4 is the tightest threshold with zero per-clip protected-class
+    cost: at 3 and below, cam08/4054 (blob_count_median 4.0, "man putting on
+    backup, intruder, outside fence") is gated, and while its sibling 4055
+    still carries the event, a live system sees one clip at a time -- so the
+    per-clip margin is what the threshold is chosen on, not the event one.
   - environment_candidate (metric physics gate): implausible_height_fraction > 0.5
     (added 2026-09-06, checked right after blob_count, same reasoning -- a
     physically-impossible reading should route to "not a real subject" before
@@ -62,6 +79,35 @@ Rules:
     median_fence_distance > 0.1, split further by color_fraction > 0.15
     (re-derived 2026-09-04, replacing the old aspect_ratio<0.95 rule -- its
     premise had fully inverted under the current tracker, see below).
+    GATED FIRST, added 2026-09-07, by two conditions that both say "whatever
+    is outside the fence here is not a subject" -- and both were chosen on
+    PER-CLIP protected-class margin, not event-level survival:
+      * `blob_white_fraction >= 0.4` -- a blinded lens never alerts. This is
+        the same threshold, deliberately, that `is_blinding_foreground` uses
+        for the maintenance queue; the finding is that when a bright
+        vegetation/web obstruction is against the lens, the "outside blob" IS
+        the obstruction. The flag stays orthogonal for reporting (a blinded
+        clip can still be a correct guard_candidate), this only stops it
+        reaching the ALERT channel. Worst real value among clips that
+        currently alert: incident 0.310 (cam08/4054), animal 0.182
+        (cam10/18787) -- so 0/7 incident and 0/15 animal clips are affected.
+        Alone: guard leak 39 -> 32 events, environment 16 -> 10.
+      * `motion_pixel_fraction_median > 0.12` -- sustained whole-frame motion
+        is wind or an unsettled IR ramp, not a compact intruder. The peak
+        `motion_pixel_fraction` was measured first and REJECTED as the gate:
+        it is the single strongest discriminator in this population (AUC
+        0.236, i.e. 0.764 inverted) but its worst real incident clip sits at
+        0.123 against a guard/environment median of 0.172, and any threshold
+        tight enough to be useful also costs an animal event. The median is
+        both safer and free -- worst incident 0.0833 (cam08/4055), worst
+        animal 0.0015 (cam01/16027), a 100x gap on the animal side. Alone:
+        guard leak 39 -> 33 events, environment 16 -> 11.
+    NOTE the `long_flare_frames >= 18` half of `is_blinding_foreground` was
+    tried as a third gate here and DELIBERATELY NOT SHIPPED: it buys only 1-2
+    more events, and cam06/21520 -- the crawl incident, the signature threat
+    this system exists to catch -- sits at 15, a 20% margin. Same reasoning
+    that rejected the `metric_aspect` gate below. It remains a maintenance
+    signal only.
     Measured on 378 labelled+detected clips (guard 264, environment 95,
     animal 9, incident 10), through the SAME rule order as classify() itself
     (i.e. only rows guard_candidate/environment_candidate didn't already
@@ -244,6 +290,13 @@ MEDIAN_FENCE_DISTANCE_MAX = 0.40
 # See classify()'s docstring for how this was measured -- only bounds the
 # animal_candidate branch, deliberately never incident_candidate.
 ANIMAL_ROW_AREA_MAX = 3000.0
+# See classify()'s "environment_candidate (sustained scattered motion)" note.
+BLOB_COUNT_MEDIAN_MAX = 4.0
+# See classify()'s "sustained whole-frame motion" note.
+MOTION_PIXEL_FRACTION_MEDIAN_MAX = 0.12
+# See classify()'s "blinded lens never alerts" note. Same threshold as
+# is_blinding_foreground()'s own, deliberately -- one obstruction definition.
+BLINDING_BLOB_WHITE_FRACTION = 0.4
 
 
 def classify(features: dict[str, float] | None) -> str:
@@ -262,6 +315,8 @@ def classify(features: dict[str, float] | None) -> str:
         return "guard_candidate"
     if features["blob_count"] > 10:
         return "environment_candidate"
+    if features.get("blob_count_median", 0.0) > BLOB_COUNT_MEDIAN_MAX:
+        return "environment_candidate"
     if (
         features.get("uncalibrated", 1.0) == 0.0
         and features.get("implausible_height_fraction", 0.0) > 0.5
@@ -272,6 +327,13 @@ def classify(features: dict[str, float] | None) -> str:
         and features["median_fence_distance"] > 0.1
         and features["median_fence_distance"] < MEDIAN_FENCE_DISTANCE_MAX
     ):
+        if features.get("blob_white_fraction", 0.0) >= BLINDING_BLOB_WHITE_FRACTION:
+            return "environment_candidate"
+        if (
+            features.get("motion_pixel_fraction_median", 0.0)
+            > MOTION_PIXEL_FRACTION_MEDIAN_MAX
+        ):
+            return "environment_candidate"
         if features["color_fraction"] > 0.15:
             if features.get("row_normalised_area", 0.0) > ANIMAL_ROW_AREA_MAX:
                 return "environment_candidate"

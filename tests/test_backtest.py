@@ -277,6 +277,78 @@ def test_classify_requires_both_outside_fraction_and_fence_distance():
     assert backtest.classify(features) == "unclassified"
 
 
+def test_classify_environment_candidate_on_sustained_blob_count():
+    # The peak rule (blob_count > 10) misses this; the median catches it.
+    features = _features(blob_count=6, blob_count_median=5)
+    assert backtest.classify(features) == "environment_candidate"
+
+
+def test_classify_blob_count_median_at_bound_does_not_fire():
+    # cam08/4054, a real incident clip, sits at exactly 4.0.
+    features = _features(
+        blob_count_median=4.0, outside_pixel_fraction=0.9, median_fence_distance=0.2
+    )
+    assert backtest.classify(features) == "incident_candidate"
+
+
+def test_classify_blob_count_median_absent_key_is_safe():
+    assert backtest.classify(_features()) == "unclassified"
+
+
+def test_classify_blinded_lens_never_alerts():
+    # A bright obstruction against the lens IS the "outside blob" -- routed
+    # away from the alert channel, while is_blinding_foreground stays True.
+    features = _features(
+        outside_pixel_fraction=0.9, median_fence_distance=0.2, blob_white_fraction=0.5
+    )
+    assert backtest.classify(features) == "environment_candidate"
+    assert backtest.is_blinding_foreground(features) is True
+
+
+def test_classify_blinded_lens_gate_shares_the_maintenance_threshold():
+    # cam08/4054 (a real incident) peaks at 0.310, so the 0.4 bound must not
+    # fire below it -- and must fire at the same value the flag uses.
+    just_under = _features(
+        outside_pixel_fraction=0.9, median_fence_distance=0.2, blob_white_fraction=0.39
+    )
+    at_bound = _features(
+        outside_pixel_fraction=0.9, median_fence_distance=0.2, blob_white_fraction=0.4
+    )
+    assert backtest.classify(just_under) == "incident_candidate"
+    assert backtest.classify(at_bound) == "environment_candidate"
+
+
+def test_classify_sustained_whole_frame_motion_is_environment():
+    features = _features(
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+        motion_pixel_fraction_median=0.3,
+    )
+    assert backtest.classify(features) == "environment_candidate"
+
+
+def test_classify_whole_frame_motion_gate_uses_the_median_not_the_peak():
+    # A single flare-settle frame spiking the PEAK must not suppress an alert;
+    # the worst real incident clip peaks at 0.123 with a median of 0.083.
+    features = _features(
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+        motion_pixel_fraction=0.9,
+        motion_pixel_fraction_median=0.083,
+    )
+    assert backtest.classify(features) == "incident_candidate"
+
+
+def test_classify_long_flare_is_maintenance_only_and_never_gates_an_alert():
+    # cam06/21520, the crawl incident, sits at long_flare_frames=15 -- too
+    # thin a margin to use as an alert veto, deliberately not shipped as one.
+    features = _features(
+        outside_pixel_fraction=0.9, median_fence_distance=0.2, long_flare_frames=25
+    )
+    assert backtest.classify(features) == "incident_candidate"
+    assert backtest.is_blinding_foreground(features) is True
+
+
 def test_classify_insect_candidate():
     assert backtest.classify(_features(jitter=60, solidity=0.5)) == "insect_candidate"
 

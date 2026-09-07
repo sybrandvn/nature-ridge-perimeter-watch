@@ -33,11 +33,15 @@ recall number in this file):
 **Recall is no longer the bottleneck; leakage is.** The environment leak is the largest single
 false-alert source and is 55% concentrated on cam10.
 
-**One decision is waiting on the user** (see handoff #5 for the full table): adding an *upper*
-bound on `median_fence_distance` to the animal/incident rule would cut the environment leak from
-29 to 14 clips with all 5 incident events still alerting, at the cost of exactly one marginal
-animal event (cam10/7632). That breaks the standing "never lose an animal" constraint, so it is
-deliberately unshipped pending an explicit call.
+**Decision made and shipped (2026-09-07):** the user chose to add the *upper* bound. `scripts/
+backtest.py::classify()`'s animal/incident geometry rule now requires `median_fence_distance <
+MEDIAN_FENCE_DISTANCE_MAX (0.40)` as well as `> 0.1`. Re-measured through the real rule order:
+environment leak into the alert channel drops 29 -> 14 clips, all 5 incident events still alert
+(`scripts/check_incident_regression.py` passes 5/5), and the accepted cost is exactly one animal
+event with no sibling clip to cover it, `cam10/7632` (now `unclassified`, was already noted
+"visually marginal/hard to confirm, enters during IR flare" at labelling time). This is a
+deliberate, explicit break of the standing "never lose an animal" constraint for this one known
+clip, not a silent regression.
 
 ## Checkpoint (2026-08-30): Phase 0 merged to `main`, needs work before Phase 1 starts
 Phase 0 (steps 1-14) is merged and tagged as a checkpoint, not a clean sign-off. Open items before

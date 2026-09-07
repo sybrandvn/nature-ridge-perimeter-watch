@@ -1069,17 +1069,31 @@ def detect_clip(
     well enough that a real per-pixel background diff -- the same
     threshold/morphology/contour pipeline used for every scored frame --
     becomes meaningful there too, instead of only ever appearance-matching a
-    single fixed crop. That real diff is tracked backward from
-    `considered[0]`'s own established box using the same `_run_track_pass`
-    state machine as the rest of the clip, so it can find a genuinely moving
-    subject the appearance trace would only ever re-confirm by lookalike, and
-    correctly report "nothing there" (a frame that really is just flare, not
-    a subject) instead of forcing a guess. Falls back to the appearance-only
-    box for any frame this real-diff pass can't place (e.g. `considered[0]`
-    itself had no detection to seed from) so coverage never regresses.
-    `ClipDetection.dropped_frame_box_is_photometric` marks which mechanism
-    produced each box. `ClipDetection.dropped_frame_compensated` additionally
-    carries every dropped COLOUR frame corrected the same way (per-channel,
+    single fixed crop.
+
+    The fit itself walks backward from the settled frame, not independently
+    per warmup frame: frame `drop-1` (closest to settled) is matched directly
+    against `background` -- a small, well-conditioned gain/offset fit -- and
+    every earlier frame is then matched against its own already-corrected
+    neighbour, one small brightness step at a time, all the way back to frame
+    0. A frame at the start of a steep ramp (e.g. near-black) fitting directly
+    against the far-away settled background is a much larger, less reliable
+    jump than a chain of small steps between adjacent frames that are already
+    similar to each other. The detection target is unchanged either way --
+    every chained frame is still diffed against the real settled `background`
+    for motion, only what each individual fit is computed AGAINST changes.
+
+    That real diff is tracked backward from `considered[0]`'s own established
+    box using the same `_run_track_pass` state machine as the rest of the
+    clip, so it can find a genuinely moving subject the appearance trace
+    would only ever re-confirm by lookalike, and correctly report "nothing
+    there" (a frame that really is just flare, not a subject) instead of
+    forcing a guess. Falls back to the appearance-only box for any frame this
+    real-diff pass can't place (e.g. `considered[0]` itself had no detection
+    to seed from) so coverage never regresses. `ClipDetection.dropped_frame_
+    box_is_photometric` marks which mechanism produced each box.
+    `ClipDetection.dropped_frame_compensated` additionally carries every
+    dropped COLOUR frame corrected the same chained way (per-channel,
     `src.features.photometric_match_color`) purely for display -- evening out
     the flare's brightness/colour ramp so a human watching a debug render
     sees roughly what the settled background looks like, not the raw ramp.
@@ -1422,17 +1436,36 @@ def detect_clip(
     dropped_frame_box_is_photometric = [False] * drop
     dropped_frame_compensated: list[np.ndarray] = []
     if compensate_warmup and drop > 0:
+        # Walk backward from the settled frame, which we trust, rather than
+        # fitting each warmup frame independently against it -- frame drop-1 is
+        # already close to settled (a small, well-conditioned gain/offset fit),
+        # and each earlier frame is fit against its own already-corrected
+        # neighbour, one small step at a time, instead of every frame separately
+        # trying to jump straight from wherever the ramp caught it to the final
+        # settled brightness in one fit. The diff against `background` for
+        # motion detection is unchanged -- chaining only changes what each
+        # frame's gain/offset FIT is computed against, not the detection target.
         background_bgr = np.median(np.stack(considered), axis=0).astype(np.uint8)
-        dropped_frame_compensated = [
-            photometric_match_color(frame, background_bgr) for frame in frames[:drop]
-        ]
+        reference_bgr = background_bgr
+        compensated_bgr_reversed = []
+        for i in range(drop - 1, -1, -1):
+            comp_bgr = photometric_match_color(frames[i], reference_bgr)
+            compensated_bgr_reversed.append(comp_bgr)
+            reference_bgr = comp_bgr
+        dropped_frame_compensated = list(reversed(compensated_bgr_reversed))
+
+        reference_gray = background
+        compensated_grays_reversed = []
+        for i in range(drop - 1, -1, -1):
+            gain, offset = photometric_match(all_grays[i], reference_gray)
+            comp_gray = apply_photometric_match(all_grays[i], gain, offset)
+            compensated_grays_reversed.append(comp_gray)
+            reference_gray = comp_gray
+        compensated_grays = list(reversed(compensated_grays_reversed))
+
         dropped_candidates: list[list[np.ndarray]] = []
-        compensated_grays: list[np.ndarray] = []
-        for dropped_gray in all_grays[:drop]:
-            gain, offset = photometric_match(dropped_gray, background)
-            comp = apply_photometric_match(dropped_gray, gain, offset)
-            compensated_grays.append(comp)
-            diff = cv2.absdiff(comp, background)
+        for comp_gray in compensated_grays:
+            diff = cv2.absdiff(comp_gray, background)
             _, dmask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
             dmask = cv2.morphologyEx(dmask, cv2.MORPH_OPEN, kernel)
             if close_kernel is not None:
@@ -1473,6 +1506,7 @@ def detect_clip(
                 continue
             dropped_frame_boxes[i] = box
             dropped_frame_box_is_photometric[i] = True
+
 
     return ClipDetection(
         frames=detections,

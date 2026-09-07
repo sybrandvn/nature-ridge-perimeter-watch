@@ -75,6 +75,19 @@ Rules:
     and shine a flashlight across it), matching this exact predicted failure
     mode in docs/gate2_separability_finding.md. Requiring `median_fence_
     distance > 0.1` alongside it is what actually suppresses that confound.
+    UPPER-BOUNDED at `MEDIAN_FENCE_DISTANCE_MAX = 0.40` (added 2026-09-07,
+    user decision -- see docs/plan.md's 2026-09-07 checkpoint): a real
+    intruder approaches the fence (the 10 incident clips run 0.117-0.353,
+    comfortably under 0.40) while the environment clips leaking through this
+    rule sit out in the field (leaking-environment median 0.406, AUC 0.840
+    separating the two). Measured through this exact rule order on the full
+    labelled corpus: environment leak into this channel drops 29->14 clips,
+    all 5 incident EVENTS still alert (per-clip 7/10 unaffected by the
+    bound), and the only cost is one animal EVENT with no sibling clip to
+    cover it, `cam10/7632` (median_fence_distance 0.504, itself noted
+    "visually marginal/hard to confirm, enters during IR flare"). Accepted
+    -- breaks the standing "never lose an animal" constraint for this one
+    known clip, a deliberate, explicit tradeoff, not a silent regression.
     The animal/incident split itself is DERIVED FROM ONLY 19 TOTAL CLIPS (9
     animal, 10 incident) -- treat it as a strong LEAD, not a certified rule.
     `color_fraction > 0.15` (AUC 0.828 animal-vs-incident) separates them
@@ -192,6 +205,9 @@ REPORT_COLUMNS = (
     *(c for c in FEATURE_COLUMNS if c not in _NON_NUMERIC),
 )
 
+# See classify()'s docstring ("animal_candidate / incident_candidate") for how this was measured.
+MEDIAN_FENCE_DISTANCE_MAX = 0.40
+
 
 def classify(features: dict[str, float] | None) -> str:
     """Pure rule lookup -- see the module docstring for what each rule means and
@@ -214,7 +230,11 @@ def classify(features: dict[str, float] | None) -> str:
         and features.get("implausible_height_fraction", 0.0) > 0.5
     ):
         return "environment_candidate"
-    if features["outside_pixel_fraction"] > 0.6 and features["median_fence_distance"] > 0.1:
+    if (
+        features["outside_pixel_fraction"] > 0.6
+        and features["median_fence_distance"] > 0.1
+        and features["median_fence_distance"] < MEDIAN_FENCE_DISTANCE_MAX
+    ):
         return "animal_candidate" if features["color_fraction"] > 0.15 else "incident_candidate"
     if features["jitter"] > 50 and features["solidity"] < 0.85:
         return "insect_candidate"

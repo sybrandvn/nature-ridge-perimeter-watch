@@ -50,7 +50,7 @@ def test_classify_warmup_flashlight_beats_animal_incident_geometry():
     features = _features(
         warmup_flashlight_ratio=0.01,
         outside_pixel_fraction=0.9,
-        median_fence_distance=0.5,
+        median_fence_distance=0.2,
         color_fraction=0.0,
     )
     assert backtest.classify(features) == "guard_candidate"
@@ -61,7 +61,7 @@ def test_classify_warmup_flashlight_below_threshold_does_not_fire():
     features = _features(
         warmup_flashlight_ratio=0.00046,
         outside_pixel_fraction=0.9,
-        median_fence_distance=0.5,
+        median_fence_distance=0.2,
         color_fraction=0.0,
     )
     assert backtest.classify(features) == "incident_candidate"
@@ -159,7 +159,7 @@ def test_classify_inside_only_rule_does_not_override_incident():
     features = _features(
         zone_classifiable_fraction=1.0,
         outside_pixel_fraction=0.9,
-        median_fence_distance=0.5,
+        median_fence_distance=0.2,
         color_fraction=0.0,
     )
     assert backtest.classify(features) == "incident_candidate"
@@ -175,17 +175,17 @@ def test_classify_inside_only_rule_does_not_override_environment():
 def test_classify_environment_wins_over_animal_incident_shape():
     # high blob_count AND a fence-crossing geometry read -- environment_candidate
     # takes priority over the animal/incident geometry rule.
-    features = _features(blob_count=11, outside_pixel_fraction=0.9, median_fence_distance=0.5)
+    features = _features(blob_count=11, outside_pixel_fraction=0.9, median_fence_distance=0.2)
     assert backtest.classify(features) == "environment_candidate"
 
 
 def test_classify_animal_candidate_on_daylight_color():
-    features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.5, color_fraction=0.3)
+    features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.2, color_fraction=0.3)
     assert backtest.classify(features) == "animal_candidate"
 
 
 def test_classify_incident_candidate_on_night_color():
-    features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.5, color_fraction=0.0)
+    features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.2, color_fraction=0.0)
     assert backtest.classify(features) == "incident_candidate"
 
 
@@ -194,9 +194,28 @@ def test_classify_guard_wins_over_animal_incident_geometry():
     # takes priority, since guards routinely register as "outside" too (they walk
     # close to the fence and shine a flashlight across it).
     features = _features(
-        outside_pixel_fraction=0.9, median_fence_distance=0.5, green_light_ratio=0.2
+        outside_pixel_fraction=0.9, median_fence_distance=0.2, green_light_ratio=0.2
     )
     assert backtest.classify(features) == "guard_candidate"
+
+
+def test_classify_animal_incident_geometry_upper_bounded():
+    # cam10/7632 (a genuine animal event) sits at 0.504 -- wind-shaken
+    # vegetation out in the field, not a subject approaching the fence.
+    # Deliberately accepted cost of the 2026-09-07 upper bound (see
+    # classify()'s docstring): this clip alone stops alerting.
+    features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.504)
+    assert backtest.classify(features) != "incident_candidate"
+    assert backtest.classify(features) != "animal_candidate"
+
+
+def test_classify_animal_incident_geometry_upper_bound_boundary():
+    # The highest incident in the labelled corpus is 0.353 -- comfortably
+    # under the 0.40 bound, with real margin either side of it.
+    just_under = _features(outside_pixel_fraction=0.9, median_fence_distance=0.399)
+    at_bound = _features(outside_pixel_fraction=0.9, median_fence_distance=0.40)
+    assert backtest.classify(just_under) == "incident_candidate"
+    assert backtest.classify(at_bound) != "incident_candidate"
 
 
 def test_classify_requires_both_outside_fraction_and_fence_distance():

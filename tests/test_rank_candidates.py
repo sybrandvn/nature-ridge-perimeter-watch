@@ -181,6 +181,21 @@ def test_write_maintenance_candidates_only_blinding_rows(tmp_path: Path):
     assert {r["message_id"] for r in queue} == {2, 3}
 
 
+def test_write_maintenance_candidates_excludes_no_maintenance_cameras(tmp_path: Path):
+    rows = [
+        _detected_row("cam04", 1, "guard", blob_white_fraction=0.9),
+        _detected_row("cam01", 2, "guard", blob_white_fraction=0.9),
+    ]
+
+    queue = rc.write_maintenance_candidates(
+        rows, top_per_camera=10, out_path=str(tmp_path / "maintenance.csv")
+    )
+
+    # cam04 confirmed 2026-09-07 to be flashlight-into-lens, not a real
+    # obstruction -- excluded from the "clean the camera" report entirely
+    assert {r["message_id"] for r in queue} == {2}
+
+
 def test_rank_and_write_raises_without_labelled_rows(tmp_path: Path):
     rows = [_detected_row("cam01", 1, None)]
     with pytest.raises(ValueError, match="no labelled"):

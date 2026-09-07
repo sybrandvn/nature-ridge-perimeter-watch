@@ -65,6 +65,14 @@ NUMERIC_FEATURES = tuple(c for c in FEATURE_COLUMNS if c not in _NON_FEATURE_COL
 POSITIVE_LABELS = ("animal", "incident")
 NEGATIVE_LABELS = ("guard", "environment", "resident", "unknown")
 
+# Cameras where a human reviewer confirmed (watching the actual footage, not
+# an inferred threshold) that every is_blinding_foreground hit is a guard
+# shining their flashlight directly into the lens, not a physical obstruction
+# -- so this camera's clips don't belong in a "send someone to clean this"
+# report. cam04, 2026-09-07: user reviewed the full maintenance queue and
+# confirmed every cam04 entry was this pattern.
+NO_MAINTENANCE_CAMERAS = frozenset({"cam04"})
+
 # Every numeric feature, not a hand-picked subset: the queue is a REVIEW
 # artifact, and the whole point of reviewing a candidate is being able to see
 # why it scored -- persistence/longest_detection_run to tell a sustained
@@ -426,8 +434,26 @@ def write_maintenance_candidates(
     report, not an incident lead, so an already-labelled guard/environment
     clip still belongs here. Ranked by whichever of the two triggering
     features reads more extreme, per-camera stratified same as the main
-    queue."""
-    detected = [r for r in rows if r.get("detected") and is_blinding_foreground(r)]
+    queue.
+
+    `is_blinding_foreground` cannot yet tell a real static obstruction (a
+    branch/web against the lens) apart from a guard shining their flashlight
+    directly into the lens -- both read as overexposed. Tried a whether-the-
+    bright-region-MOVES check (2026-09-07, whole labelled corpus): removing
+    high-white-centroid-travel clips cut guard 68-73% and environment 71-73%
+    at every threshold tested, i.e. it tracks "is there motion in the scene at
+    all" (wind-shaken foliage moves too) rather than "flashlight vs.
+    obstruction" -- rejected, not shipped. Until a real discriminator exists,
+    `NO_MAINTENANCE_CAMERAS` below is the only correction: a documented,
+    human-confirmed per-camera override, not an algorithmic guess.
+    """
+    detected = [
+        r
+        for r in rows
+        if r.get("detected")
+        and is_blinding_foreground(r)
+        and r["camera_id"] not in NO_MAINTENANCE_CAMERAS
+    ]
     detected = prefer_longest_per_event(detected)
     for row in detected:
         row["maintenance_score"] = max(

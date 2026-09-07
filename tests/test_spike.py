@@ -1494,6 +1494,26 @@ def test_extract_clip_features_ignore_region_suppresses_light_blob_count_and_fli
     assert result_masked["green_light_flicker"] == pytest.approx(0.0)
 
 
+def test_extract_clip_features_median_counterparts_ignore_a_single_spike(monkeypatch, tmp_path):
+    # The peak blob_count/motion_pixel_fraction fire on one noisy frame; their
+    # median counterparts only rise when the scattered motion persists.
+    positions = (5, 12, 19, 26, 33, 40)
+    frames = [_frame_with_square(pos) for pos in positions]
+    noisy = frames[1].copy()
+    for x in range(2, 60, 6):
+        cv2.rectangle(noisy, (x, 2), (x + 3, 5), (255, 255, 255), thickness=-1)
+    frames[1] = noisy
+
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
+    assert result["blob_count_median"] <= result["blob_count"]
+    assert result["motion_pixel_fraction_median"] <= result["motion_pixel_fraction"]
+    assert "blob_count_median" in spike.FEATURE_COLUMNS
+    assert "motion_pixel_fraction_median" in spike.FEATURE_COLUMNS
+
+
 def test_detect_clip_records_a_suppressed_light_box_instead_of_nothing(monkeypatch, tmp_path):
     # A stationary light masked out by an ignore polygon shouldn't just vanish
     # without a trace -- FrameDetection.suppressed_light_box is the additive,

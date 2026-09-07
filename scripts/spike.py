@@ -121,6 +121,8 @@ FEATURE_COLUMNS = (
     "persistence",
     "motion_pixel_fraction",
     "blob_count",
+    "motion_pixel_fraction_median",
+    "blob_count_median",
     "longest_detection_run",
     "area_stability",
     "normalised_speed",
@@ -901,6 +903,10 @@ def normalized_contour_points(contour: np.ndarray, frame_width: int, frame_heigh
 def _whole_frame_contour(frame_width: int, frame_height: int) -> np.ndarray:
     w, h = frame_width - 1, frame_height - 1
     return np.array([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]], dtype=np.int32)
+
+
+def _median(values: list[float]) -> float:
+    return float(np.median(values)) if values else 0.0
 
 
 def _frame_is_merged(detection: ClipDetection, frame_index: int) -> bool:
@@ -2004,6 +2010,12 @@ def extract_clip_features(
         "persistence": persistence(genuine_frames_detected, len(considered)),
         "motion_pixel_fraction": motion_pixel_fraction,
         "blob_count": float(blob_count),
+        # Median counterparts of the two peak readings above. The peak is what a
+        # storm needs, but it also fires on a single flare-settle frame at the
+        # start of an otherwise quiet clip (cam04/10887 reads [16, 5, 5, 4, 3...]);
+        # the median only rises when the scattered motion actually persists.
+        "motion_pixel_fraction_median": _median([d.motion_pixel_fraction for d in considered]),
+        "blob_count_median": _median([float(len(d.blobs)) for d in considered]),
         "longest_detection_run": longest_detection_run(genuine_detected_indices, len(considered)),
         "area_stability": area_stability(genuine_blob_areas),
         "normalised_speed": normalised_speed(genuine_centroids, best_width),

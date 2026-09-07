@@ -1038,13 +1038,59 @@ Two things a new agent should weigh before adding more guard signal:
    because every one of those incidents has a sibling clip that still alerts (event check 5/5).
    That margin is thin — re-check it whenever a guard rule is added or an incident is labelled.
 
+### The environment leak, diagnosed (2026-09-07) — a decision is waiting on the user
+
+**29 environment clips reach the alert channel** (18 `incident_candidate` + 11 `animal_candidate`).
+This is now the largest false-alert source, bigger than guard misrouting.
+
+**It is heavily concentrated by camera:** cam10 ×16, cam12 ×4, cam15 ×3, cam07 ×3, cam08/cam09/
+cam13 ×1 each. cam10 alone is 55% of the leak, consistent with its already-documented 55.6%
+`environment_candidate` rate — a per-camera problem as much as a rule problem.
+
+**`median_fence_distance` is the discriminator, AUC 0.840** separating leaking environment from
+real animal+incident — and the direction is physically meaningful: an intruder approaches the
+fence (positives p50 **0.227**) while wind-shaken vegetation sits out in the field (leaking
+environment p50 **0.406**). The animal/incident rule currently bounds this feature only from
+*below* (`> 0.1`); it has no upper bound.
+
+Simulated through the **real rule order** (only rows the earlier rules don't already catch):
+
+| upper bound | env leak | guard leak | incident events alerting |
+| --- | --- | --- | --- |
+| none (current) | 29/100 | 33 | 5/5 |
+| 0.50 | 22/100 | 32 | 5/5 |
+| 0.45 | 17/100 | 29 | 5/5 |
+| **0.40** | **14/100** | 27 | **5/5** |
+
+**Incidents are entirely safe at any of these bounds** — the 10 incident clips run
+0.117…**0.353**, so 0.40 still leaves headroom, and all 5 incident *events* keep alerting.
+
+**The entire cost is one animal event: `cam10/7632`** (`median_fence_distance` 0.504), which is a
+solo event with no sibling clip to cover it, so it is lost at 0.50, 0.45 and 0.40 alike. Its own
+label note reads *"animal enters very early (during IR flare/warmup) ... visually marginal/hard
+to confirm"* — i.e. precisely the case the IR-flare-tracking item above would help. The other
+distant animal, `cam15/17949` (0.586), is **not** at risk: it reads `outside_pixel_fraction=0.00`
+so it never satisfied the geometry rule anyway, and its sibling `17950` (0.251) carries the event.
+
+**Why this was not shipped:** it trades one marginal animal event for roughly half the environment
+false alerts, which breaks the standing "never lose an animal or incident" constraint. That is a
+product call, not an engineering one — the user has said incidents are the hard requirement and
+animals are a lower-priority channel, so this may well be acceptable, but it needs an explicit
+decision. **Do not adopt it silently.**
+
+If it is accepted, the change is one clause in `scripts/backtest.py::classify()`'s geometry rule
+plus a threshold constant, and the incident-regression fixture must be re-run (it will still pass
+5/5 — verified). If it is rejected, the cam10-specific concentration is the next thread to pull:
+16 of 29 leaks on one camera suggests its `fence_bottom`/geometry or its own environment base rate
+deserves separate treatment rather than a corpus-wide threshold.
+
 ### Immediate next step (highest value, well-evidenced)
 `post_flash_red_shift` is a **zero-leak guard identifier corpus-wide** but is currently only used
 by the maintenance queue. It is not yet a rule in `scripts/backtest.py::classify()`. Adding it as
-a `guard_candidate` rule is the obvious next move — measure recall / guard false-fire / positive
-leak through the **real rule order** first (only rows the earlier rules don't already catch),
-exactly as the `warmup_flashlight_ratio` rule was validated. Expect a meaningful bite out of the
-still-low guard recall.
+a `guard_candidate` rule would be easy — but **weigh it against the confusion matrix above first**:
+guard recall is already 71.8%, and every new guard rule sits *ahead* of the geometry rules, so it
+can only push more incidents toward `guard_candidate` (already 3/10). Extra guard recall is not
+clearly what this system needs right now; the environment leak above is the bigger win.
 
 ### The open architectural item: tracking through the IR flare
 

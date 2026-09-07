@@ -571,6 +571,18 @@ def render_clip(
             if detection.dropped_frame_compensated
             else raw_frame
         )
+        # Naive correction magnitude: mean absolute pixel change from the raw
+        # capture, as a percentage of the full 0-255 range -- not a measurement
+        # of accuracy, just a reminder that this is NOT the original frame.
+        correction_pct = (
+            float(
+                np.abs(source_frame.astype(np.float64) - raw_frame.astype(np.float64)).mean()
+            )
+            / 255.0
+            * 100.0
+            if detection.dropped_frame_compensated
+            else 0.0
+        )
         canvas = cv2.resize(source_frame, (width, height), interpolation=cv2.INTER_CUBIC)
         _apply_zone(canvas, tint, ink)
         cv2.rectangle(canvas, (0, 0), (width - 1, height - 1), COLOR_WARMUP, 4)
@@ -582,6 +594,15 @@ def render_clip(
             scale=0.5,
             thickness=2,
         )
+        if detection.dropped_frame_compensated:
+            _text(
+                canvas,
+                f"~{correction_pct:.0f}% corrected -- NOT the original frame",
+                (10, 60),
+                color=COLOR_WARMUP,
+                scale=0.45,
+                thickness=1,
+            )
         traced_box = detection.dropped_frame_boxes[warm_index]
         is_photometric = (
             bool(detection.dropped_frame_box_is_photometric)
@@ -620,7 +641,7 @@ def render_clip(
                 "status",
                 "gain/illuminator settling -- excluded from background model & features"
                 + (
-                    "; shown brightness/colour-corrected to the settled background"
+                    f"; ~{correction_pct:.0f}% corrected to the settled background"
                     if detection.dropped_frame_compensated
                     else ""
                 ),

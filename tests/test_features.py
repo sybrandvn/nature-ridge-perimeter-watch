@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from src.features import (
+    apply_photometric_match,
     area_stability,
     aspect_ratio,
     blob_white_fraction,
@@ -26,6 +27,8 @@ from src.features import (
     normalised_speed,
     path_length,
     persistence,
+    photometric_match,
+    photometric_match_color,
     post_flash_red_shift,
     row_normalised_area,
     saturation_ratio,
@@ -534,3 +537,40 @@ def test_flare_settle_index_never_discards_more_than_max_fraction():
     # the cameras are motion-triggered, so the subject is already in frame.
     medians = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
     assert flare_settle_index(medians, max_fraction=0.4) == 4
+
+
+def test_photometric_match_recovers_a_known_gain_and_offset():
+    rng = np.random.default_rng(0)
+    source = rng.uniform(0, 200, size=(20, 20)).astype(np.float64)
+    reference = source * 1.4 + 20.0
+    gain, offset = photometric_match(source, reference)
+    assert gain == pytest.approx(1.4, abs=1e-6)
+    assert offset == pytest.approx(20.0, abs=1e-6)
+
+
+def test_apply_photometric_match_reconstructs_the_reference():
+    rng = np.random.default_rng(1)
+    source = rng.uniform(0, 200, size=(20, 20)).astype(np.uint8)
+    reference = np.clip(source.astype(np.float64) * 0.8 + 10.0, 0, 255).astype(np.uint8)
+    gain, offset = photometric_match(source, reference)
+    corrected = apply_photometric_match(source, gain, offset)
+    assert np.mean(np.abs(corrected.astype(np.float64) - reference.astype(np.float64))) < 1.0
+
+
+def test_photometric_match_falls_back_to_offset_for_a_blank_frame():
+    # Zero variance (e.g. a fully saturated/blank frame) makes a gain fit
+    # undefined -- must fall back to a pure brightness shift, not NaN/inf.
+    source = np.full((10, 10), 200.0)
+    reference = np.full((10, 10), 150.0)
+    gain, offset = photometric_match(source, reference)
+    assert gain == pytest.approx(1.0)
+    assert offset == pytest.approx(-50.0)
+
+
+def test_photometric_match_color_corrects_each_channel_independently():
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)
+    frame[:, :] = (40, 60, 80)  # BGR, a colour cast
+    reference = np.zeros((10, 10, 3), dtype=np.uint8)
+    reference[:, :] = (100, 100, 100)  # neutral grey
+    corrected = photometric_match_color(frame, reference)
+    assert np.mean(np.abs(corrected.astype(np.float64) - 100.0)) < 1.0

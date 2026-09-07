@@ -993,6 +993,86 @@ def test_detect_clip_traces_track_backward_into_dropped_flare_frames(monkeypatch
     assert sum(box is not None for box in detection.dropped_frame_boxes) >= 2
 
 
+def test_detect_clip_compensate_warmup_off_by_default(monkeypatch):
+    # Same ramp+subject shape as the trace test above -- default behaviour
+    # (compensate_warmup unset) must leave the new fields untouched.
+    def _frame(value: int, pos: int) -> np.ndarray:
+        frame = _blank_frame(value=value)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], pos, 30, 200, 100)
+        return frame
+
+    ramp = [_frame(v, pos=5) for v in (220, 150, 80, 20, 0)]
+    positions = (5, 15, 25, 35, 45)
+    trailing = [_frame(0, pos) for pos in positions]
+    subject = [_frame(0, pos) for pos in positions]
+    monkeypatch.setattr(
+        spike.cv2, "VideoCapture", lambda _path: FakeCapture(ramp + trailing + subject)
+    )
+
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+
+    assert detection is not None
+    assert detection.dropped_frame_compensated == []
+    assert detection.dropped_frame_box_is_photometric == [False] * detection.warmup_dropped
+
+
+def test_detect_clip_compensate_warmup_tracks_real_motion_in_flare_window(monkeypatch):
+    # The warmup ramp frames carry a real moving subject at a screen position
+    # (column 8) the settled background never sees -- distinct from the
+    # subject's later tracked path (columns 30-50) -- so a real per-pixel diff
+    # against the (photometrically compensated) background can only find it
+    # by actually looking, not by re-confirming the appearance trace's own
+    # guess. A checkerboard base (not a flat fill) gives the gain/offset fit
+    # real spatial structure to correlate against, closer to a real camera's
+    # micro-texture than a blank frame (which has none, see photometric_match
+    # tests for the degenerate flat case).
+    size = 60
+
+    def _checkerboard(value: int) -> np.ndarray:
+        # 10px blocks, not single pixels -- a single-pixel checkerboard is
+        # smoothed away almost entirely by detect_clip's own Gaussian blur,
+        # leaving no real structure for the gain/offset fit to correlate
+        # against (checked directly before picking this block size).
+        grid = (np.indices((size, size)) // 10).sum(axis=0) % 2
+        return np.clip(value + grid * 40, 0, 255).astype(np.uint8)
+
+    def _frame(value: int, pos: int) -> np.ndarray:
+        base = _checkerboard(value)
+        frame = np.zeros((size, size, 3), dtype=np.uint8)
+        for c in range(3):
+            frame[:, :, c] = base
+            _draw_textured_patch(frame[:, :, c], pos, 30, 220, 20)
+        return frame
+
+    ramp = [_frame(v, pos=8) for v in (150, 100, 50, 10, 0)]  # excluded from background model
+    positions = (30, 35, 40, 45, 50)
+    trailing = [_frame(0, pos) for pos in positions]  # settled, still part of the ramp clip
+    subject = [_frame(0, pos) for pos in positions]
+    monkeypatch.setattr(
+        spike.cv2, "VideoCapture", lambda _path: FakeCapture(ramp + trailing + subject)
+    )
+
+    detection = spike.detect_clip("clip.mp4", threshold=18, compensate_warmup=True)
+
+    assert detection is not None
+    assert detection.warmup_dropped >= 5
+    assert len(detection.dropped_frame_compensated) == detection.warmup_dropped
+    assert any(detection.dropped_frame_box_is_photometric)
+    # At least one photometric box should land near column 8 (its real
+    # warmup-window position), not column 30+ (where the subject ends up once
+    # scoring starts) -- confirms this is real tracking, not the later
+    # position carried backward.
+    photometric_boxes = [
+        box
+        for box, is_photo in zip(
+            detection.dropped_frame_boxes, detection.dropped_frame_box_is_photometric, strict=True
+        )
+        if is_photo and box is not None
+    ]
+    assert any(box[0] < 20 for box in photometric_boxes)
+
+
 def test_detect_clip_reverse_trace_seeds_from_plausible_size_not_frame_zero(monkeypatch):
     # Frame 0's own contour is a residual-illumination-sized outlier -- a big
     # patch swallows the real, much smaller subject's own true appearance --

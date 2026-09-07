@@ -48,6 +48,7 @@ from src import db  # noqa: E402
 from src.config import CamerasConfig, CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
     FLASHLIGHT_SUBJECT_THRESHOLD,
+    apply_photometric_match,
     area_stability,
     aspect_ratio,
     blob_white_fraction,
@@ -68,6 +69,8 @@ from src.features import (  # noqa: E402
     normalised_speed,
     path_length,
     persistence,
+    photometric_match,
+    photometric_match_color,
     post_flash_red_shift,
     row_normalised_area,
     sane_fps,
@@ -947,6 +950,16 @@ class ClipDetection:
     # bbox per dropped_frames entry, from tracing the first scored frame's appearance
     # backward into the flare/warmup region -- None where the trace didn't reach/match.
     dropped_frame_boxes: list[tuple[int, int, int, int] | None]
+    # True where the matching dropped_frame_boxes entry came from a real per-pixel
+    # background diff against a photometrically-compensated warmup frame (see
+    # `detect_clip`'s `compensate_warmup`), rather than pure appearance matching --
+    # the renderer uses this to label which mechanism found the box. Empty unless
+    # `compensate_warmup=True`.
+    dropped_frame_box_is_photometric: list[bool] = field(default_factory=list)
+    # dropped_frames, colour-corrected (brightness + per-channel colour cast) to match
+    # the settled background -- display/diagnostic only, never fed into detection.
+    # Empty unless `compensate_warmup=True`.
+    dropped_frame_compensated: list[np.ndarray] = field(default_factory=list)
     # every persistently-identified subject per frame, from track_multiple_objects --
     # additive diagnostic detail, parallel to `frames`, not used in feature scoring.
     multi_tracks: list[list[TrackedObject]] = field(default_factory=list)
@@ -983,6 +996,7 @@ def detect_clip(
     max_scenery_streak: int = 2,
     scenery_correlation: float = 0.94,
     ignore_polygons: tuple[tuple[tuple[float, float], ...], ...] = (),
+    compensate_warmup: bool = False,
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
@@ -1046,6 +1060,29 @@ def detect_clip(
     (by `flare_match_relax`) since those frames are noisier/differently lit --
     results land in `ClipDetection.dropped_frame_boxes`, kept separate from
     `frames` since they're still not fed into feature scoring.
+
+    `compensate_warmup=True` (default off) improves on that appearance-only
+    guess for the SAME warmup window, without touching `frames`/`background`/
+    feature scoring at all: each dropped frame is photometrically matched
+    (`src.features.photometric_match`, a per-frame gain/offset fit) onto the
+    already-trustworthy settled `background`, which cancels the IR gain step
+    well enough that a real per-pixel background diff -- the same
+    threshold/morphology/contour pipeline used for every scored frame --
+    becomes meaningful there too, instead of only ever appearance-matching a
+    single fixed crop. That real diff is tracked backward from
+    `considered[0]`'s own established box using the same `_run_track_pass`
+    state machine as the rest of the clip, so it can find a genuinely moving
+    subject the appearance trace would only ever re-confirm by lookalike, and
+    correctly report "nothing there" (a frame that really is just flare, not
+    a subject) instead of forcing a guess. Falls back to the appearance-only
+    box for any frame this real-diff pass can't place (e.g. `considered[0]`
+    itself had no detection to seed from) so coverage never regresses.
+    `ClipDetection.dropped_frame_box_is_photometric` marks which mechanism
+    produced each box. `ClipDetection.dropped_frame_compensated` additionally
+    carries every dropped COLOUR frame corrected the same way (per-channel,
+    `src.features.photometric_match_color`) purely for display -- evening out
+    the flare's brightness/colour ramp so a human watching a debug render
+    sees roughly what the settled background looks like, not the raw ramp.
 
     Kept separate from `extract_clip_features` so overlays and diagnostics can
     render exactly what scored a clip rather than a lookalike reimplementation.
@@ -1382,6 +1419,61 @@ def detect_clip(
                     filled_by_reverse=True,
                 )
 
+    dropped_frame_box_is_photometric = [False] * drop
+    dropped_frame_compensated: list[np.ndarray] = []
+    if compensate_warmup and drop > 0:
+        background_bgr = np.median(np.stack(considered), axis=0).astype(np.uint8)
+        dropped_frame_compensated = [
+            photometric_match_color(frame, background_bgr) for frame in frames[:drop]
+        ]
+        dropped_candidates: list[list[np.ndarray]] = []
+        compensated_grays: list[np.ndarray] = []
+        for dropped_gray in all_grays[:drop]:
+            gain, offset = photometric_match(dropped_gray, background)
+            comp = apply_photometric_match(dropped_gray, gain, offset)
+            compensated_grays.append(comp)
+            diff = cv2.absdiff(comp, background)
+            _, dmask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+            dmask = cv2.morphologyEx(dmask, cv2.MORPH_OPEN, kernel)
+            if close_kernel is not None:
+                dmask = cv2.morphologyEx(dmask, cv2.MORPH_CLOSE, close_kernel)
+            if ignore_mask is not None:
+                dmask[ignore_mask] = 0
+            dcontours, _ = cv2.findContours(dmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            dropped_candidates.append([c for c in dcontours if 0 < cv2.contourArea(c) <= max_area])
+        # Seed from considered[0]'s own established box when there is one, so the
+        # trace picks up the SAME subject rather than whatever else clears the
+        # candidate gate first. When considered[0] itself has no detection (the
+        # scored track never establishes at all, e.g. a slow-dwelling subject --
+        # see cam06/21520 in repo memory), there is nothing to anchor continuity
+        # to; run unseeded instead of giving up, so a real per-pixel diff still
+        # gets a chance to find and track a subject purely within the warmup
+        # window on its own merits.
+        has_seed = detections[0].largest is not None
+        seed_grays = [grays[0], *reversed(compensated_grays)] if has_seed else list(
+            reversed(compensated_grays)
+        )
+        seed_candidates = (
+            [per_frame_candidates[0], *reversed(dropped_candidates)]
+            if has_seed
+            else list(reversed(dropped_candidates))
+        )
+        seed_results = _run_track_pass(seed_grays, seed_candidates, **track_kwargs)
+        # With a seed, result[0] is grays[0] itself (already tracked, kept only
+        # for continuity) -- drop it. Either way the rest are the dropped frames
+        # in reverse-chronological order (drop-1 down to 0).
+        traced = seed_results[1:] if has_seed else seed_results
+        traced_boxes = list(
+            reversed(
+                [_contour_bbox(contour) if contour is not None else None for contour, _r in traced]
+            )
+        )
+        for i, box in enumerate(traced_boxes):
+            if box is None:
+                continue
+            dropped_frame_boxes[i] = box
+            dropped_frame_box_is_photometric[i] = True
+
     return ClipDetection(
         frames=detections,
         background=background,
@@ -1391,6 +1483,8 @@ def detect_clip(
         total_frames=total_frames,
         dropped_frames=frames[:drop],
         dropped_frame_boxes=dropped_frame_boxes,
+        dropped_frame_box_is_photometric=dropped_frame_box_is_photometric,
+        dropped_frame_compensated=dropped_frame_compensated,
         multi_tracks=multi_tracks,
         scenery_motion_fraction=(
             scenery_motion_area / total_motion_area if total_motion_area > 0 else 0.0

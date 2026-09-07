@@ -522,6 +522,54 @@ def flare_settle_index(
     return min(settle, int(len(frame_medians) * max_fraction))
 
 
+def photometric_match(source: np.ndarray, reference: np.ndarray) -> tuple[float, float]:
+    """Least-squares (gain, offset) so that `gain * source + offset`
+    approximates `reference`, one single-channel array at a time.
+
+    This is the per-frame counterpart to `flare_settle_index`'s whole-clip
+    view: instead of deciding a frame is unusably corrupted by the IR gain
+    ramp and discarding it outright, fit the brightness/contrast transform
+    that would make it look like the settled background, so a real per-pixel
+    difference against that background becomes possible even during the ramp.
+    A single scalar (median ratio, as `_warmup_motion_features` already uses
+    for consecutive-frame comparison) only corrects brightness; an affine fit
+    also corrects the gain/contrast component of the ramp.
+
+    Falls back to a pure offset (gain=1.0) when `source` has near-zero
+    variance (e.g. a blank/saturated frame) -- `np.polyfit` on a
+    zero-variance input is a divide-by-zero, not a meaningful fit.
+    """
+    src = source.astype(np.float64).ravel()
+    ref = reference.astype(np.float64).ravel()
+    if src.size == 0:
+        return 1.0, 0.0
+    if float(np.std(src)) < 1e-6:
+        return 1.0, float(np.mean(ref) - np.mean(src))
+    gain, offset = np.polyfit(src, ref, 1)
+    return float(gain), float(offset)
+
+
+def apply_photometric_match(frame: np.ndarray, gain: float, offset: float) -> np.ndarray:
+    """Apply a `photometric_match` (gain, offset) pair, clipped back to uint8."""
+    corrected = frame.astype(np.float64) * gain + offset
+    return np.clip(corrected, 0, 255).astype(np.uint8)
+
+
+def photometric_match_color(frame_bgr: np.ndarray, reference_bgr: np.ndarray) -> np.ndarray:
+    """Per-channel `photometric_match`, for evening out a flare-lit COLOUR
+    frame against a settled reference -- corrects both brightness and colour
+    cast (each of B/G/R gets its own gain/offset) rather than only grey level.
+    Display/debug use only; detection always works in greyscale.
+    """
+    channels = cv2.split(frame_bgr)
+    ref_channels = cv2.split(reference_bgr)
+    corrected = [
+        apply_photometric_match(channel, *photometric_match(channel, ref_channel))
+        for channel, ref_channel in zip(channels, ref_channels, strict=True)
+    ]
+    return cv2.merge(corrected)
+
+
 def _hhmm_to_minutes(value: str) -> int:
     hours, minutes = value.split(":")
     return int(hours) * 60 + int(minutes)

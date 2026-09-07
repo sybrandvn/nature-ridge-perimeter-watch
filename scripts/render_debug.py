@@ -493,6 +493,7 @@ def render_clip(
         flare_tolerance=flare_tolerance,
         max_flare_fraction=max_flare_fraction,
         reference_background=reference_background,
+        compensate_warmup=True,
     )
     if detection is None:
         return None
@@ -565,7 +566,12 @@ def render_clip(
     max_area_px = max_area_fraction * detection.frame_height * detection.frame_width
 
     for warm_index, raw_frame in enumerate(detection.dropped_frames):
-        canvas = cv2.resize(raw_frame, (width, height), interpolation=cv2.INTER_CUBIC)
+        source_frame = (
+            detection.dropped_frame_compensated[warm_index]
+            if detection.dropped_frame_compensated
+            else raw_frame
+        )
+        canvas = cv2.resize(source_frame, (width, height), interpolation=cv2.INTER_CUBIC)
         _apply_zone(canvas, tint, ink)
         cv2.rectangle(canvas, (0, 0), (width - 1, height - 1), COLOR_WARMUP, 4)
         _text(
@@ -577,12 +583,26 @@ def render_clip(
             thickness=2,
         )
         traced_box = detection.dropped_frame_boxes[warm_index]
+        is_photometric = (
+            bool(detection.dropped_frame_box_is_photometric)
+            and detection.dropped_frame_box_is_photometric[warm_index]
+        )
         if traced_box is not None:
             x0, y0, x1, y1 = (c * scale for c in traced_box)
-            _draw_dashed_rect(canvas, (x0, y0), (x1, y1), COLOR_REVERSE, thickness=2)
+            label = (
+                "TRACKED (real diff, brightness/colour corrected)"
+                if is_photometric
+                else "INFERRED - TRACKED (reverse trace)"
+            )
+            if is_photometric:
+                cv2.rectangle(
+                    canvas, (int(x0), int(y0)), (int(x1), int(y1)), COLOR_REVERSE, thickness=2
+                )
+            else:
+                _draw_dashed_rect(canvas, (x0, y0), (x1, y1), COLOR_REVERSE, thickness=2)
             _text(
                 canvas,
-                "INFERRED - TRACKED (reverse trace)",
+                label,
                 (x0, max(11, y0 - 4)),
                 color=COLOR_REVERSE,
                 scale=0.4,
@@ -596,7 +616,15 @@ def render_clip(
                 f"warmup {warm_index + 1}/{detection.warmup_dropped}"
                 f"  (raw frame {warm_index + 1}/{detection.total_frames})",
             ),
-            ("status", "gain/illuminator settling -- excluded from background model & features"),
+            (
+                "status",
+                "gain/illuminator settling -- excluded from background model & features"
+                + (
+                    "; shown brightness/colour-corrected to the settled background"
+                    if detection.dropped_frame_compensated
+                    else ""
+                ),
+            ),
         ]
         _draw_hud(panel, lines=live, origin_y=height)
         writer.write(panel)

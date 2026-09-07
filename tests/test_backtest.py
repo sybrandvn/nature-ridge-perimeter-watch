@@ -201,6 +201,41 @@ def test_classify_animal_candidate_on_daylight_color():
     assert backtest.classify(features) == "animal_candidate"
 
 
+def test_classify_animal_candidate_large_blob_redirects_to_environment():
+    # A large, depth-corrected blob in the animal_candidate branch reads as a
+    # branch/bush, not a real animal (real animal median row_normalised_area
+    # is 666 vs this leaking population's 10471 -- see classify()'s docstring).
+    features = _features(
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+        color_fraction=0.3,
+        row_normalised_area=5000.0,
+    )
+    assert backtest.classify(features) == "environment_candidate"
+
+
+def test_classify_animal_candidate_row_area_absent_key_is_safe():
+    # Callers that never computed row_normalised_area (feature dict predates
+    # it) must behave exactly as before -- missing key is not the same as a
+    # large blob.
+    features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.2, color_fraction=0.3)
+    assert "row_normalised_area" not in features
+    assert backtest.classify(features) == "animal_candidate"
+
+
+def test_classify_incident_candidate_ignores_row_area_bound():
+    # The row_normalised_area bound is deliberately NEVER applied to
+    # incident_candidate -- it does not separate incident from environment
+    # there, and touching it risks suppressing a real outside incident.
+    features = _features(
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+        color_fraction=0.0,
+        row_normalised_area=50000.0,
+    )
+    assert backtest.classify(features) == "incident_candidate"
+
+
 def test_classify_incident_candidate_on_night_color():
     features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.2, color_fraction=0.0)
     assert backtest.classify(features) == "incident_candidate"

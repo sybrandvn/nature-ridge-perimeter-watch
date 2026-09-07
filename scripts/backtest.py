@@ -88,6 +88,23 @@ Rules:
     "visually marginal/hard to confirm, enters during IR flare"). Accepted
     -- breaks the standing "never lose an animal" constraint for this one
     known clip, a deliberate, explicit tradeoff, not a silent regression.
+    ANIMAL_CANDIDATE branch additionally UPPER-BOUNDED at `ANIMAL_ROW_AREA_MAX
+    = 3000` on `row_normalised_area` (added 2026-09-07, after the user
+    labelled a fresh review batch and specifically flagged "animal blobs are
+    small, especially further away, where branches pick up larger"). Measured
+    on the re-grown labelled corpus (571 clips): real animal median
+    `row_normalised_area` is 666 vs environment-that-would-otherwise-read-
+    animal_candidate's median 10471 -- a >15x gap. Deliberately NEVER applied
+    to incident_candidate: the same signal does NOT separate incident from
+    environment there (incident median 10704, almost identical to
+    environment's), and checking it directly against real incident clips
+    showed 2-6/7 would be wrongly gated at every threshold tried -- touching
+    that branch would violate docs/plan.md's "shape may never suppress an
+    outside alert" policy for a real reason, not just caution. On the
+    animal_candidate side only: redirects 15/19 (79%) of environment clips
+    that would otherwise misread as animal_candidate, at the highest
+    threshold with ZERO real animal clips lost (0/10) -- verified by sweeping
+    500 to 10000, animal loss only appears below 3000.
     The animal/incident split itself is DERIVED FROM ONLY 19 TOTAL CLIPS (9
     animal, 10 incident) -- treat it as a strong LEAD, not a certified rule.
     `color_fraction > 0.15` (AUC 0.828 animal-vs-incident) separates them
@@ -224,6 +241,9 @@ REPORT_COLUMNS = (
 
 # See classify()'s docstring ("animal_candidate / incident_candidate") for how this was measured.
 MEDIAN_FENCE_DISTANCE_MAX = 0.40
+# See classify()'s docstring for how this was measured -- only bounds the
+# animal_candidate branch, deliberately never incident_candidate.
+ANIMAL_ROW_AREA_MAX = 3000.0
 
 
 def classify(features: dict[str, float] | None) -> str:
@@ -252,7 +272,11 @@ def classify(features: dict[str, float] | None) -> str:
         and features["median_fence_distance"] > 0.1
         and features["median_fence_distance"] < MEDIAN_FENCE_DISTANCE_MAX
     ):
-        return "animal_candidate" if features["color_fraction"] > 0.15 else "incident_candidate"
+        if features["color_fraction"] > 0.15:
+            if features.get("row_normalised_area", 0.0) > ANIMAL_ROW_AREA_MAX:
+                return "environment_candidate"
+            return "animal_candidate"
+        return "incident_candidate"
     if features["jitter"] > 50 and features["solidity"] < 0.85:
         return "insect_candidate"
     if (

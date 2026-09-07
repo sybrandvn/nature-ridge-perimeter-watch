@@ -73,6 +73,11 @@ NEGATIVE_LABELS = ("guard", "environment", "resident", "unknown")
 # confirmed every cam04 entry was this pattern.
 NO_MAINTENANCE_CAMERAS = frozenset({"cam04"})
 
+# Only guard clips exceed this on the labelled corpus (guard max 0.581 vs
+# environment 0.014, animal 0.038, incident 0.001) -- see
+# src.features.post_flash_red_shift.
+FLASHLIGHT_RED_SHIFT = 0.10
+
 # Every numeric feature, not a hand-picked subset: the queue is a REVIEW
 # artifact, and the whole point of reviewing a candidate is being able to see
 # why it scored -- persistence/longest_detection_run to tell a sustained
@@ -436,22 +441,24 @@ def write_maintenance_candidates(
     features reads more extreme, per-camera stratified same as the main
     queue.
 
-    `is_blinding_foreground` cannot yet tell a real static obstruction (a
-    branch/web against the lens) apart from a guard shining their flashlight
-    directly into the lens -- both read as overexposed. Tried a whether-the-
-    bright-region-MOVES check (2026-09-07, whole labelled corpus): removing
-    high-white-centroid-travel clips cut guard 68-73% and environment 71-73%
-    at every threshold tested, i.e. it tracks "is there motion in the scene at
-    all" (wind-shaken foliage moves too) rather than "flashlight vs.
-    obstruction" -- rejected, not shipped. Until a real discriminator exists,
-    `NO_MAINTENANCE_CAMERAS` below is the only correction: a documented,
-    human-confirmed per-camera override, not an algorithmic guess.
+    Excludes flashlight-into-lens clips via `post_flash_red_shift` (see
+    src.features): a guard's flashlight flash makes the whole frame settle red
+    afterwards, a physical obstruction never does. Measured 2026-09-07 on the
+    already-flagged population -- 27/85 guard clips exceed 0.10 but 0/24
+    environment, 0/2 resident and 0/2 unknown do, so this removes flashlight
+    clips without touching a single real obstruction.
+
+    `NO_MAINTENANCE_CAMERAS` stays as a second, human-confirmed override: the
+    red-shift threshold catches most but not all of cam04 (some of its
+    confirmed flashlight clips read below 0.10), and the user verified that
+    camera's queue by eye.
     """
     detected = [
         r
         for r in rows
         if r.get("detected")
         and is_blinding_foreground(r)
+        and r.get("post_flash_red_shift", 0.0) < FLASHLIGHT_RED_SHIFT
         and r["camera_id"] not in NO_MAINTENANCE_CAMERAS
     ]
     detected = prefer_longest_per_event(detected)

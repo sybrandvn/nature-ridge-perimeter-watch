@@ -196,6 +196,22 @@ def test_write_maintenance_candidates_excludes_no_maintenance_cameras(tmp_path: 
     assert {r["message_id"] for r in queue} == {2}
 
 
+def test_write_maintenance_candidates_excludes_flashlight_into_lens(tmp_path: Path):
+    rows = [
+        # overexposed AND the whole frame settles red after the flash -- a
+        # guard's flashlight, not something needing cleaning
+        _detected_row("cam01", 1, "guard", blob_white_fraction=0.9, post_flash_red_shift=0.25),
+        # overexposed with no post-flash colour change -- a real obstruction
+        _detected_row("cam01", 2, "guard", blob_white_fraction=0.9, post_flash_red_shift=0.01),
+    ]
+
+    queue = rc.write_maintenance_candidates(
+        rows, top_per_camera=10, out_path=str(tmp_path / "maintenance.csv")
+    )
+
+    assert {r["message_id"] for r in queue} == {2}
+
+
 def test_rank_and_write_raises_without_labelled_rows(tmp_path: Path):
     rows = [_detected_row("cam01", 1, None)]
     with pytest.raises(ValueError, match="no labelled"):

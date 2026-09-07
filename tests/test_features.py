@@ -26,6 +26,7 @@ from src.features import (
     normalised_speed,
     path_length,
     persistence,
+    post_flash_red_shift,
     row_normalised_area,
     saturation_ratio,
     solidity,
@@ -91,6 +92,28 @@ def test_blob_white_fraction_zero_for_dim_content():
     frame = np.full((50, 50, 3), 50, dtype=np.uint8)
     contour = _rect_contour(10, 10, 20, 20)
     assert blob_white_fraction(frame, contour) == pytest.approx(0.0)
+
+
+def _bgr(b: int, g: int, r: int) -> np.ndarray:
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    frame[:, :] = (b, g, r)
+    return frame
+
+
+def test_post_flash_red_shift_detects_red_settle_after_a_flash():
+    # 3 neutral frames, a bright flash, then 3 visibly red-tinted frames
+    frames = [_bgr(60, 60, 60)] * 3 + [_bgr(250, 250, 250)] + [_bgr(60, 60, 90)] * 3
+    assert post_flash_red_shift(frames) > 0.4
+
+
+def test_post_flash_red_shift_zero_when_tint_unchanged():
+    # a flash with no colour change afterwards -- an obstruction, not a flashlight
+    frames = [_bgr(60, 60, 60)] * 3 + [_bgr(250, 250, 250)] + [_bgr(60, 60, 60)] * 3
+    assert post_flash_red_shift(frames) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_post_flash_red_shift_zero_for_too_few_frames():
+    assert post_flash_red_shift([_bgr(60, 60, 60)] * 3) == 0.0
 
 
 def test_color_saturation_fraction_high_for_broad_daylight_colour():

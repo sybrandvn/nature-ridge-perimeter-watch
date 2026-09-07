@@ -91,6 +91,39 @@ def blob_white_fraction(
     return float((pixels > brightness_threshold).mean())
 
 
+def post_flash_red_shift(frames_bgr: Sequence[np.ndarray]) -> float:
+    """Whole-frame red shift AFTER the clip's brightness peak, minus before it.
+
+    The signature of a guard shining a flashlight directly into the lens: a
+    bright flash, then the camera's own auto-exposure/white-balance overcorrects
+    and the WHOLE FRAME settles visibly red for the frames that follow. A
+    physical obstruction against the lens (vegetation, a web) is overexposed
+    too, but produces no such flash-then-recover transition.
+
+    Must be measured as this before/after TRANSITION, not as a clip-wide average
+    R/G -- averaging over all frames dilutes the effect to noise (measured
+    2026-09-07: the averaged version gave +0.017 for confirmed flashlight clips
+    vs +0.118 for confirmed obstructions, i.e. backwards).
+
+    Measured over the whole labelled corpus, only GUARD clips ever exceed 0.10
+    (guard max 0.581; environment max 0.014, animal 0.038, incident 0.001,
+    resident 0.020) -- so it is a zero-leak guard/flashlight identifier on this
+    corpus, not merely a maintenance filter.
+    """
+    if len(frames_bgr) < 6:
+        return 0.0
+    brightness, red_green = [], []
+    for frame in frames_bgr:
+        brightness.append(float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean()))
+        _, green, red = cv2.split(frame.astype(np.float32))
+        green_mean = green.mean()
+        red_green.append(red.mean() / green_mean if green_mean > 1 else 1.0)
+    peak = int(np.argmax(brightness))
+    if peak < 1 or peak >= len(frames_bgr) - 1:
+        return 0.0
+    return float(np.mean(red_green[peak + 1 :]) - np.mean(red_green[:peak]))
+
+
 def color_saturation_fraction(frame_bgr: np.ndarray, *, saturation_threshold: int = 30) -> float:
     """Fraction of the WHOLE frame with HSV saturation above `saturation_threshold`.
 

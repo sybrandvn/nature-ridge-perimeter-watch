@@ -68,6 +68,7 @@ from src.features import (  # noqa: E402
     normalised_speed,
     path_length,
     persistence,
+    post_flash_red_shift,
     row_normalised_area,
     sane_fps,
     saturation_ratio,
@@ -111,6 +112,7 @@ FEATURE_COLUMNS = (
     "edge_density",
     "blob_white_fraction",
     "long_flare_frames",
+    "post_flash_red_shift",
     "path_length",
     "jitter",
     "persistence",
@@ -1864,6 +1866,11 @@ def extract_clip_features(
         "edge_density": edge_density(best_frame, best_contour),
         "blob_white_fraction": white_fraction,
         "long_flare_frames": float(detection.warmup_dropped),
+        # Whole-clip transition, so it spans the dropped warmup frames AND the
+        # scored ones -- the flash itself is often inside the flare window.
+        "post_flash_red_shift": post_flash_red_shift(
+            list(detection.dropped_frames) + [d.frame for d in considered]
+        ),
         "path_length": path_length(genuine_centroids),
         "jitter": jitter(genuine_centroids),
         "persistence": persistence(genuine_frames_detected, len(considered)),

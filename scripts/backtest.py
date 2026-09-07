@@ -201,7 +201,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -308,6 +308,51 @@ def is_blinding_foreground(features: dict[str, float] | None) -> bool:
     return features.get("blob_white_fraction", 0.0) >= 0.4 or (
         features.get("long_flare_frames", 0.0) >= 18
     )
+
+
+# Real alert classes always win over every suppressed one, per docs/plan.md's
+# own rule ("nothing about blob shape may downgrade or suppress an outside
+# alert"). Below those, the order is a reasonable-but-uncertified default for
+# reporting only.
+_EVENT_CATEGORY_PRIORITY = (
+    "incident_candidate",
+    "animal_candidate",
+    "environment_candidate",
+    "insect_candidate",
+    "guard_candidate",
+    "resident_candidate",
+    "unclassified",
+    "no_motion",
+)
+
+
+def classify_event(categories: Iterable[str]) -> str:
+    """Reduce every sibling clip's own `classify()` category for one physical
+    event (an "(Initial*)"/"(Stopped*)" pair sharing one embedded timestamp,
+    see `scripts.label._event_key`) down to a single event-level verdict, so
+    a truncated preview clip's weaker read can never hide what a fuller
+    sibling actually shows (measured 2026-09-07: cam01a/18603-18604 and
+    cam08/10852-10853 both had the short preview alone read `incident_
+    candidate` while the full clip is plainly `guard_candidate`).
+
+    `incident_candidate`/`animal_candidate` always win, matching this repo's
+    own alerting rule that shape/trajectory may never suppress an outside
+    alert -- so this can only ever RAISE an event's verdict toward the alert
+    channel relative to any single clip, never lower it. This function is
+    reporting/analysis-only; it is never called from the live per-clip
+    `classify()` path, since a real system sees clips one at a time and
+    can't know a sibling's category before it exists.
+
+    Empty input (an id with no clips at all) returns "no_motion", matching
+    `classify()`'s own convention for "nothing to go on".
+    """
+    seen = set(categories)
+    if not seen:
+        return "no_motion"
+    for category in _EVENT_CATEGORY_PRIORITY:
+        if category in seen:
+            return category
+    return next(iter(seen))  # defensive: an unrecognised category string
 
 
 def iter_clips_with_files(

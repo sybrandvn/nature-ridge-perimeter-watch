@@ -5,6 +5,48 @@ labelled sample, then build the backfill → label → backtest calibration loop
 and delivery-reliability machinery are deferred until thresholds are proven. Alert modules ship as
 tested, manually-invokable functions only.
 
+## Checkpoint (2026-09-07, cont.): truncated-preview clips distort per-clip metrics; open question on waiting for a sibling before alerting
+
+Full measurement and discovery narrative in `/memories/repo/incident-findings.md` (search
+"MAJOR FINDING" and "classify_event"). Summary here for a reader who only checks this file.
+
+**Finding: many "(Initial*)" alert messages are a literal frame-for-frame prefix of the
+"(Stopped*)" message that follows a few minutes later, and the two routinely produce DIFFERENT
+`classify()` categories** — the short preview catches the scan before a flashlight/track settles,
+so it reads as `incident_candidate`/`animal_candidate` while the full clip is plainly
+`guard_candidate` (confirmed twice this session: cam01a/18603-18604, cam08/10852-10853). Since
+both clips of an event are usually labelled identically once one is, `scripts/backtest.py
+--labelled-only` was **double-counting almost every animal/incident event** (47 labelled clip
+rows collapsed to only 25 unique physical events when grouped by `scripts.label._event_key`) —
+every feature/AUC/threshold number quoted earlier in this file was computed over that inflated,
+truncation-mixed population, not the true one.
+
+**New tool, not a `classify()` change:** `scripts.backtest.classify_event(categories)` reduces a
+whole event's sibling categories to one verdict, `incident_candidate`/`animal_candidate` always
+winning (matches the standing "shape may never suppress an outside alert" rule) — reporting/
+analysis only, never called from the live per-clip path. Re-measured the full labelled corpus
+grouped by event:
+
+| | per-clip | event-level (any sibling fires) |
+| --- | --- | --- |
+| incident recall | 70% (7/10) | **100% (5/5)** |
+| animal recall | 40.5% (15/37) | **68.4% (13/19)** |
+| guard leak into alert channel | 10.7% (46/429) | **18.5% (41/222)** |
+| environment leak into alert channel | 10.1% (16/159) | **19.5% (16/82)** |
+
+Recall goes up (good, and no incident event is ever lost either way). But guard/environment leak
+also goes up at event level, not down — because "any sibling fires" is exactly the exposure a
+live system that reacts to every message independently already has today. Naively combining
+siblings with an OR doesn't fix precision, only recall.
+
+**Open decision, not yet made:** should a future live system delay alerting on an "(Initial*)"
+message for the few minutes until its "(Stopped*)" sibling arrives, and prefer the FULLER clip's
+read specifically (not just OR across all siblings) before firing? The root cause observed twice
+so far is specifically that the SHORT clip is the unreliable one — trusting the longer clip once
+it exists, rather than merely unioning categories, is the more promising fix hinted at by the
+data, but is unmeasured and unbuilt. Deferred along with the rest of the live-alerting pipeline
+(see the opening paragraph of this file) — revisit once the live service itself is scoped.
+
 ## Checkpoint (2026-09-07): triage router built; classifier state re-measured
 
 Supersedes the stale figures below wherever they conflict. Full narrative in `docs/handoff.md`

@@ -398,3 +398,26 @@ def test_classify_raises_on_missing_feature_key():
     # (KeyError) rather than silently miscategorising.
     with pytest.raises(KeyError):
         backtest.classify({"aspect_ratio": 1.0})
+
+
+def test_classify_event_incident_wins_over_every_suppressed_sibling():
+    assert (
+        backtest.classify_event(["guard_candidate", "incident_candidate", "environment_candidate"])
+        == "incident_candidate"
+    )
+
+
+def test_classify_event_animal_wins_over_guard():
+    assert backtest.classify_event(["guard_candidate", "animal_candidate"]) == "animal_candidate"
+
+
+def test_classify_event_all_same_category_is_a_no_op():
+    assert backtest.classify_event(["guard_candidate", "guard_candidate"]) == "guard_candidate"
+
+
+def test_classify_event_empty_is_no_motion():
+    assert backtest.classify_event([]) == "no_motion"
+
+
+def test_classify_event_single_category_passes_through():
+    assert backtest.classify_event(["resident_candidate"]) == "resident_candidate"

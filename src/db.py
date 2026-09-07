@@ -27,6 +27,7 @@ VALID_LABELS = (
     "incident",
     "resident",
     "environment",
+    "neighbour",
     "unknown",
 )
 # Whether THIS clip's own content (not its event) was usable on its own -- relevant to
@@ -62,7 +63,8 @@ CREATE TABLE IF NOT EXISTS labels (
     message_id INTEGER NOT NULL,
     label TEXT CHECK (
         label IS NULL
-        OR label IN ('guard', 'animal', 'incident', 'resident', 'environment', 'unknown')
+        OR label IN
+            ('guard', 'animal', 'incident', 'resident', 'environment', 'neighbour', 'unknown')
     ),
     startup_state TEXT CHECK (
         startup_state IS NULL OR startup_state IN ('clear', 'blank', 'duplicate')

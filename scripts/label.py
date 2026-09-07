@@ -5,8 +5,9 @@ backfilled rows don't and walking them produces nothing to watch. Pass --include
 to fall back to the old metadata-only behaviour (label off caption/camera/timestamp alone).
 
 Each labeled clip records two independent things (schema v5):
-  - `label`: what the event WAS (guard/animal/incident/resident/environment/unknown) --
-    shared by every clip that's part of the same physical trigger.
+  - `label`: what the event WAS (guard/animal/incident/resident/environment/
+    neighbour/unknown) -- shared by every clip that's part of the same physical
+    trigger.
   - `startup_state`: whether THIS clip's own content was usable on its own, for a
     short/early clip that precedes the real one (clear/blank/duplicate) -- says
     nothing about what the event was.
@@ -275,7 +276,7 @@ def _apply_startup_prefix_duplicates(
     return applied
 
 
-# Prompt vocabulary: the 5 real event classes (src.db.VALID_LABELS) plus 3 answers
+# Prompt vocabulary: the 6 real event classes (src.db.VALID_LABELS) plus 3 answers
 # about THIS clip's own visibility, independent of the event's class -- see
 # _label_fields below for how an answer maps to (label, startup_state) columns.
 LABEL_EXAMPLES: dict[str, str] = {
@@ -284,6 +285,8 @@ LABEL_EXAMPLES: dict[str, str] = {
     "incident": "a person: crawling, probing, or climbing, usually far/exterior side",
     "resident": "an identified resident/authorized person on the interior side -- not a threat",
     "environment": "IR-attracted insects, rain streaks, wind-blown vegetation, shadow artifacts",
+    "neighbour": "a benign person outside the fence (e.g. a neighbouring property's worker) --"
+    " not a resident/guard, not a threat",
     "unknown": "can't tell / too ambiguous to call confidently",
     "startup": "exact frame-duplicate of a later clip's start (auto-detected, rarely hand-picked)",
     "startup_clear": "short/early pre-alert clip, but clear enough to make out the subject",
@@ -299,6 +302,7 @@ LABEL_SHORTCUTS: dict[str, str] = {
     "incident": "i",
     "resident": "r",
     "environment": "e",
+    "neighbour": "n",
     "unknown": "u",
     "startup": "s",
     "startup_clear": "c",

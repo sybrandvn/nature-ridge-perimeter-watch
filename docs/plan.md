@@ -90,11 +90,11 @@ Phase 1 work should build on this without inheriting stale numbers:
 
 ## Ground truth labels
 Schema v5 (2026-08-29) splits this into two independent columns instead of one:
-- `label`: what the event WAS -- `guard`, `animal`, `incident`, `resident`, `environment`, or
-  `unknown`. Nullable: a clip can have no class yet if only its `startup_state` is known so far.
-  Shared across every clip in the same physical trigger (same embedded alert timestamp) --
-  labeling any one clip in an event fills in `label` for every still-unclassed sibling
-  automatically (never overwrites an existing human call on a specific clip).
+- `label`: what the event WAS -- `guard`, `animal`, `incident`, `resident`, `environment`,
+  `neighbour`, or `unknown`. Nullable: a clip can have no class yet if only its `startup_state`
+  is known so far. Shared across every clip in the same physical trigger (same embedded alert
+  timestamp) -- labeling any one clip in an event fills in `label` for every still-unclassed
+  sibling automatically (never overwrites an existing human call on a specific clip).
 - `startup_state`: whether *this one clip's own content*, viewed alone (no future clip to
   compare against, matching what a live system would actually have), was usable --
   `clear` (subject visible), `blank` (nothing visible), or `duplicate` (frame-identical prefix
@@ -107,7 +107,13 @@ authorized person moving on the interior side -- not a guard (no patrol signal e
 a threat, so it shouldn't sit in `incident` just because a person is visible. Split out after an
 audit found 6 `cam01b` clips explicitly noted as residents sitting in `incident`, which would
 have been counted as false negatives (or, worse, trained a classifier to treat ordinary resident
-movement as an incident) had they stayed there.
+movement as an incident) had they stayed there. `neighbour` (added 2026-09-07) covers a benign
+person seen OUTSIDE the fence who isn't a resident or an intruder -- typically a neighbouring
+property's own worker, visible near/through the perimeter. Distinct from `resident` (interior
+side, identified) and from `incident` (a real security concern); see cam14/3495, the first
+confirmed example. Migrated with `scripts/migrate_add_neighbour_label.py` (widened the `labels`
+CHECK constraint only, `schema_version` stayed 5, same no-op-on-existing-rows pattern as the
+`resident` migration).
 
 Why split: v4 had a single `label` column, and a short pre-alert clip auto-labeled `startup` (or
 hand-labeled `startup_clear`/`startup_blank`) silently discarded the event's real class whenever
@@ -550,16 +556,17 @@ access before the bot ships.
     geometry (staying inside, never crossing) are the two existing ingredients closest to a
     `resident_candidate` rule — not yet assembled into one, and `resident` currently has NO rule
     of its own in `scripts.backtest.classify` at all (falls through to `unclassified`).
-  - **Daytime de-escalation for a known-benign-but-unidentified person (2026-09-05, user).**
-    cam14/3495 is a neighbour's worker: not a resident (not identified/authorized on this
-    property), not a guard, borderline "almost an intruder" by appearance alone, but genuinely
-    not a threat. User's framing: it's fine for the system to still flag this kind of daytime
-    sighting, but the alert priority should be de-escalated rather than treated as a full
-    incident-level alert, specifically because it's daytime (`is_daylight`/`is_twilight` already
-    exist as the signal to key this on). No `VALID_LABELS` class fits a known-benign
-    non-resident visitor today — labelled `unknown` with a note rather than forcing it into
-    `resident`/`incident`. Not designed or implemented; needs an actual alert-priority/escalation
-    concept (Phase 4 territory) before this can be more than a note.
+  - **Daytime de-escalation for a known-benign-but-unidentified person (2026-09-05, user;
+    label added 2026-09-07).** cam14/3495 is a neighbour's worker: not a resident (not
+    identified/authorized on this property), not a guard, borderline "almost an intruder" by
+    appearance alone, but genuinely not a threat. `VALID_LABELS` gained `neighbour` for exactly
+    this case (a benign person outside the fence, not resident/guard/threat) -- cam14/3495
+    relabelled from `unknown` accordingly. Still NO `classify()` rule of its own: only n=1
+    confirmed example exists corpus-wide as of this write (a discovery sweep for more candidates
+    found several real `animal`/`environment` clips but zero further `neighbour` ones -- see
+    repo memory). A real rule needs more examples first, same discipline as everywhere else in
+    this file; the actual alert-priority/de-escalation concept itself (Phase 4 territory) is a
+    separate, still-undesigned question even once a detection rule exists.
 
 
 

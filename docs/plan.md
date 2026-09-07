@@ -43,6 +43,15 @@ event with no sibling clip to cover it, `cam10/7632` (now `unclassified`, was al
 deliberate, explicit break of the standing "never lose an animal" constraint for this one known
 clip, not a silent regression.
 
+**IR flare tracking implemented (2026-09-07):** `scripts.spike.detect_clip(compensate_warmup=
+True)` now does real per-pixel tracking through the dropped IR-flare/warmup window (a
+photometric gain/offset fit onto the settled background, then the same diff/track pipeline as
+every scored frame), plus brightness/colour-corrected warmup frames for display. Scoped safe by
+construction -- it only improves the already render-only `dropped_frame_boxes`, never touches
+`FEATURE_COLUMNS` -- and wired into `scripts/render_debug.py`'s debug videos. Full detail,
+validation numbers and the one known remaining limitation (`cam06/21520`'s dwelling subject) in
+`docs/handoff.md`'s "IR flare tracking" section.
+
 ## Checkpoint (2026-08-30): Phase 0 merged to `main`, needs work before Phase 1 starts
 Phase 0 (steps 1-14) is merged and tagged as a checkpoint, not a clean sign-off. Open items before
 Phase 1 work should build on this without inheriting stale numbers:

@@ -1089,48 +1089,71 @@ guard recall is already 71.8%, and every new guard rule sits *ahead* of the geom
 can only push more incidents toward `guard_candidate` (already 3/10). Extra guard recall is not
 clearly what this system needs right now; the environment leak above is the bigger win.
 
-### The open architectural item: tracking through the IR flare
+### IR flare tracking: IMPLEMENTED (2026-09-07), opt-in via `compensate_warmup`
 
-**Problem.** `detect_clip` computes `drop = flare_settle_index(...)` and throws away every frame
-before it (up to 40% of a clip). A guard who walks through frame during the IR gain ramp is
-invisible to scoring; the scored frames then lock onto whatever moved next (a vine, a bush, a
-final-frame artifact). This is the single biggest known source of false candidates.
+**What shipped.** `scripts.spike.detect_clip(..., compensate_warmup=True)` (default `False`,
+wired on only in `scripts/render_debug.py`): each dropped/warmup frame is photometrically matched
+(`src.features.photometric_match`, a per-frame least-squares gain/offset fit) onto the settled
+`background`, then diffed and tracked with the SAME threshold/morphology/contour pipeline used for
+every scored frame — real per-pixel tracking, not the old appearance-template-only guess. Seeded
+from `considered[0]`'s own established box for continuity when there is one; when there isn't
+(e.g. `cam06/21520`'s slow-dwelling crawler, where the scored track never establishes at all), it
+runs unseeded instead of giving up, so a real diff still gets a chance inside the warmup window on
+its own merits. Falls back to the pre-existing appearance-trace box wherever this real-diff pass
+finds nothing, so coverage never regresses. `src.features.photometric_match_color` additionally
+colour/brightness-corrects every dropped COLOUR frame against a settled colour background, purely
+for display (`ClipDetection.dropped_frame_compensated`) — this is the "even out the flare" ask.
+`ClipDetection.dropped_frame_box_is_photometric` tags which mechanism found each box, so
+`render_debug.py` can label a real diff-tracked box differently from an appearance-only guess.
 
-**User's decision on scope (2026-09-07):** compensate **inside the flare window only**. Do not
-touch the already-settled frames.
+**Deliberately scoped safe by construction, not just tested safe.** None of `frames`,
+`background`, `considered`, or any `FEATURE_COLUMNS` value is touched — the new code only
+populates `dropped_frame_boxes`/`dropped_frame_box_is_photometric`/`dropped_frame_compensated`,
+fields already documented as render/diagnostic-only, never read by `extract_clip_features`. This
+sidesteps the "main risk" below entirely, rather than accepting it: there is no merge into the
+scoring pipeline for a residual gradient to hide in.
 
-**Why it's plausible:** already proven in-repo. `_warmup_motion_features` normalises each dropped
-frame by its own median (`g * 100/median`), cancelling the global gain step, and that recovered
-the cam06/21377 guard as a clear 97×136 blob from frames the detector had discarded.
+**Kill-check + validation, all before wiring it into the renderer:**
+- Full test suite green (531 tests, +6 new: `photometric_match`/`apply_photometric_match`/
+  `photometric_match_color` unit tests, two `detect_clip(compensate_warmup=...)` tests).
+- `cam08/7360`, `cam15/15454`, `cam05/18270` (the three previously-fragile reference clips) —
+  scored-frame detection byte-identical on/off, as expected by construction.
+- Broader sweep: every clip referenced anywhere under `data/reports/debug_render/` (89 real
+  files), `detect_clip(..., compensate_warmup=True)` vs `False` — **zero exceptions, zero
+  scored-frame differences** (`largest`/`recovered`/`filled_by_reverse`/`centroid` compared frame
+  by frame). 84/89 clips got at least one real photometrically-tracked warmup box.
+- Visually confirmed on `cam06/21377` (the guard-visible-during-warmup clip from
+  `_warmup_motion_features`'s own docstring): raw frame 0 is near-black, raw frame 6 has fully
+  ramped up — the classic flare. The compensated render shows a consistently exposed scene
+  throughout, with a real tracked box (solid cyan, "real diff, brightness/colour corrected")
+  following what looks like a subject moving down along the fence frame to frame, not a static
+  artifact. Demo renders in `data/reports/debug_render/ir_flare_compensation/` (gitignored).
+- Did NOT re-render the full standing `debug_render/` set: the scored-frame numeric diff above
+  already proves nothing there can have moved (this change cannot touch a scored frame by
+  construction), so re-rendering 109 files would only refresh warmup-frame cosmetics, not
+  re-validate anything.
 
-**Phase 0 — the cheap kill-check. Do this before writing any real code.** Repo memory records
-*two* prior illumination-compensation attempts that both destroyed the fragile-animal set:
-rooikat cam08/7360 went 256→51 hit pixels (−80%), porcupine cam15/15454 frame 22 went 98→4.
-Apply the compensation, count hit pixels on **cam08/7360, cam15/15454, cam05/18270**, and abandon
-if they degrade. Perhaps an hour, and it kills the idea cheaply if it's the same trap.
+**Known limitation, honestly not solved:** this does not fully rescue `cam06/21520` (the crawling
+guy who dwells through most of his own clip's median background) — the unseeded fallback finds
+*something* there now (7/15 frames), but the boxes are implausibly large (up to ~half-frame),
+consistent with this clip's own already-documented root cause (the subject biases its own
+whole-clip median background, so nothing genuinely diffs against it even inside the warmup
+window). That is a background-MODEL problem (rolling/windowed background, not a whole-clip
+median), not a warmup-compensation problem, and remains open.
 
-**Phase 1 — implement behind a kwarg defaulting to today's behaviour** (zero blast radius until
-deliberately flipped). Build the background from settled frames only (they're trustworthy), then
-photometrically match each warmup frame to it — a per-frame affine (gain + offset) fit, not just
-median scaling — then difference and track normally. Tag those frames with a `from_warmup=True`
-provenance flag so every existing feature can opt in or out explicitly rather than silently
-shifting.
+**Not attempted:** wiring any of this into `extract_clip_features`/`FEATURE_COLUMNS` — the
+`compensate_warmup` output is currently display/diagnostic-only, exactly like the appearance-trace
+mechanism it improves on. Feeding it into scoring is the "main risk" scenario below and would need
+its own full LOO-AUC-before/after validation pass, not attempted this session.
 
-**Phase 2 — validation battery.** Full suite green; incident regression 5/5; re-render **and
-numerically diff the entire standing `debug_render/` set** (the hard-won rule — forward/backward
-pass interactions have hidden regressions before); LOO AUC before/after; confirm nothing moved
-for clips that have no warmup frames.
+### Also requested: show the IR compensation in the debug renders — DONE
 
-**Main risk:** IR flare is not purely global. The illuminator lights near objects far more than
-far ones, so the ramp is spatially non-uniform and a single affine fit may leave a residual
-gradient that reads as motion everywhere. That is exactly what sank both prior attempts. Honest
-odds ≈ 40%.
+`scripts/render_debug.py`'s warmup-frame panel now shows `dropped_frame_compensated` (colour/
+brightness-corrected) instead of the raw flare frame, and labels a real-diff-tracked box
+("TRACKED (real diff, brightness/colour corrected)", solid outline) distinctly from the
+appearance-only fallback ("INFERRED - TRACKED (reverse trace)", dashed, unchanged from before).
 
-### Also requested, not started
 
-- **Show the IR compensation in the debug renders** (`scripts/render_debug.py`) — the user wants
-  to see the normalised warmup frames rather than the raw flare. Natural to build alongside
-  Phase 1, and it is the cheapest way for a human to judge whether compensation is working.
 
 ### Traps this session hit — read before proposing a new signal
 

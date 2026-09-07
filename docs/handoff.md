@@ -1,11 +1,10 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-07. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-07, session close #5)" at the very
-bottom, just above "Conventions"** — it has current state, the prioritised remaining work, and
-the measurement traps that cost the most time recently. `docs/plan.md` is the full plan and
-stays authoritative; this file is the short version of where things actually stand and what to do
-next.
+picking this up, start at "Handoff for a new agent (2026-09-07, session close #6)" at the very
+bottom, just above "Conventions"** — it has current state, a fresh full-corpus backtest run to
+work from, and the highest-value open question. `docs/plan.md` is the full plan and stays
+authoritative; this file is the short version of where things actually stand and what to do next.
 
 ## Where the project is
 
@@ -1180,6 +1179,140 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-07, session close #6)
+
+**Read this section first — it supersedes #5 for current state.** 541 tests passing, branch
+`feat/phase1-finalisation`, incident regression 5/5 events. Nothing uncommitted. This session was
+an extended discovery/labelling pass (daylight-outside then night-outside candidate batches) that
+surfaced one finding big enough to change how the next agent should measure anything: **many
+ground-truth clips are a literal duplicate-prefix of a longer sibling, and the two often produce
+different `classify()` categories.** Read that before trusting any per-clip metric, including ones
+quoted earlier in this file.
+
+### Fresh full-corpus data, ready to work from
+
+Just re-ran `scripts/backtest.py`'s full logic (not `--labelled-only` — every downloaded clip)
+via a parallel wrapper (`data/reports/scratch/full_history_2026-09-07/`, not committed — CSVs
+only, regenerate with the `_worker`/`Pool(8)` pattern in that script if it's gone from `/tmp`):
+
+- **`per_clip.csv`** — 16,886 rows, one per downloaded clip, same columns as
+  `scripts.backtest.write_csv` (`REPORT_COLUMNS`: identity + `category` + `blinding_foreground` +
+  every `FEATURE_COLUMNS` value) plus `caption` (needed to pair siblings).
+- **`per_event.csv`** — 8,613 rows, one per physical event (grouped by
+  `scripts.label._event_key`, i.e. clips sharing an embedded `@ HH:MM:SS` caption timestamp),
+  with `event_category` computed by the new `scripts.backtest.classify_event()` (below) and a
+  `message_ids` column listing every clip in that event.
+
+Corpus-wide category counts (`per_clip.csv`, ALL 16,886 clips, mostly unlabelled):
+`guard_candidate` 13,009, `unclassified` 1,691, `incident_candidate` 741, `environment_candidate`
+699, `no_motion` 332, `animal_candidate` 215, `resident_candidate` 164, `insect_candidate` 35.
+
+On just the 678 labelled clips: label counts are `guard` 429, `environment` 159, `animal` 37,
+`unknown` 30, `incident` 10, `resident` 10, `neighbour` 3 (`neighbour` is new this session — see
+below). These 678 rows collapse to **only 351 unique events** — nearly half are a duplicate
+half of a pair, see next section.
+
+### THE finding: truncated preview clips distort every per-clip metric, `classify_event()` shipped
+
+Many "(Initial*)" alert messages are a literal frame-for-frame prefix of the "(Stopped*)" message
+that follows a few minutes later — and the two routinely produce **different** `classify()`
+categories, because the short preview catches the scan before a flashlight/track settles.
+Confirmed twice on real footage: `cam01a` 18603 (short, reads `incident_candidate`) / 18604 (full,
+reads `guard_candidate`, `green_light_ratio=0.459`); `cam08` 10852 (short, `incident_candidate`,
+"quick blob outside") / 10853 (full, `guard_candidate`, lingering flashlight, `outside_pixel_
+fraction=0.0`).
+
+Since both clips of an event are usually labelled identically once either one is (label
+propagation), **`scripts/backtest.py --labelled-only` was double-counting almost every
+animal/incident event**: 47 labelled animal/incident clip ROWS collapsed to only 25 unique
+EVENTS when this was audited — 88% of them are exactly this short+long pair, both carrying the
+same label. Every feature/AUC/threshold number quoted anywhere earlier in this file (`docs/
+handoff.md` sessions #1-#5) or in `docs/plan.md` up to today's checkpoint was computed over that
+inflated, truncation-mixed population — not a fabricated concern, a confirmed measurement bias.
+
+**New tool shipped, not a `classify()` change:** `scripts.backtest.classify_event(categories) ->
+str` reduces a whole event's sibling categories to one verdict; `incident_candidate`/`animal_
+candidate` always win (matches the standing "shape may never suppress an outside alert" rule).
+Analysis/reporting only — never called from the live per-clip path, since a real system sees one
+clip at a time and can't know a sibling's category before it exists. Re-measured the full labelled
+corpus grouped by event:
+
+| | per-clip | event-level (any sibling fires) |
+| --- | --- | --- |
+| incident recall | 70% (7/10) | **100% (5/5)** |
+| animal recall | 40.5% (15/37) | **68.4% (13/19)** |
+| guard leak into alert channel | 10.7% (46/429) | **18.5% (41/222)** |
+| environment leak into alert channel | 10.1% (16/159) | **19.5% (16/82)** |
+
+**The nuance that matters most for whoever picks this up next:** recall improves at event level
+(good, no incident ever lost either way) but guard/environment leak gets WORSE, not better —
+because "any sibling fires" is exactly the false-alarm exposure a live system reacting to every
+message independently already has today. **A naive OR-across-siblings combiner only helps
+recall, it does not fix precision.** The open, undecided design question (documented in `docs/
+plan.md`'s newest checkpoint, not built): should a future live system wait for the "(Stopped*)"
+sibling and specifically trust the LONGER clip's read — not just union every sibling's category —
+before alerting? The root cause observed both times so far is specifically that the SHORT clip is
+the unreliable one; trusting the fuller clip once it exists is the more promising direction than
+plain unioning, but it's unmeasured. This is probably the single highest-value thing to actually
+measure next, since it would settle a real design question rather than add another feature.
+
+### Other confirmed findings from this session, all recorded in `/memories/repo/incident-findings.md`
+
+That file has the full narrative with exact numbers for each of these — this is the index, not
+the detail:
+
+- **`ANIMAL_ROW_AREA_MAX = 3000.0`** shipped: real animal blobs are small (`row_normalised_area`
+  median 666) vs. environment leaking as animal (median 10,471, >15x gap) — a user-sourced
+  hypothesis from watching footage, not a feature-fishing result. Environment leak into the alert
+  channel 22%→9.8% on the corpus at the time, zero animal cost. Deliberately NOT applied to
+  `incident_candidate` (real incident clips get wrongly gated at every threshold tried).
+- **`resident_candidate` rule** added, split from the inside-only guard fallback by real
+  `is_daylight(timestamp)` — NOT `color_fraction` (rejected first: 64% guard false-fire, the same
+  "daylight gate is self-defeating" confound as `green_light_ratio`).
+- **`neighbour` label added** (`VALID_LABELS`, migration `scripts/migrate_add_neighbour_label.py`
+  already run) — a benign person outside the fence, not resident/guard/threat (a neighbour's
+  worker). n=3 now, still too thin for a `classify()` rule of its own.
+- **cam09 fence geometry has a dated history now** (like cam01a/cam12) — the user directly traced
+  a real remount in `config/cameras.yaml`, effective `2025-01-12T16:22:45Z`. Trust the user's own
+  visual trace over a plausible alternative theory — this repo has hit that lesson more than once.
+- **Dawn/dusk guard-flashlight miss (n=2, unmeasured further):** at twilight, `green_light_ratio`/
+  `green_light_flicker`/`warmup_flashlight_ratio` can all read exactly 0.0 (not just below
+  threshold) while `color_fraction` is high from real ambient light, so a guard's flashlight falls
+  through every guard rule into `animal_candidate`. Mirror image of the already-rejected
+  `color_fraction`-as-daylight-proxy confound.
+- **Guard-exits-during-IR-warmup, bottom-left corner (user-observed, unmeasured):** several guard
+  clips this session showed very low `persistence`/`longest_detection_run` with a real subject
+  visible only briefly before leaving early in the warmup window. No exit-direction feature exists
+  yet to confirm the "bottom-left" specifics — would need frame-level track-path data, not just
+  the aggregate features already computed.
+- **Full night-time-outside discovery is barely started.** 16,582 of 16,886 clips are night (vs.
+  only 304 real-daylight clips, which is why the daylight sweep finished this session but night
+  didn't) — of 2,609 unlabelled night+outside candidates, only a 37-clip stratified sample was
+  reviewed (`data/reports/scratch/night_outside_review_2026-09-07/`), and even that batch isn't
+  fully labelled. This is the largest unexplored population in the whole corpus.
+- **Ranker (`scripts/rank_candidates.py`) group-drop improvement measured, not implemented:**
+  dropping the track/motion AND metric/calibration feature groups together improves leave-one-out
+  AUC by +0.064 (animal+incident vs. rest) — lower risk than a `classify()` change since it only
+  affects review-queue ORDER, not the alert/suppress decision.
+
+### Suggested next steps for a fresh empirical pass, in priority order
+
+1. **Settle the wait-for-sibling design question** using `per_event.csv` above — specifically
+   compare "trust the longest clip in the event" against "union all siblings" against "per-clip,
+   no waiting" for guard/environment leak, not just recall (the OR-combiner already measured here
+   only tells half the story).
+2. **Mine `per_clip.csv`/`per_event.csv` for the low-blob-count single-branch-oscillation
+   environment population** — flagged in `/memories/repo/incident-findings.md` as NOT yet solved
+   (`heading_change` alone was measured and rejected; `blob_count>10` cannot catch a single
+   waving branch).
+3. **Use the full corpus counts above to plan a smarter night-time discovery batch** — 741
+   `incident_candidate` clips corpus-wide is a lot to leave unreviewed on the highest-priority
+   channel; `per_event.csv`'s event-level counts (693 events read `incident_candidate`) are a
+   better base for stratified sampling than raw clip counts, since it won't re-sample both halves
+   of the same event.
+4. Everything in "other confirmed findings" above that says "unmeasured" is a real, evidenced
+   lead — none need re-discovering, they need a proper threshold sweep against the fresh data.
 
 ## Conventions
 

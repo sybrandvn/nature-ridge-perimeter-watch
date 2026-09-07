@@ -212,6 +212,68 @@ def test_write_maintenance_candidates_excludes_flashlight_into_lens(tmp_path: Pa
     assert {r["message_id"] for r in queue} == {2}
 
 
+def _series(camera_id, n, flagged_indices, *, start_day=1):
+    rows = []
+    for i in range(n):
+        day, hour = divmod(i, 4)
+        overrides = {"blob_white_fraction": 0.9} if i in flagged_indices else {}
+        row = _detected_row(camera_id, 1000 + i, None, **overrides)
+        row["timestamp"] = f"2026-01-{start_day + day:02d}T{hour + 1:02d}:00:00Z"
+        rows.append(row)
+    return rows
+
+
+def test_obstruction_windows_flags_a_sustained_elevation():
+    # 12 flagged clips inside the first 3 days of a 40-clip, 10-day history:
+    # concentrated enough to clear both the absolute floor and this camera's
+    # own baseline, which is what a real obstruction looks like.
+    rows = _series("cam01", 40, set(range(12)))
+    windows = rc.obstruction_windows(rows, window_days=14, min_clips=12, min_rate=0.25)
+    assert windows
+    assert windows[0]["camera_id"] == "cam01"
+    assert windows[0]["flagged"] == 12
+
+
+def test_obstruction_windows_ignores_an_isolated_flag():
+    rows = _series("cam01", 40, {5})
+    assert rc.obstruction_windows(rows, min_clips=12, min_rate=0.25) == []
+
+
+def test_obstruction_windows_needs_enough_clips():
+    # 3 clips, all flagged -- 100% but meaningless
+    rows = _series("cam01", 3, {0, 1, 2})
+    assert rc.obstruction_windows(rows, min_clips=12) == []
+
+
+def test_obstruction_windows_excludes_flashlight_into_lens():
+    rows = _series("cam01", 40, set(range(12)))
+    for row in rows:
+        row["post_flash_red_shift"] = 0.25
+    assert rc.obstruction_windows(rows, min_clips=12) == []
+
+
+def test_obstruction_windows_skips_rows_without_a_usable_timestamp():
+    rows = _series("cam01", 40, set(range(12)))
+    for row in rows:
+        row["timestamp"] = None
+    assert rc.obstruction_windows(rows) == []
+
+
+def test_obstruction_windows_honours_no_maintenance_cameras():
+    rows = _series("cam04", 40, set(range(12)))
+    assert rc.obstruction_windows(rows, min_clips=12) == []
+
+
+def test_write_obstruction_windows_round_trip(tmp_path: Path):
+    rows = _series("cam01", 40, set(range(12)))
+    out_path = tmp_path / "maintenance.windows.csv"
+    windows = rc.write_obstruction_windows(rows, out_path=str(out_path))
+    assert out_path.exists()
+    lines = out_path.read_text().splitlines()
+    assert lines[0].startswith("camera_id,window_start,window_end,clips,flagged,rate")
+    assert len(lines) == len(windows) + 1
+
+
 def test_rank_and_write_raises_without_labelled_rows(tmp_path: Path):
     rows = [_detected_row("cam01", 1, None)]
     with pytest.raises(ValueError, match="no labelled"):

@@ -16,6 +16,13 @@ within the labelled pool's population, not as a certified corpus-wide
 classifier (top-100 by an earlier fit contained zero known positives, because
 only ~1.5% of the corpus is labelled and coverage is uneven per camera).
 
+`--maintenance-out` additionally writes the "camera needs cleaning" channel,
+which is two files, not one: the per-clip queue itself, and a sibling
+`.windows.csv` listing the spans where one camera's own blinding-flag rate is
+sustainedly elevated above its own baseline (see `obstruction_windows`). The
+windows file is the actionable one -- 30 spans across three years of history
+against 1,019 individual flagged clips.
+
 Run:
     uv run python scripts/rank_candidates.py --workers 8 \\
         --out data/reports/candidates_2026-08-30.csv
@@ -28,6 +35,7 @@ import csv
 import sys
 from collections import defaultdict
 from collections.abc import Callable, Iterator
+from datetime import datetime, timedelta
 from multiprocessing import Pool
 from pathlib import Path
 from typing import Any
@@ -485,6 +493,142 @@ def write_maintenance_candidates(
     return queue
 
 
+# Chosen against the corpus-wide behaviour of the flag itself (measured
+# 2026-09-07): every camera's per-clip rate is 4-23% as a BASELINE, so a
+# window only means something if it is both well above that camera's own
+# normal AND high in absolute terms. `min_clips` keeps a quiet camera's
+# handful of clips from producing a 100% "window" out of two hits.
+OBSTRUCTION_WINDOW_DAYS = 14
+OBSTRUCTION_MIN_CLIPS = 12
+OBSTRUCTION_MIN_RATE = 0.25
+OBSTRUCTION_MIN_RATIO = 2.0
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def obstruction_windows(
+    rows: list[dict[str, Any]],
+    *,
+    window_days: int = OBSTRUCTION_WINDOW_DAYS,
+    min_clips: int = OBSTRUCTION_MIN_CLIPS,
+    min_rate: float = OBSTRUCTION_MIN_RATE,
+    min_ratio: float = OBSTRUCTION_MIN_RATIO,
+) -> list[dict[str, Any]]:
+    """Spans where ONE camera's own blinding-flag rate is sustainedly elevated
+    above its own baseline -- the actionable form of "go clean this camera".
+
+    The per-clip flag is not that signal, and measuring it said so plainly: on
+    the 16,554-clip corpus the flag fires on 8.9% of clips but shows almost no
+    temporal clustering (P(next clip from the same camera also flagged | this
+    one flagged) is 0-19%, and the longest consecutive run anywhere is 5).
+    A spider web on a lens does not behave like that -- it would flag every
+    clip until someone wipes it. So the per-clip flag is measuring transient
+    bright events, and a maintenance queue built directly on it (1,019 clips
+    corpus-wide) is not a work order.
+
+    The rate over a window IS that signal. cam07 runs a 6.4% baseline and hits
+    43.1% across 60 clips over 2026-02-17..03-03 -- 25 flagged clips spread
+    over 12 separate nights, blob_white_fraction 0.41-0.93, and
+    post_flash_red_shift at or below 0.027 on every one of them, so it is not
+    the guard's flashlight. Several of those same clips were also leaking into
+    the alert channel as incident_candidate before the 2026-09-07 blinded-lens
+    gate in scripts.backtest.classify, which is corroboration rather than
+    coincidence: one physical obstruction, showing up in both channels.
+
+    Overlapping qualifying windows are merged, so a month-long obstruction
+    reports as one span rather than one row per clip in it.
+
+    `NO_MAINTENANCE_CAMERAS` is honoured here too, for consistency with
+    `write_maintenance_candidates` -- though note cam04 does produce two
+    strongly elevated windows (47.4% and 43.9% against a 9.1% baseline), so
+    that human override is worth re-checking against this windowed view
+    rather than the per-clip queue it was originally made on.
+    """
+    by_camera: dict[str, list[tuple[datetime, bool, Any]]] = {}
+    for row in rows:
+        ts = _parse_ts(row.get("timestamp"))
+        if ts is None or not row.get("detected"):
+            continue
+        if row["camera_id"] in NO_MAINTENANCE_CAMERAS:
+            continue
+        flagged = is_blinding_foreground(row) and (
+            row.get("post_flash_red_shift", 0.0) < FLASHLIGHT_RED_SHIFT
+        )
+        by_camera.setdefault(row["camera_id"], []).append((ts, flagged, row["message_id"]))
+
+    span = timedelta(days=window_days)
+    results: list[dict[str, Any]] = []
+    for camera_id, series in sorted(by_camera.items()):
+        series.sort(key=lambda item: item[0])
+        baseline = sum(1 for _, f, _ in series if f) / len(series)
+        if baseline <= 0:
+            continue
+        merged: list[dict[str, Any]] = []
+        start = 0
+        for end, (ts, _, _) in enumerate(series):
+            while series[start][0] < ts - span:
+                start += 1
+            chunk = series[start : end + 1]
+            if len(chunk) < min_clips:
+                continue
+            flagged = [item for item in chunk if item[1]]
+            rate = len(flagged) / len(chunk)
+            if rate < min_rate or rate < baseline * min_ratio:
+                continue
+            window = {
+                "camera_id": camera_id,
+                "window_start": chunk[0][0].isoformat(),
+                "window_end": ts.isoformat(),
+                "clips": len(chunk),
+                "flagged": len(flagged),
+                "rate": round(rate, 4),
+                "baseline_rate": round(baseline, 4),
+                "message_ids": " ".join(str(m) for _, _, m in flagged),
+            }
+            if merged and chunk[0][0].isoformat() <= merged[-1]["window_end"]:
+                previous = merged[-1]
+                previous["window_end"] = window["window_end"]
+                previous["clips"] = max(previous["clips"], window["clips"])
+                previous["flagged"] = max(previous["flagged"], window["flagged"])
+                previous["rate"] = max(previous["rate"], window["rate"])
+                previous["message_ids"] = " ".join(
+                    dict.fromkeys(previous["message_ids"].split() + window["message_ids"].split())
+                )
+            else:
+                merged.append(window)
+        results.extend(merged)
+    results.sort(key=lambda w: (-w["rate"], w["camera_id"]))
+    return results
+
+
+def write_obstruction_windows(rows: list[dict[str, Any]], *, out_path: str) -> list[dict[str, Any]]:
+    windows = obstruction_windows(rows)
+    columns = (
+        "camera_id",
+        "window_start",
+        "window_end",
+        "clips",
+        "flagged",
+        "rate",
+        "baseline_rate",
+        "message_ids",
+    )
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(windows)
+    print(f"wrote {len(windows)} obstruction windows to {out_path}")
+    return windows
+
+
 def main() -> None:  # pragma: no cover - requires the real corpus/db
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--camera", default=None, help="restrict to one camera id")
@@ -533,6 +677,9 @@ def main() -> None:  # pragma: no cover - requires the real corpus/db
     if args.maintenance_out:
         write_maintenance_candidates(
             rows, top_per_camera=args.top_per_camera, out_path=args.maintenance_out
+        )
+        write_obstruction_windows(
+            rows, out_path=str(Path(args.maintenance_out).with_suffix(".windows.csv"))
         )
 
 

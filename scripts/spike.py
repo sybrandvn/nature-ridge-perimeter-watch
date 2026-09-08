@@ -1535,16 +1535,48 @@ def detect_clip(
 
 
 def _warmup_motion_features(
-    detection: ClipDetection, zone: CameraZone, frame_width: int, frame_height: int
+    detection: ClipDetection,
+    zone: CameraZone,
+    frame_width: int,
+    frame_height: int,
+    *,
+    threshold: int = 18,
 ) -> dict[str, float]:
     """Track whatever is moving in the DROPPED IR-flare frames and classify
     which side of the fence it was on.
 
-    The warmup frames are dropped because a global IR gain step dwarfs any
-    subject in consecutive-frame differencing. Normalising each frame by its
-    own median cancels that step, after which a subject walking close to the
-    camera is plainly visible -- verified on cam06/21377, where the guard shows
-    as a 97x136 blob tracking left and out of the bottom-left corner.
+    Each dropped frame is photometrically matched (`src.features.
+    photometric_match`, the same chained walk-back-from-settled fit
+    `detect_clip`'s `compensate_warmup` uses) onto the settled `background`,
+    then diffed against it with the same threshold every scored frame uses.
+
+    Was a per-frame-median-ratio consecutive-frame diff until 2026-09-08. That
+    approach divides by each frame's OWN median, which is fine on an ordinary
+    frame but explodes on a near-black one: cam07/22289's first 5 dropped
+    frames have a whole-frame median of 2.0, an 8-bit value that produces a
+    50x gain, amplifying ordinary sensor noise into a false "changed" reading
+    across most of the frame (13,406-63,710 of 76,800 pixels flagged per pair)
+    -- exactly where a real subject (a guard visible bottom-left, confirmed by
+    eye against a brightness-boosted still) should have been the clearest
+    signal, not the noisiest. A least-squares gain+offset fit against a fixed,
+    stable reference does not have this failure mode.
+
+    Re-verified on cam06/21377 after the rewrite: the tracked box still narrows
+    steadily as the guard approaches (8,539px down to 8.5px over 9 dropped
+    frames) and every frame still reads `inside`, matching the pre-rewrite
+    behaviour this feature was originally validated against.
+
+    KNOWN LIMITATION, not solved by this rewrite: diffing against a fixed
+    background also flags a STATIC feature that is simply lit differently
+    before the IR gain settles than after -- not sensor noise, a real
+    photometric difference, just not a moving subject. cam07/18570's largest
+    warmup contour is the same static bright branch that its scored frames
+    separately lock onto (`best_contour`'s own largest-area selection has an
+    identical failure mode there) -- confirmed by the two matching almost
+    exactly (183,91,137,87 recovered scored-frame lock vs. 182,90,138,88 here).
+    Telling "lit differently" apart from "moved" needs comparing multiple
+    frames against EACH OTHER as well as against the background, which this
+    single-frame-vs-background diff does not attempt.
 
     Only the zone verdict survives. Measured on 424 labelled clips by
     leave-one-out AUC, adding features to the ranker baseline of 0.792:
@@ -1570,18 +1602,24 @@ def _warmup_motion_features(
     if len(dropped) < 2:
         return zeros
 
-    grey = []
-    for frame in dropped:
-        g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        median = float(np.median(g))
-        grey.append(g * (100.0 / median) if median > 1 else g)
+    background = detection.background
+    reference = background
+    corrected_reversed = []
+    for raw in reversed(dropped):
+        grey_raw = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+        gain, offset = photometric_match(grey_raw, reference)
+        corrected = apply_photometric_match(grey_raw, gain, offset)
+        corrected_reversed.append(corrected)
+        reference = corrected
+    corrected_frames = reversed(corrected_reversed)
 
     frame_area = float(frame_width * frame_height)
+    kernel = np.ones((3, 3), np.uint8)
     track: list[tuple[float, float, int, int, int, int]] = []
-    for previous, current in zip(grey, grey[1:], strict=False):
-        diff = cv2.absdiff(current, previous)
+    for corrected in corrected_frames:
+        diff = cv2.absdiff(corrected, background)
         mask = cv2.morphologyEx(
-            (diff > 25).astype(np.uint8) * 255, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)
+            (diff > threshold).astype(np.uint8) * 255, cv2.MORPH_OPEN, kernel
         )
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
@@ -2026,7 +2064,9 @@ def extract_clip_features(
             max(whole_frame_green_ratios) if whole_frame_green_ratios else 0.0
         ),
         "warmup_flashlight_ratio": warmup_flashlight_ratio,
-        **_warmup_motion_features(detection, zone, frame_width, frame_height),
+        **_warmup_motion_features(
+            detection, zone, frame_width, frame_height, threshold=threshold
+        ),
         "flashlight_subject_fraction": (
             0.0 if not frames_with_box else flashlight_bbox_frames / frames_with_box
         ),

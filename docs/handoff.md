@@ -1,12 +1,13 @@
 # Handoff: Phase 1 merged to main; Phase 2 branch open; gate 2 retired as a blocking gate
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-08. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-08, session close #12)" at the very
-bottom, just above "Conventions"** — `feat/phase1-finalisation` is merged to `main`, a
-`feat/phase2-corpus-and-cv` branch is open, and gate 2's one-time pass/fail decision is retired in
-favour of the "Ship readiness" bar in `docs/plan.md` — see that file, not this line, for the
-current criteria. `docs/plan.md` is the full plan and stays authoritative; this file is the short
-version of where things actually stand and what to do next.
+picking this up, start at "Handoff for a new agent (2026-09-08, session close #13)" at the very
+bottom, just above "Conventions"** — on branch `feat/phase2-corpus-and-cv` (cut from `main`, which
+now has all of Phase 1 merged). The `prefer_flashlight_candidate` mechanism was extended to
+override an already-active track, not just a fresh pick, and now fixes cam07/11174 (the clip that
+originally motivated it) — still opt-in, still not the default. `docs/plan.md` is the full plan and
+stays authoritative; this file is the short version of where things actually stand and what to do
+next.
 
 ## Where the project is
 
@@ -1194,6 +1195,157 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-08, session close #13)
+
+**Read this section first — it supersedes #12 for current state.** Branch
+`feat/phase2-corpus-and-cv`, 577 tests passing, nothing uncommitted. This session picked a batch of
+cam07 debug clips apart with the user (a mix of the "neighbour" investigation and a broader
+`incident_candidate` sample) and turned three separate observations into one real fix plus one
+diagnosed-but-not-fixed architecture question.
+
+### The active-track flashlight override: cam07/11174 is now actually fixed
+
+Session #11's `prefer_flashlight_candidate` only ever applied to a track's fresh/unconstrained
+pick, which is exactly why it couldn't fix the clip that motivated it — traced why directly this
+session: at cam07/11174's frame 0, the bush is the ONLY candidate large enough to matter (fresh
+pick correctly has nothing to prefer yet), and the real flashlight only becomes its own separate
+candidate at frame 1, by which point the bush is already the active track. A 113px candidate
+90+px away from a 3025px active track fails both the IoU and distance continuation checks, so it
+was correctly rejected as "not a continuation" and then wrongly discarded as a miss instead of
+being treated as what it actually is: a new, independent detection.
+
+**Fixed:** `track_contour`'s "no plausible continuation" branch (active-track case) now checks the
+same `FLASHLIGHT_CANDIDATE_MIN_RATIO` bar before giving up — a candidate that clears it there
+can't be the old track reappearing implausibly (it already failed the checks that would confirm
+that), so it starts a new identity instead of being lost. Confirmed directly on cam07/11174: now
+tracks the real subject for all 3 frames (an existing, unrelated mechanism — the `seed_index`
+outlier-replacement logic that already existed for `considered[0]` — even retroactively fixes
+frame 0 for free, once frames 1-2 establish what the "typical" tracked size actually is).
+`green_light_ratio` goes 0.0 → 0.264, category flips `incident_candidate` → `guard_candidate`.
+
+**Measured on the full 678-clip labelled corpus** (same methodology as session #11,
+`data/reports/scratch/flashlight_active_override_2026-09-08/`):
+
+| | count |
+| --- | --- |
+| guard clips corrected | **24** (up from 14 with the fresh-pick-only version) |
+| guard clips regressed | 4 |
+| environment clips affected | 2 |
+| animal clips changed | 1 (lateral move, never in the alert channel either side) |
+| incident clips changed | **0** |
+| hard constraint (47 animal+incident clips) | 1 changed, **zero alert-channel impact** — identical to the smaller fix |
+
+Two of the 24 corrections are already-named problem clips from earlier sessions: cam08/10852 and
+cam01a/18603 (the truncated-preview pair examples from session #6), and cam01/16167 (flagged
+across sessions #3/#8/#9 for flashlight-hue and light-drift issues).
+
+**All 4 regressions share one root cause, checked directly on the actual frames**: the override
+can jump onto flashlight-*illuminated vegetation* instead of the person, when the beam lights up a
+bigger green-scoring patch than the subject itself (cam05/4738-4739, cam02/9053, cam07/21533).
+This is a real, understood trade-off — the mechanism can't yet distinguish "green because it's the
+torch" from "green because the torch is lighting up a bush," the same structural limitation
+`green_light_ratio` has always had. Not fixed this session.
+
+**Still off by default.** Zero cost to the hard constraint twice now (both the small and the big
+version of this fix), but the same discipline as every other `detect_clip`-level change in this
+repo's history applies: only the 678 *labelled* clips were swept, not the full ~17,000-clip corpus,
+and the vegetation-hijack failure mode is diagnosed, not closed. Worth strongly considering for
+promotion to default once (a) a full-corpus sweep confirms the vegetation-hijack rate is small, and
+(b) either that failure mode gets a real fix (e.g. requiring the lit candidate to also be
+person-shaped/sized, not just green-scoring) or is accepted as a known, bounded cost.
+
+### The reference-background scenery veto: diagnosed why it misses cam07's short-clip bush hallucinations, not a bug in the veto
+
+Investigating a 147-clip pool of cam07 `incident_candidate` reads (outside, human-plausible
+calibrated height, no flashlight signal, all unlabelled) turned up three distinct sub-populations,
+confirmed by the user watching a 9-clip sample: pure appearance-match hallucination on bush during
+near-total darkness, real wind-blown vegetation, and (the one that led to the fix above) a real
+guard whose flashlight arrives after the tracker's already committed elsewhere.
+
+For the bush-hallucination population specifically: checked directly why the existing
+reference-background veto (session #4, built for exactly this shape of problem) doesn't catch it.
+**It isn't a bug — the veto only ever evaluates `recovered=True` runs (a track that's stopped
+producing real diffs and is re-matching a stale template), and these clips' bogus detections are
+`recovered=False`: genuine per-frame background-diff hits.** Confirmed on cam07/9593 and 5 others
+— every hallucinated frame shows `recovered=False`. The real mechanism: these clips have only 3-5
+"considered" frames after the warmup drop (4-8 total raw frames), far too few to build a stable
+per-clip median background, so the bush's own natural texture wobble reads as spurious motion
+against its own noisy, tiny-sample median.
+
+This is the same architecture gap flagged and deliberately not attempted in session #4's continued
+QA pass ("the only still-credible direction is a real cross-clip/per-camera reference-background
+architecture change... deliberately not attempted without explicit sign-off given its corpus-wide
+blast radius") — now with a concrete, reproducible trigger (very short clips specifically).
+Extending the existing veto to also cover `recovered=False` frames was already tried in a related
+form and rejected (session #2's "signal (a)": NCC scores a brightness-boosted real subject as
+"matching" the reference just as well as real scenery) — so this needs a different, deliberate
+design (e.g. using the per-camera reference AS the background model when a clip has too few frames
+for its own median to be trustworthy, not just as a downstream veto), not a quick extension. Not
+attempted this session — flagged as a well-evidenced next step, same "needs explicit sign-off"
+caution as before.
+
+### Telegram delivery-gap measurement, for the wait-for-sibling design question
+
+Confirmed `clips.timestamp` in the DB is the real Telegram message delivery time (`msg.date` from
+the raw backfill), not the embedded camera-clock caption timestamp — so the open "should a live
+system wait for the fuller sibling clip" design question (sessions #6-#7) can be measured directly
+without new instrumentation. Across all 8,274 real sibling pairs: min gap 5s, **median 190s**, p95
+285s, max 514s. A short wait (the 30s originally proposed) only catches 6.1% of pairs; 60s catches
+10.2%; you need ~300s to catch 99.9%. Recommended direction if this gets picked up: fire on the
+short clip immediately (never suppress a real detection) and send a correction if a fuller sibling
+later disagrees, rather than holding every alert for minutes to catch the rare case. Not built —
+this is still Phase 4/5 (live service) scope per `docs/plan.md`, flagged here only because the
+measurement was cheap to do now.
+
+### Other user corrections/findings worth recording
+
+- **The `resident`/daylight question is more subtle than "daylight = safe."** Empirically checked:
+  the confirmed daylight-neighbour clip (cam01/10560-10561) already reads `environment_candidate`/
+  `unclassified` today, not `incident_candidate`, because `color_fraction > 0.15` routes it away
+  from the incident branch before shape rules ever apply. That gate is the same kind of raw image
+  statistic that's failed as a daylight proxy four separate times elsewhere in this repo — it
+  hasn't bitten here yet, but swapping it for the exogenous `is_daylight`/`daylight_hint` signal
+  (already built, already used elsewhere) is the more robust long-term fix, not urgent.
+- **13842's "something flies up into the camera"** — located precisely (raw frames 27-29, ~5.4-5.8s
+  in, a bird/bat-near-illuminator motion-blur streak), confirmed geometrically outside the fence
+  for its whole visible trajectory, and currently invisible to the pipeline for two compounding
+  reasons: the brightness swing it causes trips `flare_frames()`'s gain-step heuristic, and even
+  where a contour is found, the single-track design has no path to notice a second, unrelated,
+  much bigger subject once a track is already active elsewhere. `track_multiple_objects`/
+  `ClipDetection.multi_tracks` already exists for exactly this (every distinct blob gets its own
+  id) but is never fed into `extract_clip_features` — purely a debug-overlay diagnostic today.
+  Turning it into a real secondary-detection channel is the honest fix, not attempted this session.
+- **21534's "different" flashlight colour, measured**: real hue is 37-56 (still the established
+  green family, 33-85), just on the more yellow-green end (other cameras measured 34-40 to date).
+  What's actually different: ~47% of the beam's brightest pixels blow out to near-white from sensor
+  saturation while the rest stay clearly green-tinted — a brighter/closer beam than usual, not a
+  different light source.
+- **The neighbour-worker theory narrowed, not confirmed broadly.** Per the user directly: cam07's
+  clean neighbour sightings are "in better [visibility], clearly the dude standing by the fence,"
+  while the rest of the originally-flagged "outside" cluster turned out to be "just noisy startups
+  or other artifacts" — i.e. the three separate problems above, not more neighbour instances. No
+  relabelling done this session; the population of genuine cam07 neighbour sightings is still
+  effectively just the one pair (22393/22394) confirmed so far.
+
+### Suggested next steps
+
+1. **Full-corpus (not just labelled) sweep of the active-track flashlight override**, per its own
+   "still off by default" section above — the highest-leverage item, since the labelled measurement
+   is already strongly positive.
+2. **Size the three cam07 `incident_candidate` sub-populations properly** (bush-hallucination /
+   wind vegetation / flashlight-arrives-late) beyond the 9-clip sample used to characterise them —
+   only cam07 was checked; the same near-total-darkness-tiny-sample-background mechanism likely
+   affects short clips on other cameras too, just less often given cam07's illuminated bush gives
+   it more texture to hallucinate onto.
+3. **The reference-background-as-primary-background-model architecture question**, now with a
+   second concrete trigger (very short clips) alongside the original frozen-track one — still
+   deliberately not attempted without explicit sign-off given the blast radius.
+4. `track_multiple_objects` → real secondary-detection channel, for cases like 13842 where a
+   second, real subject appears while an unrelated track is already active. Bigger scope than item
+   1, same family of problem.
+5. Everything in #12's list that's still open (gate 2 retirement follow-through, the resident
+   population, `color_fraction`→`is_daylight` swap for the incident-branch gate).
 
 ## Handoff for a new agent (2026-09-08, session close #12)
 

@@ -1,12 +1,12 @@
-# Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
+# Handoff: Phase 1 merged to main; Phase 2 branch open; gate 2 retired as a blocking gate
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-08. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-08, session close #11)" at the very
-bottom, just above "Conventions"** — it has current state: the `best_contour` selection fix from
-session #10 is now wired up, tested, and measured end-to-end against the real labelled corpus.
-Net positive with zero hard-constraint cost, but a real near-miss found too — kept off by default
-pending a full-corpus sweep and a re-derived threshold. `docs/plan.md` is the full plan and stays
-authoritative; this file is the short version of where things actually stand and what to do next.
+picking this up, start at "Handoff for a new agent (2026-09-08, session close #12)" at the very
+bottom, just above "Conventions"** — `feat/phase1-finalisation` is merged to `main`, a
+`feat/phase2-corpus-and-cv` branch is open, and gate 2's one-time pass/fail decision is retired in
+favour of the "Ship readiness" bar in `docs/plan.md` — see that file, not this line, for the
+current criteria. `docs/plan.md` is the full plan and stays authoritative; this file is the short
+version of where things actually stand and what to do next.
 
 ## Where the project is
 
@@ -1194,6 +1194,92 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-08, session close #12)
+
+**Read this section first — it supersedes #11 for current state.** `feat/phase1-finalisation` is
+merged to `main` and a new `feat/phase2-corpus-and-cv` branch is open for Phase 2 work. This
+session closed out the branch, retired gate 2 as a blocking decision, checked the `resident`
+population against a user hypothesis, and investigated cam07's geometry.
+
+### Gate 2 retired as a blocking pass/fail gate
+
+Per the user directly: "gate 2 keeps getting in the way... the classifier needs to be good enough
+for us to ship." `docs/plan.md` now has a **"Ship readiness"** section replacing it — five
+concrete, re-measurable criteria (incident regression passes, no silent animal loss, guard/
+environment leak small enough to review, no known corpus-wide detector bug, tests green) instead
+of a one-time decision on a stale snapshot. **One number in that list is still an open call for
+you, not invented by me:** how much guard/environment leak into the alert channel is actually
+tolerable per night. Set it in `docs/plan.md`'s "Ship readiness" item 3 once you have a number in
+mind — everything else in that list is already measurable today.
+
+### `resident` population: thinner and different from the hypothesis
+
+You asked what the population looks like, on the hypothesis "resident can be inside in daylight,
+might bleed into guard, but guards don't start too early." Checked against the real labelled data:
+
+**Only 4 physical events (8 clips) exist in the whole corpus** — 3 on cam01b, 1 on cam09. That's
+the whole population; any rule built on it is a rule built on 4 data points.
+
+**None of them are clearly daylight.** Converting to local time (UTC+2) and checking
+`src.features.is_daylight`:
+
+| event | local time | `is_daylight` |
+| --- | --- | --- |
+| cam01b, 2025-10-29 | 22:31 | False (night) |
+| cam01b, 2025-11-05 | 05:52 | True (dawn twilight, right at the boundary) |
+| cam09, 2025-11-23 | 18:31 | False (dusk) |
+| cam01b, 2026-02-18 | 18:34 → 18:39 | True → False (straddles the sunset boundary within the same 5-minute pair) |
+
+So the actual population is dusk/dawn/night, not daylight — the daylight framing doesn't match the
+labelled examples, at least not yet (could still be true of unlabelled residents nobody's reviewed;
+this is only what's been hand-labelled so far).
+
+**"Guards don't start too early" is directionally true on cam01b but the margins are thin.**
+cam01b's 79 labelled guard clips run continuously 22:09→05:23 local with only two real gaps: a
+~70-minute predawn gap (03:59→05:10) and a ~28-minute evening gap (22:23→22:51). Both cam01b
+resident events happen to fall in one of these gaps — 22:31 (in the evening gap) and 05:52 (29
+minutes after the last predawn guard clip) — which is consistent with your framing. But that's
+**n=2**, not enough to trust as a boundary, and the margins (28-29 minutes) aren't the clean "well
+before the shift starts" story the hypothesis implies.
+
+**cam09 has zero labelled guard clips at all**, so its one resident event (18:31) has no
+same-camera guard timing to compare against — the "guards don't start too early" idea can't even
+be checked there yet.
+
+**Recommendation: don't build a rule on this yet.** 4 events is too thin to fit anything without
+overfitting to the exact 4 examples, and the daylight assumption doesn't match what's actually
+labelled. The cheapest real next step is collecting more resident examples (and checking whether
+any exist unlabelled in the corpus already — nobody's run a targeted search for them the way storm/
+environment candidates have been) before designing a rule around time-of-day or guard-shift gaps.
+
+### cam07 geometry: likely NOT broken — same pattern as cam01, redirect effort elsewhere
+
+Checked the outside_pixel_fraction distribution over cam07's 36 labelled guard clips directly
+(not just the extreme tail quoted in session #7): it's **genuinely bimodal** — 36.1% read fully
+inside (0.0), 36.1% fully outside (1.0), the rest spread between. That alone doesn't distinguish
+"correct" from "exactly inverted," so it needed a visual check, same as cam01's.
+
+**One clip from each cluster, rendered and inspected:**
+- **cam07/4097** (inside=0.0) — already user-confirmed correct in an earlier session (2026-08-31
+  QA pass). Not re-litigated.
+- **cam07/22393** (outside=1.0), rendered via `scripts/render_debug.py` and inspected frame-by-
+  frame (`data/reports/scratch/cam07_geometry_2026-09-08/`): a person is clearly visible standing
+  on open, textured ground on the side the geometry calls OUTSIDE, while a wire-mesh fence panel
+  fills the near side of frame on the side called INSIDE — visually the same shape as cam01's
+  already-resolved 10560 case (a real person on the clear side, away from the fence structure).
+
+**Since both ends of the same fence line, same camera, same era check out visually, the geometry
+itself is the more likely explanation to rule out, not confirm.** The more consistent reading:
+cam07's guard genuinely patrols on both sides of this fence line across different nights (walking
+the interior path most of the time, sometimes inspecting the fence from outside) — the same
+resolution cam01 got. **No config change made.** This means cam07's real problem is what session
+#10 already found and this session's #11 work partly addressed: the *tracker* following illuminated
+ground/vegetation rather than the actual subject, not a fence-tracing error. Redirect any further
+cam07 effort there, not at re-tracing the line.
+
+Debug renders for anyone who wants to re-check this call: `data/reports/scratch/
+cam07_geometry_2026-09-08/cam07_22393_debug.mp4` and the extracted stills alongside it.
 
 ## Handoff for a new agent (2026-09-08, session close #11)
 

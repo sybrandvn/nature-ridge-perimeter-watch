@@ -282,7 +282,19 @@ Left in place only in case the assumption ever needs checking against real trans
    cameras, for the user to confirm or edit. Never silently authoritative. Median transit times
    are retained as approximate spacing for later coverage-gap analysis.
 
-**0c — CV feasibility spike (gate 2)**
+**0c — CV feasibility spike (gate 2) — RETIRED as a blocking pass/fail gate, 2026-09-08.**
+
+Gate 2 was designed as a one-time decision on a 150-clip snapshot, made before proceeding to
+Phase 1. In practice it never worked that way: Phase 1's foundation (steps 15-19) shipped without
+it, and eleven further sessions of empirical classifier work (`docs/handoff.md` sessions #1-#11)
+happened anyway, on a corpus that grew from ~150 to 678+ labelled clips, because a single pass/fail
+call on stale data kept getting revisited and kept blocking nothing real. The user's own framing:
+"gate 2 keeps getting in the way" — the actual question was never "does classical CV separate
+these classes at all" (answered yes, repeatedly, in practice) but "is the classifier good enough to
+ship," which is not a one-time decision, it's an ongoing measurement. See "Ship readiness" below,
+which replaces this gate. Step 14's original finding is kept as historical record, not a live
+blocker — do not treat its numbers (150 clips, 0.22 precision) as current; they predate almost
+everything in `docs/handoff.md`.
 10. [done] Download a clip subset for 2-3 cameras chosen using 0a activity stats and known incident
     locations, ideally including the camera that caught the crawl. Span night, storm, animal,
     guard, and intruder examples. `scripts/download_clips.py` does this against rows already in
@@ -380,6 +392,39 @@ Left in place only in case the assumption ever needs checking against real trans
     I/O glue). `tests/test_meta_backfill.py` renamed to `tests/test_backfill.py` to match.
 
 
+## Ship readiness (replaces Gate 2 pass/fail, 2026-09-08)
+
+Not a phase with its own numbered steps — a standing bar every later phase's work is checked
+against, re-measured as the corpus and rules change, instead of a one-time decision made on a
+snapshot. "Good enough to ship" means all of the following hold, measured on the *current* labelled
+corpus (re-run, don't trust a quoted number — every session in `docs/handoff.md` has learned this
+the hard way at least once):
+
+1. **Hard constraint, non-negotiable: no labelled incident event stops alerting.**
+   `scripts/check_incident_regression.py` passes (currently 5/5 events). Any change that would
+   break this needs the user's explicit, logged sign-off on the specific clip lost (as already
+   practiced — see `docs/handoff.md`'s `cam10/7632` correction for what that looks like done
+   right, and what it looks like done wrong the first time).
+2. **No labelled animal event is silently dropped.** Same standard as incidents, one notch looser
+   only because animal sightings are a lower safety stake than a human intruder — still requires
+   an explicit, documented exception, not a silent regression buried in a threshold sweep.
+3. **Guard and environment leak into the alert channel is small enough to actually review.** This
+   is a real number, not a vibe, but it is the user's number to set, not an agent's to assume —
+   pick a concrete target (e.g. "under N alert-channel clips per night on average" or a leak
+   percentage) and record it here once chosen. Until then, track the trend via
+   `scripts/backtest.py` + `scripts/rank_candidates.py` (`docs/handoff.md` has the running series:
+   29→14→6 environment-leak clips, 39→26 guard-leak clips, across sessions #5-#7) rather than
+   gating on an unset number.
+4. **No known, unaddressed corpus-wide detector bug materially distorts the classifier's own
+   inputs.** Currently open: the `best_contour`/tracker selection issue (`docs/handoff.md` sessions
+   #10-#11) — measured net-positive on the labelled sample but not yet safe as a default; see that
+   section for the specific gate before flipping it on.
+5. **The full test suite and the incident regression check both stay green** —
+   `uv run ruff check . --fix && uv run pytest -q` and `scripts/check_incident_regression.py`, the
+   same two commands this repo has run before every commit since session #1.
+
+Phase 2 work (below) is judged against this bar, not against a resurrected Gate 2.
+
 ### Phase 2: Corpus and CV
 20. Camera-ID parsing hardened against every caption shape observed in 0a, plus
     health-notification formats, with an explicit unknown-camera result.
@@ -400,6 +445,19 @@ Left in place only in case the assumption ever needs checking against real trans
     `ambiguous`, each with reason codes and contributing thresholds. Implements fail-safe
     escalation. Unknown camera, missing fence line, above depth cutoff, or undecodable video
     resolve to `ambiguous`. Typed interface for a future ML resolver, unimplemented.
+
+**Reconcile this list with what actually exists before treating any of it as "to do" (first task
+for whoever starts Phase 2 proper).** The empirical work since Phase 0c built real equivalents of
+several of these under different names, ad hoc, while gate 2 sat undecided: `src/zones.py` (step
+23) already exists and is in daily use; `scripts/backtest.py::classify()` already does step 25's
+job, just not as a separate typed module with its own reason-code interface; `src/features.py` +
+`scripts/spike.py::detect_clip` do step 22's extraction, but **without** the caching step 22
+specifies — the `blob_tracks` table (step 17) exists in the schema and nothing writes to it, so
+every backtest run re-extracts every clip from video. Step 24 (browser zone editor) is the one
+item on this list with no ad hoc equivalent anywhere — still fully open. Steps 20/21 (camera-ID
+parsing hardening, resumable full backfill) need a real check against current `scripts/
+download_clips.py`/`scripts/meta_backfill.py`, not assumed done just because the corpus has grown
+to 17,000+ clips.
 
 ### Phase 3: Labels, backtester, retrospective sequences
 26. `scripts/label.py`: resumable, prints the clip path by default, optional configured player,

@@ -75,11 +75,17 @@ NEGATIVE_LABELS = ("guard", "environment", "resident", "unknown")
 
 # Cameras where a human reviewer confirmed (watching the actual footage, not
 # an inferred threshold) that every is_blinding_foreground hit is a guard
-# shining their flashlight directly into the lens, not a physical obstruction
-# -- so this camera's clips don't belong in a "send someone to clean this"
-# report. cam04, 2026-09-07: user reviewed the full maintenance queue and
-# confirmed every cam04 entry was this pattern.
-NO_MAINTENANCE_CAMERAS = frozenset({"cam04"})
+# shining their flashlight directly into the lens, or a permanent structure
+# the camera is mounted on -- so these clips don't belong in a "send someone
+# to clean this" report. Neither is something anyone can clean.
+# cam04, 2026-09-07: user reviewed the full maintenance queue and confirmed
+# every cam04 entry was the flashlight pattern.
+# cam01a, 2026-09-08: user confirmed this is the pole-mounted camera, it reads
+# its own pole as very bright, and the guard flashes it directly. It is the
+# worst camera on site for overexposure (33% of clips) and the blinding flag
+# (37%), and `post_flash_red_shift` does not catch it -- 39 of its 43 flagged
+# clips survive that filter.
+NO_MAINTENANCE_CAMERAS = frozenset({"cam04", "cam01a"})
 
 # Only guard clips exceed this on the labelled corpus (guard max 0.581 vs
 # environment 0.014, animal 0.038, incident 0.001) -- see

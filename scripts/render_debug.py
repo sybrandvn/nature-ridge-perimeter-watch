@@ -476,6 +476,7 @@ def render_clip(
     max_flare_fraction: float = DEFAULTS["max_flare_fraction"],
     reference_background: np.ndarray | None = None,
     timestamp: str | None = None,
+    prefer_flashlight_candidate: bool = False,
 ) -> str | None:
     """Write an annotated H.264 .mp4 video for one clip. Returns the path, or
     None if the clip has no readable frames.
@@ -484,6 +485,12 @@ def render_clip(
     VS Code's own preview but Telegram and ntfy-viewing clients treat them as
     a generic file, not an inline video. `Mp4Writer` pipes frames to a bundled
     ffmpeg with a genuine libx264, so out_path is always coerced to .mp4.
+
+    `prefer_flashlight_candidate` (see `scripts.spike.detect_clip`) is
+    unmeasured-by-default plumbing for comparing the "biggest contour wins"
+    tracker pick against the colour-aware one on one clip at a time -- pass
+    `--prefer-flashlight-candidate` and re-render the same clip to see the
+    difference, e.g. cam07/11174.
     """
     out_path = str(Path(out_path).with_suffix(".mp4"))
     detection: ClipDetection | None = detect_clip(
@@ -495,6 +502,7 @@ def render_clip(
         max_flare_fraction=max_flare_fraction,
         reference_background=reference_background,
         compensate_warmup=True,
+        prefer_flashlight_candidate=prefer_flashlight_candidate,
     )
     if detection is None:
         return None
@@ -508,6 +516,7 @@ def render_clip(
         flare_tolerance=flare_tolerance,
         max_flare_fraction=max_flare_fraction,
         daylight_hint=daylight_hint(timestamp),
+        prefer_flashlight_candidate=prefer_flashlight_candidate,
     )
 
     source_fps = sane_fps(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS))
@@ -1081,6 +1090,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="disable the reference-background scenery veto, for before/after comparison",
     )
+    tuning.add_argument(
+        "--prefer-flashlight-candidate",
+        action="store_true",
+        help="let a colour-lit candidate beat a larger one for a track's fresh pick"
+        " (see scripts.spike.detect_clip); unmeasured by default, off",
+    )
     args = parser.parse_args(argv)
 
     if args.clip and not args.camera:
@@ -1131,6 +1146,7 @@ def main(argv: list[str] | None = None) -> int:
                 reference_entries, args.reference_bg, camera, clip.get("timestamp")
             ),
             timestamp=clip.get("timestamp"),
+            prefer_flashlight_candidate=args.prefer_flashlight_candidate,
         )
         if result is None:
             print(f"  skip {title}: no readable frames")

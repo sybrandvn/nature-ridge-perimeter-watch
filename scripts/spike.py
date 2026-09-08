@@ -47,6 +47,7 @@ import numpy as np  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
+    FLASHLIGHT_CANDIDATE_MIN_RATIO,
     FLASHLIGHT_SUBJECT_THRESHOLD,
     apply_photometric_match,
     area_stability,
@@ -230,6 +231,7 @@ def track_contour(
     min_size_margin: float = 6.0,
     max_size_change_ratio: float = 4.0,
     min_reacquire_area: float = 20.0,
+    flashlight_scores: list[float] | None = None,
 ) -> np.ndarray | None:
     """Pick the candidate contour that continues an existing track, instead of
     always re-selecting the frame's largest blob independently.
@@ -273,12 +275,34 @@ def track_contour(
     frames after the real subject left). Below this floor, no candidate
     counts as plausible and this reports a miss instead, same as an active
     track with nothing to continue onto.
+
+    `flashlight_scores`, one value per `candidates` entry (see `green_light_
+    ratio`), is opt-in evidence for the SAME fresh/unconstrained pick above --
+    largest-area alone has a real, confirmed failure mode: a static bright
+    blob (a sunlit branch, an illuminated bush) that is bigger in frame than
+    the guard's own flashlight wins the pick outright, and every downstream
+    colour feature then describes the wrong blob (confirmed on cam07/11174:
+    a real flashlight sat in its own 1785px contour while a 3025px bush
+    contour in the same frame won the largest-area vote). When any eligible
+    candidate's score clears `FLASHLIGHT_CANDIDATE_MIN_RATIO` (the same threshold
+    `classify()`'s own green-light rule uses), the largest SUCH candidate
+    wins instead of the largest candidate overall -- still preferring size
+    among genuine flashlight hits, just no longer blind to colour. Pass
+    `None` (the default) for the original area-only behaviour.
     """
     if not candidates:
         return None
     if track_bbox is None:
-        eligible = [c for c in candidates if cv2.contourArea(c) >= min_reacquire_area]
-        return max(eligible, key=cv2.contourArea) if eligible else None
+        eligible = [
+            i for i, c in enumerate(candidates) if cv2.contourArea(c) >= min_reacquire_area
+        ]
+        if not eligible:
+            return None
+        if flashlight_scores is not None:
+            lit = [i for i in eligible if flashlight_scores[i] > FLASHLIGHT_CANDIDATE_MIN_RATIO]
+            if lit:
+                eligible = lit
+        return candidates[max(eligible, key=lambda i: cv2.contourArea(candidates[i]))]
 
     boxes = [_contour_bbox(c) for c in candidates]
     track_area = _bbox_area(track_bbox)
@@ -449,6 +473,7 @@ def _run_track_pass(
     reference_background: np.ndarray | None = None,
     max_scenery_streak: int = 2,
     scenery_correlation: float = 0.94,
+    flashlight_scores_per_frame: list[list[float]] | None = None,
 ) -> list[tuple[np.ndarray | None, bool]]:
     """Run the track_contour + reacquire_by_template state machine once over a
     sequence of frames, in whatever order they're given -- forward, or
@@ -534,6 +559,11 @@ def _run_track_pass(
     `reference_background=None` (the default) to disable this entirely, which
     is what happens for any camera with too few clips to build a reference
     from.
+
+    `flashlight_scores_per_frame`, one list of scores parallel to each
+    frame's own `candidates_per_frame` entry, is forwarded to `track_contour`
+    unchanged -- see its own docstring. `None` (the default) is the original
+    largest-area-only behaviour.
     """
     results: list[tuple[np.ndarray | None, bool]] = []
     track_bbox: tuple[int, int, int, int] | None = None
@@ -554,6 +584,11 @@ def _run_track_pass(
             min_size_margin=min_search_margin,
             max_size_change_ratio=max_size_change_ratio,
             min_reacquire_area=min_reacquire_area if floor_active else 0.0,
+            flashlight_scores=(
+                flashlight_scores_per_frame[index]
+                if flashlight_scores_per_frame is not None
+                else None
+            ),
         )
         recovered = False
         if contour is None and track_bbox is not None and template is not None:
@@ -1004,6 +1039,7 @@ def detect_clip(
     scenery_correlation: float = 0.94,
     ignore_polygons: tuple[tuple[tuple[float, float], ...], ...] = (),
     compensate_warmup: bool = False,
+    prefer_flashlight_candidate: bool = False,
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
@@ -1178,6 +1214,26 @@ def detect_clip(
     correlation first, because cameras drift on their mounts between clips and
     the comparison is per-pixel. Omit it to disable the check.
 
+    `prefer_flashlight_candidate=True` (default off) computes `green_light_
+    ratio` for every raw motion candidate in every frame (see `track_contour`)
+    and lets it override the largest-area pick for a track's fresh/
+    unconstrained start whenever a smaller candidate clears `FLASHLIGHT_
+    CANDIDATE_MIN_RATIO`. This exists because "biggest contour wins" has a
+    confirmed failure mode distinct from everything else in this function: a
+    bigger, static-or-drifting bright blob (a sunlit bush, illuminated
+    vegetation outside the fence) can simply outsize the guard's own
+    flashlight in the same frame, and once the wrong contour is `largest`
+    every colour feature downstream describes the wrong thing for the rest of
+    the track (confirmed on cam07/11174 -- a real flashlight sat in its own
+    1785px contour while a 3025px bush contour in the same frame won the
+    old vote). It does not discard any candidate: every contour `cv2.
+    findContours` found is still there and still eligible; this only changes
+    which one an untracked frame picks first. Off by default because it is
+    unmeasured beyond the one confirmed clip -- see the caller (`scripts.
+    backtest`/`extract_clip_features`) for how to sweep it against the full
+    labelled corpus before trusting it corpus-wide, same discipline as every
+    other `detect_clip`-level change in this file's history.
+
     Both passes above refresh their appearance template on every real
     detection, which is what lets them follow a genuinely changing subject.
     They can still both come up empty on a frame, so `anchor_refine` adds a
@@ -1249,7 +1305,8 @@ def detect_clip(
     motion_fracs: list[float] = []
     total_motion_area = 0.0
     scenery_motion_area = 0.0
-    for gray in grays:
+    per_frame_flashlight_scores: list[list[float]] = []
+    for frame_index, gray in enumerate(grays):
         diff = cv2.absdiff(gray, background)
         _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
@@ -1278,6 +1335,13 @@ def detect_clip(
         per_frame_candidates.append(
             [c for c in frame_contours if 0 < cv2.contourArea(c) <= max_area]
         )
+        if prefer_flashlight_candidate:
+            per_frame_flashlight_scores.append(
+                [
+                    green_light_ratio(considered[frame_index], c)
+                    for c in per_frame_candidates[-1]
+                ]
+            )
         motion_fracs.append(float(np.count_nonzero(mask)) / mask.size)
         # Scored per blob, not per pixel: a location matching the reference at
         # the SAME coordinates (built from other clips of this camera) is
@@ -1306,7 +1370,15 @@ def detect_clip(
         "max_scenery_streak": max_scenery_streak,
         "scenery_correlation": scenery_correlation,
     }
-    forward = _run_track_pass(grays, per_frame_candidates, **track_kwargs)
+    flashlight_scores_per_frame = (
+        per_frame_flashlight_scores if prefer_flashlight_candidate else None
+    )
+    forward = _run_track_pass(
+        grays,
+        per_frame_candidates,
+        flashlight_scores_per_frame=flashlight_scores_per_frame,
+        **track_kwargs,
+    )
     # Tell the backward pass which original frames already had a real subject
     # established somewhere earlier in actual time -- its own reverse
     # traversal can't know this on its own (see _run_track_pass docstring).
@@ -1322,6 +1394,11 @@ def detect_clip(
                 list(reversed(grays)),
                 list(reversed(per_frame_candidates)),
                 enforce_min_area=list(reversed(forward_established_by_index)),
+                flashlight_scores_per_frame=(
+                    list(reversed(flashlight_scores_per_frame))
+                    if flashlight_scores_per_frame is not None
+                    else None
+                ),
                 **track_kwargs,
             )
         )
@@ -1815,6 +1892,7 @@ def extract_clip_features(
     reference_background: np.ndarray | None = None,
     scenery_correlation: float = 0.94,
     daylight_hint: bool | None = None,
+    prefer_flashlight_candidate: bool = False,
 ) -> dict[str, float] | None:
     """Run the detector over one clip and compute features for its largest
     track. Returns None if no motion was detected.
@@ -1857,6 +1935,10 @@ def extract_clip_features(
     before treating the former as "no scenery motion found", since a camera
     with no reference at all looks identical to one with a reference that
     simply found nothing.
+
+    `prefer_flashlight_candidate` (see `detect_clip`) is forwarded unchanged.
+    Off by default, unmeasured corpus-wide -- pass `True` here (and thread it
+    through a caller's own CLI flag) to sweep it before adopting it.
     """
     detection = detect_clip(
         video_path,
@@ -1869,6 +1951,7 @@ def extract_clip_features(
         ignore_polygons=zone.ignore,
         reference_background=reference_background,
         scenery_correlation=scenery_correlation,
+        prefer_flashlight_candidate=prefer_flashlight_candidate,
     )
     if detection is None:
         return None

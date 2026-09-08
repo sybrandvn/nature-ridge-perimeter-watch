@@ -159,6 +159,13 @@ def color_saturation_fraction(frame_bgr: np.ndarray, *, saturation_threshold: in
 FLASHLIGHT_MIN_SATURATION = 130
 FLASHLIGHT_MIN_BLOB_AREA = 8
 
+# Same value as scripts.backtest's GREEN_LIGHT_RATIO_MIN, deliberately -- one
+# "is this a real flashlight, not noise" bar shared by the classify() rule and
+# scripts.spike's opt-in track_contour candidate-preference (see its
+# `flashlight_scores` parameter), so a candidate is never held to a different
+# standard than a finished clip's own best_contour would be.
+FLASHLIGHT_CANDIDATE_MIN_RATIO = 0.02
+
 
 def green_light_mask(
     frame_bgr: np.ndarray,

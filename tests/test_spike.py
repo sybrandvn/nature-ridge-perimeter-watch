@@ -231,6 +231,74 @@ def test_track_contour_min_reacquire_area_defaults_on_for_fresh_starts():
     )
 
 
+def test_track_contour_prefers_flashlight_candidate_over_larger_blob():
+    # The cam07/11174 failure mode: a bigger, non-flashlight blob (e.g. a
+    # sunlit bush) outsizes the guard's own flashlight in the same frame.
+    # With flashlight_scores supplied and one candidate clearing
+    # FLASHLIGHT_CANDIDATE_MIN_RATIO, the largest SUCH candidate wins instead
+    # of the largest candidate overall.
+    bush = _square_contour(0, 0, 60)  # area 3600, no green
+    flashlight = _square_contour(100, 100, 10)  # area 100, green
+    result = spike.track_contour(
+        [bush, flashlight],
+        None,
+        max_jump_distance=1000,
+        flashlight_scores=[0.0, 0.05],
+    )
+    assert result is flashlight
+
+
+def test_track_contour_flashlight_preference_still_prefers_size_among_lit_candidates():
+    # Two candidates both clear the flashlight bar -- size still decides
+    # between them, exactly as it would with no colour evidence at all.
+    small_lit = _square_contour(0, 0, 10)
+    big_lit = _square_contour(100, 100, 20)
+    result = spike.track_contour(
+        [small_lit, big_lit],
+        None,
+        max_jump_distance=1000,
+        flashlight_scores=[0.05, 0.05],
+    )
+    assert result is big_lit
+
+
+def test_track_contour_flashlight_preference_falls_back_to_size_when_nothing_lit():
+    # No candidate clears the flashlight bar -- behaves exactly like the
+    # colour-blind default (largest wins), not like a miss.
+    small = _square_contour(0, 0, 10)
+    big = _square_contour(100, 100, 20)
+    result = spike.track_contour(
+        [small, big],
+        None,
+        max_jump_distance=1000,
+        flashlight_scores=[0.0, 0.0],
+    )
+    assert result is big
+
+
+def test_track_contour_flashlight_scores_none_keeps_area_only_behaviour():
+    # The default (None) must be byte-identical to the pre-existing behaviour
+    # -- this is what makes prefer_flashlight_candidate=False a true no-op.
+    small = _square_contour(0, 0, 10)
+    big = _square_contour(100, 100, 20)
+    assert spike.track_contour([small, big], None, max_jump_distance=1000) is big
+
+
+def test_track_contour_flashlight_preference_respects_min_reacquire_area_floor():
+    # A lit candidate below the min_reacquire_area floor is still not
+    # eligible at all -- colour evidence only chooses among candidates that
+    # already cleared the size floor, it never waives it.
+    speck = _square_contour(10, 10, 3)  # area 9, below floor
+    result = spike.track_contour(
+        [speck],
+        None,
+        max_jump_distance=1000,
+        min_reacquire_area=20.0,
+        flashlight_scores=[0.9],
+    )
+    assert result is None
+
+
 def test_track_multiple_objects_assigns_stable_ids_to_two_independent_subjects():
     # Two subjects, far enough apart to never share a candidate, should each
     # keep the same id across every frame they appear in.
@@ -878,6 +946,48 @@ def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(mo
     assert dip_frame.recovered is True
     # Every other frame should be a real bg-diff detection, not a recovery.
     assert all(not f.recovered for i, f in enumerate(detection.frames) if i != 2)
+
+
+def _frame_with_bush_and_flashlight(index: int, size: int = 100) -> np.ndarray:
+    """Two independently-moving contours in one frame: a big non-green blob
+    (the cam07/11174 confound -- e.g. a sunlit bush) far bigger than a small
+    green one (the guard's actual flashlight), in entirely separate parts of
+    frame so background-subtraction always keeps them as two candidates, never
+    one merged contour."""
+    bush_x = [5, 30, 55, 5, 30]
+    light_x = [80, 60, 40, 80, 60]
+    frame = np.zeros((size, size, 3), dtype=np.uint8)
+    bx = bush_x[index]
+    cv2.rectangle(frame, (bx, 5), (bx + 20, 25), (255, 255, 255), thickness=-1)
+    gx = light_x[index]
+    cv2.rectangle(frame, (gx, 70), (gx + 8, 78), (40, 255, 40), thickness=-1)
+    return frame
+
+
+def test_detect_clip_prefer_flashlight_candidate_picks_the_light_not_the_bigger_blob(
+    monkeypatch,
+):
+    # The cam07/11174 regression this option exists for: a real flashlight
+    # sits in its own small contour while a much bigger, non-green contour
+    # (a sunlit bush) shares the frame. Off (the default) reproduces the old
+    # bug -- biggest wins regardless of colour. On, the flashlight wins
+    # whenever it clears FLASHLIGHT_CANDIDATE_MIN_RATIO.
+    frames = [_frame_with_bush_and_flashlight(i) for i in range(5)]
+
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    off = spike.detect_clip("clip.mp4", threshold=18, prefer_flashlight_candidate=False)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    on = spike.detect_clip("clip.mp4", threshold=18, prefer_flashlight_candidate=True)
+
+    assert off is not None and on is not None
+    off_boxes = [cv2.boundingRect(f.largest) for f in off.frames if f.largest is not None]
+    on_boxes = [cv2.boundingRect(f.largest) for f in on.frames if f.largest is not None]
+    assert off_boxes  # the bug reproduces: something is tracked
+    assert on_boxes  # the fix still finds something too
+    # Bush sits at y in [5, 25]; flashlight sits at y in [70, 78] -- far apart
+    # rows are what makes "which one got tracked" unambiguous here.
+    assert all(y0 < 30 for _x0, y0, _w, _h in off_boxes)
+    assert all(y0 > 60 for _x0, y0, _w, _h in on_boxes)
 
 
 def test_extract_clip_features_excludes_recovered_frames_from_motion_stats(monkeypatch):

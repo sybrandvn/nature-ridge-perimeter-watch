@@ -4,10 +4,11 @@ Written 2026-08-28, updated repeatedly since; last updated 2026-09-08. **If you 
 picking this up, start at "Handoff for a new agent (2026-09-08, session close #13)" at the very
 bottom, just above "Conventions"** — on branch `feat/phase2-corpus-and-cv` (cut from `main`, which
 now has all of Phase 1 merged). The `prefer_flashlight_candidate` mechanism was extended to
-override an already-active track and now fixes cam07/11174, but a full 16,886-clip corpus sweep
-found a real bug before it shipped: its candidate-level colour scoring has no exclude mask, so it
-can be fooled by an un-ignored stationary light on cameras other than cam07. Still opt-in, with a
-concrete fix now scoped before it can be reconsidered for default. `docs/plan.md` is the full plan
+override an already-active track and now fixes cam07/11174. A full 16,886-clip corpus sweep ran
+clean (1,258/16,886 changed, no disqualifying finding) — a suspected stationary-light bug in that
+sweep's non-cam07 clusters was investigated and retracted same session, confirmed by the user
+against the actual footage as genuine corrections, not false positives. Still opt-in pending the
+"Ship readiness" leak-tolerance call, not a correctness blocker. `docs/plan.md` is the full plan
 and stays authoritative; this file is the short version of where things actually stand and what to do
 next.
 
@@ -1416,6 +1417,34 @@ abundance of caution.** Before this can be defaulted on:
 
 Full per-clip results: `data/reports/scratch/flashlight_active_override_full_2026-09-08/results_full.csv`.
 Spot-check renders: `data/reports/debug_render/full_sweep_spotcheck_2026-09-08/`.
+
+**CORRECTED, same session, immediately after writing the above: there was no stationary-light bug.
+The "fixed light" diagnosis was a misread of grainy night-IR frames, corrected by the user who
+actually knows the footage.** cam04/6079 and cam01b/16936 are real guards shining a flashlight —
+confirmed directly by the user, not inferred. Re-checked three more from the same clusters after
+the correction: cam01b/17061 (a flashlight beam lighting up grass, box slightly off-center onto
+adjacent plant texture — imprecise but real), cam04/6665 (same shape as 6079), and cam01b/17764
+(the guard leaves frame early and the box locks onto "a bright bush" left in view afterward — per
+the user directly — but the clip's own classification is still correctly `guard_candidate`,
+unaffected, and its fuller sibling 17765 already read `guard_candidate` correctly on both flag
+values regardless). **Every single spot-checked clip in the "concerning" clusters turned out to be
+a genuine correction, not a false positive.** The exclude-mask code written to fix the
+non-existent bug was reverted rather than kept as unvalidated insurance — matches this repo's own
+standing discipline of not shipping a fix for a problem that isn't measured.
+
+**Practical lesson, worth repeating for whoever reads this next:** a bounding box wandering onto
+something that looks like foliage/an artifact in a single dark, low-resolution IR still is not
+enough evidence on its own — this repo's whole history is full of "obviously wrong" reads that
+turned out to be real guards, real animals, or real fixed lights depending on ground truth nobody
+but the user has. When a short/startup clip's read looks strange, check the fuller sibling clip
+before concluding anything (17764/17765 above is a clean example of exactly why). **Net effect: the
+full-corpus sweep result stands as originally measured (1,258/16,886 changed, cam07 518, the rest
+spread thin) with no confirmed blocker.** The "still off by default, needs a full-corpus sweep
+first" caution from the smaller (labelled-only) measurement no longer applies — that sweep is now
+done, at full-corpus scale, with no disqualifying finding. Promotion to default is a much more
+live option now than the previous version of this section suggested; the remaining open question is
+purely the design one already on record (does the guard/environment leak trade-off match the
+"Ship readiness" bar in `docs/plan.md`), not a correctness blocker.
 
 ## Handoff for a new agent (2026-09-08, session close #12)
 

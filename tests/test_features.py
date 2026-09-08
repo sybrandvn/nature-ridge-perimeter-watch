@@ -8,6 +8,7 @@ from src.features import (
     aspect_ratio,
     blob_white_fraction,
     color_saturation_fraction,
+    daylight_hint,
     depth_progression,
     detect_stationary_light_mask,
     edge_density,
@@ -574,3 +575,27 @@ def test_photometric_match_color_corrects_each_channel_independently():
     reference[:, :] = (100, 100, 100)  # neutral grey
     corrected = photometric_match_color(frame, reference)
     assert np.mean(np.abs(corrected.astype(np.float64) - 100.0)) < 1.0
+
+
+def test_daylight_hint_true_in_the_middle_of_the_day():
+    assert daylight_hint("2026-01-15T10:00:00Z") is True
+
+
+def test_daylight_hint_true_just_after_sunset_via_twilight():
+    # 19:30 local in January, 35 minutes past the 18:55 sunset -- not daylight,
+    # but still carrying real ambient colour, so the gate should stay on.
+    assert is_daylight("2026-01-15T17:30:00Z") is False
+    assert daylight_hint("2026-01-15T17:30:00Z") is True
+
+
+def test_daylight_hint_false_in_the_middle_of_the_night():
+    assert daylight_hint("2026-01-15T22:00:00Z") is False
+
+
+def test_daylight_hint_none_without_a_timestamp():
+    assert daylight_hint(None) is None
+    assert daylight_hint("") is None
+
+
+def test_daylight_hint_none_on_an_unparseable_timestamp():
+    assert daylight_hint("not-a-timestamp") is None

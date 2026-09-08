@@ -782,6 +782,62 @@ def test_extract_clip_features_scenery_motion_fraction_zero_without_reference(mo
     assert result["scenery_motion_fraction"] == pytest.approx(0.0)
 
 
+def _green_lit_frames():
+    """A moving subject on a heavily green-cast frame -- what cam01b's and
+    cam16's night footage actually looks like."""
+    frames = []
+    for pos in (5, 12, 19, 26, 33, 40):
+        frame = _frame_with_square(pos)
+        frame[:, :, 1] = np.clip(frame[:, :, 1].astype(int) + 90, 0, 255).astype(np.uint8)
+        cv2.rectangle(frame, (pos, 30), (pos + 8, 38), (40, 255, 40), thickness=-1)
+        frames.append(frame)
+    return frames
+
+
+def test_daylight_hint_false_overrules_the_colour_gate(monkeypatch):
+    frames = _green_lit_frames()
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    gated = spike.extract_clip_features("clip.mp4", _ZONE)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    hinted = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=False)
+
+    assert gated is not None and hinted is not None
+    assert gated["color_fraction"] > 0.15  # the image statistic says "daylight"
+    assert gated["green_light_ratio"] == pytest.approx(0.0)  # ...so it was zeroed
+    assert hinted["green_light_ratio"] > 0.0  # the clock says night, so it isn't
+
+
+def test_daylight_hint_true_leaves_the_colour_gate_alone(monkeypatch):
+    frames = _green_lit_frames()
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=True)
+
+    assert result is not None
+    assert result["green_light_ratio"] == pytest.approx(0.0)
+    assert result["green_light_flicker"] == pytest.approx(0.0)
+
+
+def test_daylight_hint_none_is_the_pre_existing_behaviour(monkeypatch):
+    frames = _green_lit_frames()
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    default = spike.extract_clip_features("clip.mp4", _ZONE)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    explicit_none = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=None)
+
+    assert default == explicit_none
+
+
+def test_daylight_hint_does_not_invent_colour_where_there_is_none(monkeypatch):
+    # Overruling the gate must not manufacture a flashlight reading on a clip
+    # that has no green in it at all.
+    frames = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=False)
+
+    assert result is not None
+    assert result["green_light_ratio"] == pytest.approx(0.0)
+
+
 def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(monkeypatch):
     # A single textured subject moves across frame, well-detected by
     # background-subtraction everywhere except one frame where it's drawn at

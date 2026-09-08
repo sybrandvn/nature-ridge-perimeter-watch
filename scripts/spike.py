@@ -1775,6 +1775,7 @@ def extract_clip_features(
     template_match_threshold: float = 0.55,
     reference_background: np.ndarray | None = None,
     scenery_correlation: float = 0.94,
+    daylight_hint: bool | None = None,
 ) -> dict[str, float] | None:
     """Run the detector over one clip and compute features for its largest
     track. Returns None if no motion was detected.
@@ -1787,6 +1788,22 @@ def extract_clip_features(
     (broad-frame saturation, see `src.features.color_saturation_fraction`)
     clears this threshold the clip is treated as genuine colour footage and
     both green-light features are zeroed rather than trusted.
+
+    `daylight_hint` is the EXOGENOUS answer to the same question -- pass
+    `src.features.is_daylight(timestamp)` (or that OR'd with `is_twilight`).
+    When it is `False`, the image-statistic gate above is overruled: the clock
+    says it is night, so whatever colour is in frame is not ambient daylight.
+    This matters because the gate is not camera-neutral. Measured 2026-09-08
+    over all 16,272 genuinely-night clips, 29.7% trip the gate anyway, and it
+    is concentrated in the cameras that record colour-cast night footage:
+    cam16 95.4%, cam01b 94.8%, cam14 87.0%, cam04 55.4%, cam01a 54.8%,
+    cam01 43.3%, cam05 40.6% -- against cam07 3.8%, cam06 5.3%, cam02 5.6%.
+    On those cameras every flashlight feature is forced to 0.0 on nearly every
+    clip, which is why cam01b's green-light rule fires on 1.1% of its clips
+    and cam16's on 2.6%, against cam03's 40.4%. Raw-pixel checks confirm the
+    green is really there and detectable (12/12 sampled cam01b and cam16 night
+    clips carry >50 green-mask pixels, up to 36k, hue 36-40, saturation 255).
+    Leave it `None` (the default) for the pre-2026-09-08 behaviour.
 
     `reference_background`, when supplied, additionally computes
     `scenery_motion_fraction` (see `detect_clip`) -- the fraction of this
@@ -1885,7 +1902,10 @@ def extract_clip_features(
     warmup_flashlight_ratio = 0.0
     if detection.dropped_frames:
         warmup_colour = [color_saturation_fraction(f) for f in detection.dropped_frames]
-        warmup_daylight = sum(warmup_colour) / len(warmup_colour) > daylight_color_fraction
+        warmup_daylight = (
+            sum(warmup_colour) / len(warmup_colour) > daylight_color_fraction
+            and daylight_hint is not False
+        )
         if not warmup_daylight:
             warmup_flashlight_ratio = max(
                 green_light_ratio(f, whole_frame, exclude_mask=ignore_mask)
@@ -1969,7 +1989,7 @@ def extract_clip_features(
     track = [(x / frame_width, y / frame_height) for x, y in centroids]
     best_width = float(cv2.boundingRect(best_contour)[2])
     color_fraction = sum(color_fractions) / len(color_fractions) if color_fractions else 0.0
-    is_daylight_color = color_fraction > daylight_color_fraction
+    is_daylight_color = color_fraction > daylight_color_fraction and daylight_hint is not False
 
     return {
         "outside_pixel_fraction": outside_pixel_fraction(points, zone),

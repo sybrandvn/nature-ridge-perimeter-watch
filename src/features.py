@@ -679,3 +679,24 @@ def is_twilight(
         abs(minutes_from_daylight_boundary(timestamp_utc, utc_offset_hours=utc_offset_hours))
         <= margin_minutes
     )
+
+
+def daylight_hint(timestamp_utc: str | None) -> bool | None:
+    """Exogenous "could this clip plausibly have ambient daylight colour in it"
+    answer, for `scripts.spike.extract_clip_features(daylight_hint=...)`.
+
+    True for real daylight OR either twilight margin, so a dusk clip with
+    genuine residual colour is still treated as colour footage. `None` when
+    there is no usable timestamp, which restores the pure image-statistic
+    behaviour rather than guessing.
+
+    Every caller of `extract_clip_features` that has a clip timestamp should
+    use this, so the render, the screening run and the ranker can never
+    disagree about whether a clip was shot at night.
+    """
+    if not timestamp_utc:
+        return None
+    try:
+        return bool(is_daylight(timestamp_utc) or is_twilight(timestamp_utc))
+    except (ValueError, KeyError):
+        return None

@@ -1,10 +1,11 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-08. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-08, session close #8)" at the very
-bottom, just above "Conventions"** — it has current state, the per-camera anomaly picture, and
-two corrections to facts repeated earlier in this file. `docs/plan.md` is the full plan and stays
-authoritative; this file is the short version of where things actually stand and what to do next.
+picking this up, start at "Handoff for a new agent (2026-09-08, session close #9)" at the very
+bottom, just above "Conventions"** — it has current state, the sharpened flashlight test, and
+several camera facts from the user that reframe earlier "anomalies" as correct behaviour.
+`docs/plan.md` is the full plan and stays authoritative; this file is the short version of where
+things actually stand and what to do next.
 
 ## Where the project is
 
@@ -1179,6 +1180,113 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-08, session close #9)
+
+**Read this section first — it supersedes #8 for current state.** 567 tests passing, branch
+`feat/phase1-finalisation`, incident regression 5/5, nothing uncommitted. This session sharpened
+the flashlight test on the user's prompting, and recorded several camera facts that reframe
+earlier "anomalies" as correct behaviour.
+
+### Flashlight detection: saturation, not blob size
+
+The user's ask was to be stricter about what counts as a flashlight so daylight grass stops
+registering as one, rather than discarding every daylight clip wholesale. **The proposed
+mechanism was a minimum blob size, and measuring it first showed that specific idea does not
+work**: daylight grass is not scattered speckle, it forms large contiguous green regions —
+median largest-per-frame component **827px, actually bigger than a real flashlight's 580px**.
+Size alone is AUC 0.588.
+
+**Saturation is the discriminator, AUC 0.907.** A flashlight's green components run S p50 168
+(p90 237); sunlit grass runs S p50 69 with a p99 of only **99**. The old `min_saturation` of 60
+sat below the entire grass distribution — which is precisely why this feature had ever needed a
+blunt whole-frame daylight veto to be usable.
+
+Shipped (`4492142`): `FLASHLIGHT_MIN_SATURATION` 60 → **130** and `FLASHLIGHT_MIN_BLOB_AREA`
+**8**, both named constants in `src/features.py` so every consumer of `green_light_mask` shares
+one definition. The blob floor is kept but is the junior partner and only earns its place after
+the saturation floor has done the heavy lifting (daylight non-guard clips reading > 0.02:
+13.3% → 6.7%).
+
+**The result is a zero-leak feature.** `green_light_ratio`'s maximum across the labelled corpus
+is **0.0000** on all 32 animal, all 10 incident, all 8 resident and all 5 neighbour clips, against
+guard p90 0.222 and max 0.909. That is what let the daylight veto come off the scored-frame
+features entirely — so the payoff is the thing that was asked for:
+
+| 19 labelled daylight guard clips | before | after |
+| --- | --- | --- |
+| peak `green_light_ratio` | 0.0000 (all vetoed) | **0.4182** |
+| daylight animal (21) / environment (58) / resident (3) / neighbour (5) | 0.0000 | **0.0000** |
+
+**The veto is KEPT on `warmup_flashlight_ratio`, and that is not caution** — removing it there
+was tried and flips real animals to guard (cam08/7360 the rooikat, cam08/7361, cam10/7631) on the
+warmup reading alone. It is a whole-frame measure over the IR-flare frames, where a dusk clip's
+colourful foliage genuinely does dominate.
+
+`GREEN_LIGHT_RATIO_MIN` 0.05 → 0.02, because the sharpened mask roughly halves every reading and
+leaving 0.05 would have silently made the rule ~2x stricter than the value anyone validated.
+
+End to end: incident 5/5 events and 7/10 clips, animal 13/19 and 15/37 — all unchanged.
+Environment leak 6 → 5, alert channel 51 → 50, guard events correct 166 → 164 (the honest cost of
+a stricter test).
+
+### cam10: the bush is real, it is outside, and it must NOT be masked
+
+The user corrected #8: cam10's fence line is not too far left, there is a big bush outside it
+driving the environment triggers. An aggregate motion heatmap over 40 of its environment clips
+(`data/reports/scratch/zone_check_2026-09-08/cam10_env_motion_heatmap.png`) confirms it exactly —
+the motion mass fills the right half of frame, x 0.55–1.00, centroid (0.93, 0.41), while the
+fence lines sit at x≈0.42 with `outside: right`.
+
+**An ignore polygon over the bush was the obvious next move and it is unsafe. Do not do it.**
+Checking where cam10's real detections actually sit:
+
+| clip | label | median centroid x | in the bush region |
+| --- | --- | --- | --- |
+| cam10/21524 | **incident** ("2 men crawling away") | 0.842 | **100%** |
+| cam10/7631, 7632, 18786, 18787 | animal | 0.81–0.94 | **100%** |
+| cam10/21523, 17146, 9405, 4308 | incident/animal/guard | 0.28–0.37 | 0% |
+
+The bush region is exactly where this camera sees real intruders and animals. Masking it would
+blind cam10 to its own confirmed incident.
+
+**cam10 is in decent shape anyway**, re-scored through the current pipeline (180 clips):
+environment_candidate 135 (75%), unclassified 27 (15%), and an **alert channel of only 5 clips
+(2.8%), 4 of which are real** (3 animal, 1 incident, 1 environment). Ground truth is 83/94
+environment, so the classifier agrees with reality. 98 of its environment calls come from
+`blob_count > 10`. Its distinguishing signature is textbook wind-in-a-big-bush:
+`outside_pixel_fraction` p50 1.000 (corpus 0.000), `median_fence_distance` 0.444 (0.151),
+`blob_count` 11 (4), `row_normalised_area` p90 188,902 (58,676), `path_length` 86.6 (22.4),
+`heading_change` 1.55 (0.65) — a big blob far outside the fence, moving constantly and going
+nowhere.
+
+Note `scenery_motion_fraction` reads p50 0.000 on cam10 against 0.029 corpus-wide: the
+reference-background test does **not** recognise the bush as known scenery. That is the
+already-documented NCC brightness-invariance failure from session #4, showing up again.
+
+### Camera facts from the user that reframe earlier findings
+
+- **cam01 was replaced by cam01a**, the pole-mounted one. cam01a reads its own pole as very
+  bright and the guard flashes the camera directly — between them that explains its 33%
+  overexposure and 37% blinding rate, the worst on site. It is now in `NO_MAINTENANCE_CAMERAS`
+  alongside cam04; it needed to be, because `post_flash_red_shift` does not catch it (39 of 43
+  flagged clips survive that filter). Obstruction windows 30 → 27.
+- **cam15 has never seen a human** — very remote. So #8's "cam15 is flashlight-dead" is not a bug:
+  0.0% green-light firing is the correct answer. Recorded in `config/cameras.yaml` so nobody
+  tries to fix it. Its most-saturated pixels do sit at hue 33.0, exactly `hue_low`, which would
+  matter if a human ever does appear there.
+- **cam01/10560-10561 is a worker, i.e. `neighbour`, not `resident`** — relabelled (labels backed
+  up to `data/backups/labels_pre_neighbour_fix_20260908.jsonl` first). This also answers #8's open
+  cam01 question in part: that person genuinely *is* outside the fence, so `outside: right` read
+  him correctly. cam01's 62%-outside rate is not automatically a geometry bug.
+
+### Still open
+
+- cam07's beam-washed-vegetation mode remains the biggest alert-channel source and is not a colour
+  problem — the tracker follows the illuminated ground outside the fence rather than the light.
+  No colour feature will fix it.
+- cam01's remaining overexposure is a real vine against the lens (distinct from cam01a's pole).
+- Everything in #7's list, particularly the wait-for-sibling design question.
 
 ## Handoff for a new agent (2026-09-08, session close #8)
 

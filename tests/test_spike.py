@@ -155,6 +155,74 @@ def test_track_contour_returns_none_for_no_candidates():
     assert spike.track_contour([], (0, 0, 10, 10), max_jump_distance=10) is None
 
 
+def test_track_contour_flashlight_candidate_overrides_an_unrelated_active_track():
+    # The cam07/17456 failure mode: an active track (e.g. a bush) has no
+    # plausible continuation this frame, and the only other candidate is a
+    # genuine flashlight that arrived too far away / too differently sized to
+    # pass IoU or distance -- it should still win rather than being discarded
+    # as a miss, since it can't be "the same track reappearing implausibly"
+    # (it already failed both of those checks) and is instead a new,
+    # independent detection.
+    track_bbox = (5, 5, 15, 15)  # an established, unrelated track
+    far_unlit = _square_contour(200, 200, 4)  # fails distance, no flashlight evidence
+    far_lit = _square_contour(140, 140, 6)  # also fails distance, but is lit
+    result = spike.track_contour(
+        [far_unlit, far_lit],
+        track_bbox,
+        max_jump_distance=5,
+        flashlight_scores=[0.0, 0.05],
+    )
+    assert result is far_lit
+
+
+def test_track_contour_flashlight_override_does_not_fire_below_the_bar():
+    # No candidate clears FLASHLIGHT_CANDIDATE_MIN_RATIO -- still a miss, same
+    # as the colour-blind default.
+    track_bbox = (5, 5, 15, 15)
+    small = _square_contour(100, 100, 4)
+    big = _square_contour(140, 140, 10)
+    result = spike.track_contour(
+        [small, big],
+        track_bbox,
+        max_jump_distance=5,
+        flashlight_scores=[0.0, 0.0],
+    )
+    assert result is None
+
+
+def test_track_contour_flashlight_override_never_fires_when_a_normal_continuation_exists():
+    # A candidate that legitimately continues the track (via IoU here) must
+    # still win over a lit-but-unrelated candidate elsewhere -- the override
+    # only ever applies to the "about to report a miss" branch, never
+    # instead of a real continuation.
+    track_bbox = (5, 5, 15, 15)
+    overlapping = _square_contour(5, 5, 4)
+    far_lit = _square_contour(200, 200, 10)
+    result = spike.track_contour(
+        [overlapping, far_lit],
+        track_bbox,
+        max_jump_distance=100,
+        max_size_change_ratio=10.0,
+        flashlight_scores=[0.0, 0.05],
+    )
+    assert result is overlapping
+
+
+def test_track_contour_flashlight_override_respects_min_reacquire_area():
+    # A lit candidate below the size floor still doesn't count as a plausible
+    # "new" detection either -- same floor as the fresh-pick override.
+    track_bbox = (5, 5, 15, 15)
+    speck = _square_contour(140, 140, 3)  # area 9, below the floor
+    result = spike.track_contour(
+        [speck],
+        track_bbox,
+        max_jump_distance=5,
+        min_reacquire_area=20.0,
+        flashlight_scores=[0.9],
+    )
+    assert result is None
+
+
 def test_track_contour_size_relative_cap_beats_generous_max_jump_distance():
     # A tiny (4x4) track shouldn't be allowed to jump 21px to a candidate just
     # because max_jump_distance (a generous, frame-wide ceiling) allows it --

@@ -277,18 +277,36 @@ def track_contour(
     track with nothing to continue onto.
 
     `flashlight_scores`, one value per `candidates` entry (see `green_light_
-    ratio`), is opt-in evidence for the SAME fresh/unconstrained pick above --
-    largest-area alone has a real, confirmed failure mode: a static bright
-    blob (a sunlit branch, an illuminated bush) that is bigger in frame than
-    the guard's own flashlight wins the pick outright, and every downstream
-    colour feature then describes the wrong blob (confirmed on cam07/11174:
-    a real flashlight sat in its own 1785px contour while a 3025px bush
-    contour in the same frame won the largest-area vote). When any eligible
-    candidate's score clears `FLASHLIGHT_CANDIDATE_MIN_RATIO` (the same threshold
-    `classify()`'s own green-light rule uses), the largest SUCH candidate
-    wins instead of the largest candidate overall -- still preferring size
-    among genuine flashlight hits, just no longer blind to colour. Pass
-    `None` (the default) for the original area-only behaviour.
+    ratio`), is opt-in evidence used in TWO places below, both guarded by the
+    same `FLASHLIGHT_CANDIDATE_MIN_RATIO` bar `classify()`'s own green-light
+    rule uses:
+
+    1. The fresh/unconstrained pick above -- largest-area alone has a real,
+       confirmed failure mode: a static bright blob (a sunlit branch, an
+       illuminated bush) that is bigger in frame than the guard's own
+       flashlight wins the pick outright, and every downstream colour feature
+       then describes the wrong blob (confirmed on cam07/11174: a real
+       flashlight sat in its own 1785px contour while a 3025px bush contour in
+       the same frame won the largest-area vote). The largest candidate that
+       clears the bar wins instead of the largest candidate overall -- still
+       preferring size among genuine flashlight hits, just no longer blind to
+       colour.
+    2. An already-active track's "no plausible continuation" case, right
+       before it would otherwise report a miss (see below) -- a candidate that
+       clears the same bar there is not the existing track reappearing
+       somewhere implausible (if it were, it would already have passed the
+       IoU/distance checks above), it is a genuinely new, independent
+       detection arriving while an unrelated track is still active (confirmed
+       on cam07/17456: a bush wins the very first frame outright since no
+       competing candidate exists yet; the guard's flashlight only becomes its
+       own separate candidate two frames later, 90+px away and ~40x smaller
+       than the bush's box by then -- correctly failing both continuation
+       checks, then wrongly discarded instead of starting its own identity).
+       This one is a materially bigger behaviour change than (1): it can
+       override a track that is otherwise tracking something else just fine.
+
+    Pass `None` (the default) for the original, colour-blind behaviour in both
+    places.
     """
     if not candidates:
         return None
@@ -334,9 +352,32 @@ def track_contour(
 
     # No plausible continuation -- do NOT blindly grab the frame's largest
     # blob, that's exactly the "teleport across the frame" behaviour this cap
-    # exists to prevent. Report a miss instead, so the caller's existing
-    # appearance-recovery / miss-tolerance machinery gets a chance, and only a
-    # track that is fully dropped (track_bbox is None) starts fresh anywhere.
+    # exists to prevent. Before reporting a miss, though: a candidate that
+    # clears the SAME flashlight bar as the fresh-pick override above is not
+    # "the old track reappearing somewhere implausible" -- if it were the same
+    # subject, it would already have passed the IoU/distance checks. It is a
+    # genuinely new, independent detection that happens to be arriving on a
+    # frame where an unrelated track is already active (confirmed on
+    # cam07/17456: a bush wins the very first frame outright since no
+    # competing candidate exists yet, and the guard's flashlight only becomes
+    # its own separate candidate two frames later, by which point it is 90+px
+    # from the bush's box and 40x smaller -- correctly failing both checks
+    # above, then wrongly discarded instead of starting its own track). This
+    # is a materially bigger change than the fresh-pick override: it can
+    # override an ALREADY-ESTABLISHED, currently-tracking-fine identity, not
+    # just choose among candidates when nothing is tracked yet.
+    if flashlight_scores is not None:
+        lit = [
+            i
+            for i, score in enumerate(flashlight_scores)
+            if score > FLASHLIGHT_CANDIDATE_MIN_RATIO
+            and cv2.contourArea(candidates[i]) >= min_reacquire_area
+        ]
+        if lit:
+            return candidates[max(lit, key=lambda i: cv2.contourArea(candidates[i]))]
+    # Report a miss instead, so the caller's existing appearance-recovery /
+    # miss-tolerance machinery gets a chance, and only a track that is fully
+    # dropped (track_bbox is None) starts fresh anywhere.
     return None
 
 

@@ -1,9 +1,9 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-07. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-07, session close #7)" at the very
-bottom, just above "Conventions"** — it has current state, the current measured classifier
-numbers, and the highest-value open question. `docs/plan.md` is the full plan and stays
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-08. **If you are a new agent
+picking this up, start at "Handoff for a new agent (2026-09-08, session close #8)" at the very
+bottom, just above "Conventions"** — it has current state, the per-camera anomaly picture, and
+two corrections to facts repeated earlier in this file. `docs/plan.md` is the full plan and stays
 authoritative; this file is the short version of where things actually stand and what to do next.
 
 ## Where the project is
@@ -1179,6 +1179,137 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-08, session close #8)
+
+**Read this section first — it supersedes #7 for current state.** 568 tests passing, branch
+`feat/phase1-finalisation`, incident regression 5/5, nothing uncommitted. This session was a
+per-camera anomaly hunt prompted by #7's finding that the residual leak is concentrated on a few
+cameras. It found one systematic bug affecting a third of the corpus, and corrected two
+long-standing assumptions.
+
+### THE bug: the daylight gate silently disabled flashlight detection on a third of all night clips
+
+`scripts/spike.py`'s gate that zeroes `green_light_ratio`/`green_light_flicker` is
+`color_fraction > 0.15` — purely an image statistic, and **it is not camera-neutral**. Across all
+16,272 genuinely-night clips by the sun table, **29.7% trip it anyway**, concentrated exactly in
+the cameras that record colour-cast night footage:
+
+| gate fires on night clips | | |
+| --- | --- | --- |
+| cam16 95.4% | cam01b 94.8% | cam14 87.0% |
+| cam04 55.4% | cam01a 54.8% | cam01 43.3% |
+| cam05 40.6% | *vs* cam07 3.8% | cam06 5.3%, cam02 5.6% |
+
+On those cameras every flashlight feature reads 0.0 on nearly every clip. Corpus-wide the
+green-light rule fired on **1.1% of cam01b's clips and 2.6% of cam16's, against 40.4% of
+cam03's**. On the labelled corpus, gated night guard clips were caught by a flashlight rule 27.2%
+of the time vs 46.5% for ungated ones — the gate roughly halved flashlight detection wherever it
+fired.
+
+**It was not that those cameras cannot see the light.** Sampling raw pixels with no gate applied:
+12/12 cam01b and 12/12 cam16 night clips carry >50 green-mask pixels, up to 36k, at hue 36–40 and
+saturation 255. The green is there, correctly coloured, and was being thrown away.
+
+**Fixed** (`147fbd5`, `0a384d8`) the same way the cam03 render confound was fixed: use the clock.
+New `src.features.daylight_hint(timestamp)` (True for daylight OR either twilight margin, `None`
+without a usable timestamp) feeds a new `extract_clip_features(daylight_hint=...)` parameter that
+overrules the image statistic when the sun table says night. Wired into **every** production
+caller — backtest, both ranker paths, the storm sweep, the incident regression check, and
+render_debug — so they can never disagree about whether a clip was shot at night. `None` is
+byte-identical to the old behaviour.
+
+| labelled guard clips caught by a flashlight rule | before | after |
+| --- | --- | --- |
+| cam01b | 11/79 | **71/79** |
+| cam04 | 21/64 | **49/64** |
+| cam05 | 18/42 | **29/42** |
+| cam16 | 0/8 | **6/8** |
+| cam01a | 9/24 | **15/24** |
+| all guard clips reading `guard_candidate` | 277/429 | **328/429** |
+
+At event level: guard events correct 136 → **166** of 222, guard leak into the alert channel 26 →
+**22**, guard misrouted to environment 41 → **19**, alert channel 55 → **51**. Incident stays 5/5
+events and 7/10 clips, animal 13/19 and 15/37, environment leak unchanged at 6. **Of the 52 clips
+that change category, all 52 move INTO `guard_candidate` and none leaves it.**
+
+The risk that made this worth measuring rather than assuming: overruling the gate could have made
+green foliage on colour-cast night footage read as a flashlight. It did not — every clip that left
+the alert channel is a guard-labelled clip now correctly called a guard, and a test covers the
+no-green-in-frame case.
+
+### cam07: the flashlight is fine. The tracker is looking at the wrong thing.
+
+The hypothesis was a colour shift on cam07. **Not supported.** cam07's flashlight is green and
+detected normally — `green_light_ratio` p90 0.268 (3rd highest of any camera), the green-light rule
+fires on 21.1% of its clips, and only 3.8% of its night clips trip the daylight gate (one of the
+lowest rates on site).
+
+Rendering its mislabelled guard clips through `scripts/visualize_zone.py` showed the real
+mechanism. On **cam07/11174** (labelled guard, note "flashlight") there is an obvious bright green
+flashlight sitting on the fence — and the tracked box is 40% of the frame away, on the bushes the
+beam is lighting up *outside* the fence. `green_light_ratio` only samples pixels inside the tracked
+contour, so it reads exactly 0.000, and the clip then reads `incident_candidate` because the blob
+it did track is outside. **cam07/18570** is the harder variant: the beam washes the vegetation with
+no green at all (`color_fraction` 0.000), so nothing colour-based can ever catch it.
+
+That is why cam07 produces **14% `incident_candidate` corpus-wide, the highest of any camera and
+7x cam06's 2%** — and with 3,768 clips (23% of the whole corpus) it is the single largest source of
+incident-channel volume.
+
+`whole_frame_green_ratio` was added (`70cede2`) as the scored-frame counterpart of
+`warmup_flashlight_ratio`, and it does see the light the tracked box misses. It is **deliberately
+not a rule**: guard p90 0.244 and max 0.881 against every incident under 0.00074 looks strong, but
+the worst real *animal* clip sits at 0.01119, leaving only 1.8x margin (the comparable
+`warmup_flashlight_ratio` rule carries 4.3x), and against the post-fix rule set it buys one event.
+
+### cam01: it is mostly catching a vine against the lens
+
+Rendered four cam01 clips. Its left half is permanently occupied by an out-of-focus vine/branch
+tangle right against the lens, which the IR illuminator lights up brilliantly — visible in
+16166, 9553 and 8988, and matching one of its own label notes ("blocked by vine, very difficult
+to"). Measured: **20.2% of cam01's clips are overexposed (4x the 5.1% corpus rate) and 22.5% carry
+the blinding flag.**
+
+Its other anomaly is geometric: **62.0% of cam01's clips read outside the fence (3.4x the corpus
+18.3%)**, while its median fence distance is a perfectly normal 0.145 and its blobs are *smaller*
+than average. Small blobs, close to the fence, on the wrong side of it. The daylight frame
+(cam01/10560) shows a guard walking a clear path on the right of the fence, labelled OUTSIDE by
+the current `outside: right`. **Either that patrol path really is outside the fence there, or
+`outside` is flipped for cam01** — deliberately not changed, because this repo's own record says
+to trust the user's eyes over a plausible theory. One look at that render settles it.
+
+### Other per-camera anomalies worth knowing
+
+| camera | anomaly | vs corpus |
+| --- | --- | --- |
+| cam10 | 84.8% of clips read outside; fence line sits far left in frame so nearly everything visible is nominally outside; 63% environment_candidate | 18.3% |
+| cam01a | 33.3% overexposed, 36.8% blinding — the worst artifact camera on site | 5.1% / 11.9% |
+| cam16 | 13.9% long-IR ramp, 34.3% unclassified | 4.6% / 10.2% |
+| cam15 | flashlight-dead for a *different* reason than cam01b/cam16 — its gate rate is only 6.3%, but its most-saturated pixels sit at hue 33.0, exactly the `hue_low` bound | — |
+| cam10 | its 22k "green" pixels are the documented fixed light above the fence post, already in an ignore polygon — correctly excluded, not a miss | — |
+
+### Corrections to earlier sections of this file
+
+- **#4's "only cam06 has a `fence_bottom`" is wrong** — all 18 cameras have one, and most have a
+  picket trace too.
+- **The "DAYLIGHT GATE IS SELF-DEFEATING" finding was right about the mechanism and wrong about
+  the remedy.** Four attempts to re-derive daylight *from the pixels* failed, correctly. Nobody
+  had tried simply asking the clock, even though `is_daylight` had already been threaded into
+  `classify()` for the resident split and into `render_debug` for the overlay. The lesson is
+  narrower than "this is unfixable": an image statistic could not separate a flashlight from
+  daylight, so the answer had to come from outside the image.
+
+### Suggested next steps
+
+1. **Look at `data/reports/scratch/zone_check_2026-09-08/cam01_10560.png` and say whether that
+   patrol path is inside or outside the fence.** One answer settles cam01's 62% outside rate.
+2. **cam07's beam-washed-vegetation mode is the biggest remaining alert-channel source** and is
+   not a colour problem, so no colour feature will fix it. The tracked blob being the illuminated
+   ground rather than the subject is a detector/tracker question.
+3. cam10's fence line is worth re-checking for the same reason as cam01 — 84.8% outside is not a
+   threshold problem.
+4. Everything in #7's list that is still open, particularly the wait-for-sibling design question.
 
 ## Handoff for a new agent (2026-09-07, session close #7)
 

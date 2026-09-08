@@ -108,6 +108,7 @@ FEATURE_COLUMNS = (
     "color_fraction",
     "green_light_ratio",
     "green_light_flicker",
+    "whole_frame_green_ratio",
     "warmup_flashlight_ratio",
     "warmup_outside_fraction",
     "flashlight_subject_fraction",
@@ -2008,6 +2009,24 @@ def extract_clip_features(
         ),
         "green_light_flicker": (
             0.0 if is_daylight_color else green_light_flicker(whole_frame_green_ratios)
+        ),
+        # Peak flashlight-hue fraction of the WHOLE frame, the scored-frame
+        # counterpart of warmup_flashlight_ratio. green_light_ratio only looks
+        # inside the tracked contour, so it reads 0.0 whenever the tracker is
+        # following the ground the beam is lighting up rather than the beam
+        # itself -- confirmed visually on cam07/11174, where an obvious green
+        # flashlight sits on the fence while the tracked box is 40% of the
+        # frame away on the illuminated bushes outside it.
+        # Diagnostic only, deliberately NOT a classify() rule: measured
+        # 2026-09-08 it separates well (guard p90 0.244, max 0.881; every
+        # incident under 0.00074) but the worst real ANIMAL clip sits at
+        # 0.01119, leaving only 1.8x margin at a useful threshold, and against
+        # the current rule set it buys one event. Both numbers would have to
+        # improve before it earns a place above the geometry rule.
+        "whole_frame_green_ratio": (
+            0.0
+            if is_daylight_color or not whole_frame_green_ratios
+            else max(whole_frame_green_ratios)
         ),
         "warmup_flashlight_ratio": warmup_flashlight_ratio,
         **_warmup_motion_features(detection, zone, frame_width, frame_height),

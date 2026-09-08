@@ -838,6 +838,32 @@ def test_daylight_hint_does_not_invent_colour_where_there_is_none(monkeypatch):
     assert result["green_light_ratio"] == pytest.approx(0.0)
 
 
+def test_whole_frame_green_ratio_sees_a_light_outside_the_tracked_blob(monkeypatch):
+    # The cam07 pattern: a green flashlight in one corner, the tracked subject
+    # somewhere else entirely. green_light_ratio looks only inside the tracked
+    # contour and misses it; the whole-frame counterpart does not.
+    frames = []
+    for pos in (5, 12, 19, 26, 33, 40):
+        frame = _frame_with_square(pos)
+        cv2.rectangle(frame, (2, 2), (14, 14), (40, 255, 40), thickness=-1)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result = spike.extract_clip_features("clip.mp4", _ZONE)
+
+    assert result is not None
+    assert result["whole_frame_green_ratio"] > 0.0
+    assert "whole_frame_green_ratio" in spike.FEATURE_COLUMNS
+
+
+def test_whole_frame_green_ratio_respects_the_daylight_gate(monkeypatch):
+    frames = _green_lit_frames()
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    gated = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=True)
+
+    assert gated is not None
+    assert gated["whole_frame_green_ratio"] == pytest.approx(0.0)
+
+
 def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(monkeypatch):
     # A single textured subject moves across frame, well-detected by
     # background-subtraction everywhere except one frame where it's drawn at

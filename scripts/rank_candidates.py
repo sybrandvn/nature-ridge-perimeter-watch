@@ -50,7 +50,7 @@ from scripts.label import _event_key  # noqa: E402
 from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
-from src.features import is_daylight, sane_fps  # noqa: E402
+from src.features import daylight_hint, is_daylight, sane_fps  # noqa: E402
 from src.reference_bg import (  # noqa: E402
     era_of,
     load_manifest,
@@ -161,6 +161,9 @@ def collect_features(
         )
         if reference is not None:
             extra["reference_background"] = reference
+        hint = daylight_hint(clip["timestamp"])
+        if hint is not None:
+            extra["daylight_hint"] = hint
         features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]), **extra)
         row = {
             "channel_id": clip["channel_id"],
@@ -216,6 +219,9 @@ def _extract_worker(clip: dict[str, Any]) -> dict[str, Any]:
             )
             if reference is not None:
                 extra["reference_background"] = reference
+            hint = daylight_hint(clip["timestamp"])
+            if hint is not None:
+                extra["daylight_hint"] = hint
             features = extract_clip_features(
                 clip["file_path"], camera.zone_at(clip["timestamp"]), **extra
             )

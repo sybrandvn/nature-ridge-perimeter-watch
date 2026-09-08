@@ -55,7 +55,7 @@ def test_collect_signals_uses_injected_extract_fn_and_classify(tmp_path: Path):
     _seed_clip(conn, camera_id="cam04", message_id=2, timestamp="2024-01-01T10:05:00Z")
     db.upsert_label(conn, channel_id="chan1", message_id=1, label="environment")
 
-    def fake_extract(file_path, zone):
+    def fake_extract(file_path, zone, **_kwargs):
         # cam03's clip has scattered motion, cam04's doesn't.
         return _features(blob_count=20.0) if "cam03" in file_path else _features(blob_count=1.0)
 

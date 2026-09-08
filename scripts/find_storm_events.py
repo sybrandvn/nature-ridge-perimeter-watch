@@ -39,7 +39,7 @@ from scripts.backtest import ExtractFn, classify, iter_clips_with_files  # noqa:
 from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
-from src.features import is_twilight  # noqa: E402
+from src.features import daylight_hint, is_twilight  # noqa: E402
 from src.storm_events import ClipSignal, find_corroborated_events  # noqa: E402
 
 REPORT_COLUMNS = (
@@ -70,7 +70,11 @@ def collect_signals(
         if camera is None:
             unknown_cameras.add(clip["camera_id"])
             continue
-        features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]))
+        features = extract_fn(
+            clip["file_path"],
+            camera.zone_at(clip["timestamp"]),
+            daylight_hint=daylight_hint(clip["timestamp"]),
+        )
         rows.append(
             {
                 "camera_id": clip["camera_id"],
@@ -98,7 +102,11 @@ def _worker(clip: dict[str, Any]) -> dict[str, Any] | None:
     if camera is None:
         return None
     try:
-        features = extract_clip_features(clip["file_path"], camera.zone_at(clip["timestamp"]))
+        features = extract_clip_features(
+            clip["file_path"],
+            camera.zone_at(clip["timestamp"]),
+            daylight_hint=daylight_hint(clip["timestamp"]),
+        )
     except Exception:
         features = None
     return {

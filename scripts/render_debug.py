@@ -66,6 +66,7 @@ from src import db  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
     FLASHLIGHT_SUBJECT_THRESHOLD,
+    daylight_hint,
     detect_stationary_light_mask,
     flashlight_bbox_overlap,
     green_light_mask,
@@ -506,6 +507,7 @@ def render_clip(
         threshold=threshold,
         flare_tolerance=flare_tolerance,
         max_flare_fraction=max_flare_fraction,
+        daylight_hint=daylight_hint(timestamp),
     )
 
     source_fps = sane_fps(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS))

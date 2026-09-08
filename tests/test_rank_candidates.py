@@ -304,7 +304,10 @@ def test_collect_features_uses_injected_extract_fn(tmp_path: Path):
         def zone_at(self, timestamp):
             return self.zone
 
-    def fake_extract(file_path, zone):
+    seen = {}
+
+    def fake_extract(file_path, zone, **kwargs):
+        seen.update(kwargs)
         return {"aspect_ratio": 1.0}
 
     rows = rc.collect_features(conn, _Cameras(), extract_fn=fake_extract)
@@ -313,3 +316,4 @@ def test_collect_features_uses_injected_extract_fn(tmp_path: Path):
     assert rows[0]["label"] == "guard"
     assert rows[0]["detected"] is True
     assert rows[0]["aspect_ratio"] == 1.0
+    assert "daylight_hint" in seen  # the exogenous sun-time signal reaches the extractor

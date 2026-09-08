@@ -41,7 +41,7 @@ from scripts.backtest import classify  # noqa: E402
 from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import load_app_config, load_cameras_config  # noqa: E402
-from src.features import is_daylight  # noqa: E402
+from src.features import daylight_hint, is_daylight  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "incident_regression.jsonl"
 SUPPRESSED = {
@@ -75,7 +75,9 @@ def main() -> None:
             print(f"SKIP  {entry['camera_id']}/{entry['message_id']}: unknown camera")
             continue
         zone = camera.zone_at(entry["timestamp"])
-        features = extract_clip_features(row["file_path"], zone)
+        features = extract_clip_features(
+            row["file_path"], zone, daylight_hint=daylight_hint(entry.get("timestamp"))
+        )
         if features is not None and entry.get("timestamp"):
             features["is_daylight"] = is_daylight(entry["timestamp"])
         category = classify(features)

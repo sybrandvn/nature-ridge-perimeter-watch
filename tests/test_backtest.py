@@ -425,7 +425,10 @@ def test_run_backtest_assembles_rows_and_skips_unknown_camera(tmp_path: Path, ca
     camera = Camera(id="cam01", aliases=(), order=0, zone=_ZONE, threshold_overrides={})
     cameras = CamerasConfig(cameras=(camera,), unknown_camera_id="unknown")
 
-    def fake_extract(file_path, zone, *, reference_row=None):
+    seen = {}
+
+    def fake_extract(file_path, zone, *, reference_row=None, **kwargs):
+        seen.update(kwargs)
         return _features(green_light_ratio=0.2)
 
     rows = list(backtest.run_backtest(conn, cameras, extract_fn=fake_extract))
@@ -433,6 +436,7 @@ def test_run_backtest_assembles_rows_and_skips_unknown_camera(tmp_path: Path, ca
     assert len(rows) == 1
     assert rows[0]["message_id"] == 1
     assert rows[0]["category"] == "guard_candidate"
+    assert seen["daylight_hint"] is False  # 22:00 local, the sun table says night
     assert "camXX" in capsys.readouterr().err
     conn.close()
 

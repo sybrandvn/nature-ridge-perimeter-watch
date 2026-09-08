@@ -85,6 +85,21 @@ event with no sibling clip to cover it, `cam10/7632` (now `unclassified`, was al
 deliberate, explicit break of the standing "never lose an animal" constraint for this one known
 clip, not a silent regression.
 
+**CORRECTED (2026-09-08): `cam10/7632`'s event is not actually lost.** "No sibling clip to cover
+it" was wrong -- its short/duplicate preview sibling `cam10/7631` independently reads
+`animal_candidate` on its own (`median_fence_distance` 0.365-0.370, under the bound), confirmed via
+`scripts.backtest.classify_event(['animal_candidate', 'unclassified']) == 'animal_candidate'`. A
+live system processing Telegram messages one at a time would alert on `7631` before the fuller
+`7632` even arrives, so this sighting is not lost in practice -- only the standalone `7632` clip
+fails to independently re-confirm it, which is what "accepted cost" was actually describing. Not
+a reason to revisit `MEDIAN_FENCE_DISTANCE_MAX`: `7632`'s own median_fence_distance (0.498-0.504)
+was checked against genuine-only centroids (excluding recovered/hallucinated frames) and barely
+moves, confirming the animal really was far from the fence, not an artifact of a frozen track. A
+persistence+path_length combination was tried as an alternative discriminator to recover it and
+similar clips without the bound; rejected, since even the tightest safe-looking combination
+re-admits 6-12 environment and 8-15 guard clips for every 2-4 animal clips recovered -- a clearly
+bad trade against the leak this bound exists to stop.
+
 **IR flare tracking implemented (2026-09-07):** `scripts.spike.detect_clip(compensate_warmup=
 True)` now does real per-pixel tracking through the dropped IR-flare/warmup window (a
 photometric gain/offset fit onto the settled background, then the same diff/track pipeline as

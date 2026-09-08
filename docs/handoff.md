@@ -1,11 +1,11 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-08. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-08, session close #9)" at the very
-bottom, just above "Conventions"** — it has current state, the sharpened flashlight test, and
-several camera facts from the user that reframe earlier "anomalies" as correct behaviour.
-`docs/plan.md` is the full plan and stays authoritative; this file is the short version of where
-things actually stand and what to do next.
+picking this up, start at "Handoff for a new agent (2026-09-08, session close #10)" at the very
+bottom, just above "Conventions"** — it has current state, a real bug found and fixed in the
+warmup-motion ranker feature, and a bigger, corpus-wide `best_contour` selection issue found but
+deliberately not yet fixed. `docs/plan.md` is the full plan and stays authoritative; this file is
+the short version of where things actually stand and what to do next.
 
 ## Where the project is
 
@@ -1081,6 +1081,19 @@ cam10-specific concentration (16/29 of the original leak) is revisited later, it
 geometry or its own environment base rate is the next thread to pull, separate from this
 corpus-wide threshold.
 
+**CORRECTED 2026-09-08: this "cost" was never real in a live system.** The claim above that
+`cam10/7632` is "a solo event with no sibling clip to cover it" is wrong — its own short/duplicate
+preview sibling, `cam10/7631`, already reads `animal_candidate` independently (`median_fence_
+distance` 0.365-0.370, under the bound). `classify_event(['animal_candidate', 'unclassified'])`
+returns `animal_candidate`, and a live system processing each Telegram message as it arrives would
+alert on `7631` before the fuller `7632` is even relevant. Verified `7632`'s own reading isn't a
+frozen-track artifact either: recomputing `median_fence_distance` from genuine (non-recovered)
+centroids only moves it from 0.504 to 0.498 — the animal genuinely was that far from the fence.
+Also checked whether `persistence`/`path_length` could recover `7632` and its 5 similarly-excluded
+siblings (2 more animal, 3 unlabelled-adjacent) without the threshold change itself: no — even the
+tightest combination tested re-admits 6-15 guard/environment clips per animal clip recovered.
+`MEDIAN_FENCE_DISTANCE_MAX` stays at 0.40, unchanged.
+
 ### Immediate next step (highest value, well-evidenced)
 `post_flash_red_shift` is a **zero-leak guard identifier corpus-wide** but is currently only used
 by the maintenance queue. It is not yet a rule in `scripts/backtest.py::classify()`. Adding it as
@@ -1180,6 +1193,97 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-08, session close #10)
+
+**Read this section first — it supersedes #9 for current state.** 567 tests passing, branch
+`feat/phase1-finalisation`, incident regression 5/5, nothing uncommitted. This session was a
+targeted debug pass on cam07 (rendered clips + frame-level tracing) plus a re-check of the
+`cam10/7632` "accepted cost" from session #7 — the user watched the debug renders and pushed
+back with specific, correct technical observations on nearly every one.
+
+### `cam10/7632` was never actually lost — corrected, no code change
+
+Full detail in the `MEDIAN_FENCE_DISTANCE_MAX` sections of both `docs/plan.md` and higher up in
+this file (search "CORRECTED 2026-09-08"). Short version: the "no sibling clip to cover it" claim
+from session #7 was wrong. `cam10/7631`, the event's own short/duplicate preview clip, already
+reads `animal_candidate` independently — a live system alerts on it before the fuller `7632` clip
+is even relevant. Checked and ruled out two alternative explanations before concluding this:
+`7632`'s own `median_fence_distance` (0.504) is genuine, not a frozen-track artifact (barely
+moves to 0.498 when recomputed from non-recovered centroids only), and no `persistence`/
+`path_length` combination recovers it without re-admitting 6-15 guard/environment clips per
+animal clip saved. `MEDIAN_FENCE_DISTANCE_MAX` is unchanged.
+
+### cam07: a real bug found and fixed, and a bigger one found and NOT fixed
+
+Rendered 7 debug clips (`data/reports/debug_render/cam07_investigation_2026-09-08/`) of cam07's
+21 (of 36) misclassified guard clips. The user's per-clip review nailed the mechanism on sight for
+several of them; frame-level tracing confirmed each one exactly.
+
+**Shipped: `_warmup_motion_features`'s normalisation was blowing up on near-black frames.** This
+ranker-only feature (`warmup_outside_fraction`, never a hard `classify()` rule) used to divide
+each dropped IR-warmup frame by its OWN median to cancel the gain ramp. On `cam07/22289` — the
+user's example of "guard moving off screen bottom-left during warmup, clearly visible" — the
+first 5 dropped frames have a whole-frame median of **2.0**, an 8-bit value that produces a
+**50x gain**, amplifying ordinary sensor noise into a false "changed" reading across up to 83% of
+the frame. That is backwards: the dark corner where the guard actually was should have been the
+*clearest* signal, not the noisiest. Replaced with the same chained `photometric_match` fit
+`compensate_warmup` already uses (gain+offset against the settled background, walking frame by
+frame from the one closest to settled), then diffed against the background with the SAME
+threshold every scored frame uses. Before: no track found at all (`warmup_outside_fraction=0.0`
+by default-empty-return). After: a real track, `warmup_outside_fraction=1.0`. Verified the
+existing reference example (cam06/21377) still tracks correctly (a real, narrowing box, still
+reads `inside` throughout) and the full suite stays green.
+
+**Known, honestly-reported limitation of that same fix:** diffing against a fixed background also
+flags a STATIC feature that is simply lit differently before the IR gain settles than after — not
+noise, a real photometric difference, just not a moving subject. On `cam07/18570` (the user's
+"latches onto bright branch, the branch was not moving" clip) the fixed warmup track's largest
+contour is the *same* bright branch its scored frames separately lock onto — confirmed by the two
+boxes matching almost exactly (183,91,137,87 vs 182,90,138,88). This fix does not solve that case;
+telling "lit differently" apart from "moved" needs comparing frames against each other as well as
+against the background, which a single frame-vs-background diff does not do.
+
+**Found, NOT fixed — flagged for a decision, since it touches every clip in the corpus:** the
+user's most valuable catch was on `cam07/11174` ("has inside flashlight tracking, that should be
+enough to drown out the tracked bush"). Frame-level tracing found the actual green flashlight
+glow, on the fence, in its own separate contour (`(75,87,52,92)`, area 1785px) — but `detect_clip`
+picked a DIFFERENT, larger contour in the same frame (a bush, `(218,88,68,88)`, area 3025px) as
+"the" subject, purely because it is bigger. `green_light_ratio` only samples inside whatever
+contour won that vote, so it reads exactly 0.0000 despite the flashlight being plainly visible
+one frame over. `cam07/11700`'s "weird frozen frame" turned out to be the identical pattern: an
+11-frame frozen-bbox run starting 3 frames in (confirmed via `f.largest`'s bounding box staying
+byte-identical for 11 consecutive scored frames) — the clip is 200 real frames (~40s at 5fps; its
+`fps` metadata reads a bogus 1005, the documented corrupt-fps issue, already handled elsewhere by
+`sane_fps`). **This is the same root cause identified for 11174/18570 in session #8, now confirmed
+with contour-level evidence rather than inferred from bbox freezing alone: `best_contour`
+selection picks by largest area with no regard for provenance (genuine vs. appearance-recovered)
+or content (does it contain flashlight-hue pixels), and a large static/environmental blob
+routinely outranks a smaller real one in the same frame.** Not fixed this session — changing
+`best_contour` selection is corpus-wide in scope (affects `green_light_ratio`, `saturation_ratio`,
+`aspect_ratio`, every shape feature on every clip, not just cam07's), and this repo's own history
+(`min_reacquire_area` needed two correction rounds after a narrow validation missed a real
+regression) is a direct warning against shipping a fix like this without a full labelled-corpus
+sweep first. Left as a clearly-scoped, well-evidenced next step.
+
+**Already working correctly, no action needed:** `cam07/19046` ("env that can safely flag as a
+maintenance event") already reads `blinding_foreground=True` (`blob_white_fraction=0.483`) while
+correctly staying out of the alert channel as `environment_candidate` — exactly the intended,
+already-shipped behaviour.
+
+**Ambiguous, not a bug:** `cam07/18318`'s own label note reads "leaf blowing" on a `guard`-labelled
+clip, and the rendered still shows only foliage, no visible person — may be a genuinely hard
+labelling case rather than a detector failure. Not investigated further.
+
+### Suggested next steps
+
+1. **Decide whether to pursue the `best_contour` selection fix.** The clearest-evidenced, highest
+   -leverage open item from this session. A reasonable design direction, not yet measured: when
+   multiple blobs exist in a frame, prefer one containing flashlight-hue content (or a genuine,
+   non-recovered detection) over a larger one without it, rather than pure largest-area. Must be
+   validated against the full labelled corpus and the standing 51-clip debug-render sample before
+   shipping, per this repo's own established discipline.
+2. Everything in #9's and #8's lists that is still open.
 
 ## Handoff for a new agent (2026-09-08, session close #9)
 

@@ -5,16 +5,30 @@ below is one already validated in docs/gate2_separability_finding.md against
 real labelled footage, not invented for this script.
 
 Rules:
-  - guard_candidate: green_light_ratio > 0.05 or green_light_flicker > 0.02
-    (measured 2026-08-31 against the current tracker/detector on 200 labelled
-    guard clips: 8.7% recall for THIS RULE ALONE, degraded from the doc's
-    original 61% -- see "DAYLIGHT GATE IS SELF-DEFEATING" in repo memory. Left
-    unchanged anyway: every alternative gate design tried and rejected
-    2026-08-30, see "Daylight-gate fix investigated and ABANDONED" in repo
-    memory. NOTE: this rule's own weakness is no longer the system's guard
-    recall -- measured 2026-09-07 across 376 labelled guard clips, classify()
-    reaches 71.8% guard recall overall, of which the inside-only rule supplies
-    34.8%, the warmup-flashlight rule 29.5%, and this rule only 7.4%.)
+  - guard_candidate: green_light_ratio > GREEN_LIGHT_RATIO_MIN or
+    green_light_flicker > 0.02.
+    **Re-derived 2026-09-08.** Both the feature and the threshold changed:
+    `src.features` sharpened the flashlight mask (FLASHLIGHT_MIN_SATURATION
+    60 -> 130 plus an 8px connected-component floor) after measuring that
+    saturation, not size, is what separates a flashlight from daylight grass
+    -- a flashlight's green components run S p50 168, sunlit grass S p50 69
+    with a p99 of only 99, AUC 0.907. The old floor of 60 sat below the whole
+    grass distribution, which is exactly why the feature previously needed a
+    blunt whole-frame daylight veto to be usable at all.
+    On the sharpened feature `green_light_ratio` is zero-leak across the
+    labelled corpus: its maximum is 0.0000 on all 32 animal, all 10 incident,
+    all 8 resident and all 5 neighbour clips, against guard p90 0.222 and max
+    0.909. That is what allowed the daylight veto to be dropped from the
+    scored-frame features (see scripts.spike.extract_clip_features), so a
+    flashlight in DAYLIGHT is now detectable rather than discarded -- measured
+    on the 19 labelled daylight guard clips, peak green_light_ratio went from
+    0.0000 (everything vetoed) to 0.4182, while the 21 daylight animal, 58
+    daylight environment, 3 resident and 5 neighbour clips all stayed at
+    exactly 0.0000.
+    (Historical note kept because it is quoted elsewhere in this repo: this
+    rule's own recall was 8.7% under the pre-2026-09-06 rule set. That is not
+    the system's guard recall -- see the inside-only and warmup-flashlight
+    rules below.)
   - guard_candidate (warmup flashlight): warmup_flashlight_ratio > 0.002
     (added 2026-09-06). Fixes the dominant false-candidate mode found by
     reviewing the first ranked queue by hand: the guard walks out of shot
@@ -297,6 +311,15 @@ MOTION_PIXEL_FRACTION_MEDIAN_MAX = 0.12
 # See classify()'s "blinded lens never alerts" note. Same threshold as
 # is_blinding_foreground()'s own, deliberately -- one obstruction definition.
 BLINDING_BLOB_WHITE_FRACTION = 0.4
+# Was 0.05 until 2026-09-08, when src.features sharpened the flashlight mask
+# (FLASHLIGHT_MIN_SATURATION 60 -> 130 plus a blob-area floor). That roughly
+# halves every green_light_ratio, so leaving 0.05 would have silently made the
+# rule ~2x stricter than the value anyone validated. 0.02 restores the intended
+# operating point and is measured zero-leak on the sharpened feature: across the
+# labelled corpus green_light_ratio's maximum is 0.0000 on all 32 animal, all 10
+# incident, all 8 resident and all 5 neighbour clips, against a guard p90 of
+# 0.222 and max 0.909.
+GREEN_LIGHT_RATIO_MIN = 0.02
 
 
 def classify(features: dict[str, float] | None) -> str:
@@ -309,7 +332,10 @@ def classify(features: dict[str, float] | None) -> str:
     get read as a shape signal."""
     if features is None:
         return "no_motion"
-    if features["green_light_ratio"] > 0.05 or features["green_light_flicker"] > 0.02:
+    if (
+        features["green_light_ratio"] > GREEN_LIGHT_RATIO_MIN
+        or features["green_light_flicker"] > 0.02
+    ):
         return "guard_candidate"
     if features.get("warmup_flashlight_ratio", 0.0) > 0.002:
         return "guard_candidate"

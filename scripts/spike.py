@@ -1781,30 +1781,34 @@ def extract_clip_features(
     """Run the detector over one clip and compute features for its largest
     track. Returns None if no motion was detected.
 
-    `daylight_color_fraction` gates `green_light_ratio`/`green_light_flicker`:
-    those exist to catch the guard's flashlight, a small saturated green spot
-    against otherwise near-monochrome IR content. A dusk/daytime clip with
-    real ambient colour (green foliage covering much of the frame) can read
-    the same way to a single contour's hue check, so if `color_fraction`
-    (broad-frame saturation, see `src.features.color_saturation_fraction`)
-    clears this threshold the clip is treated as genuine colour footage and
-    both green-light features are zeroed rather than trusted.
+    `daylight_color_fraction` gates `warmup_flashlight_ratio` ONLY. It used to
+    gate every green-light feature, on the reasoning that a daytime clip with
+    real ambient colour reads the same way to a hue check as a flashlight does.
+    That was true of the old, permissive flashlight test (`min_saturation` 60,
+    which sat below the entire sunlit-grass saturation distribution) and is no
+    longer true of the sharpened one: with `src.features`'s
+    FLASHLIGHT_MIN_SATURATION/FLASHLIGHT_MIN_BLOB_AREA, `green_light_ratio`
+    reads exactly 0.0000 on all 42 labelled animal+incident clips whether the
+    gate is applied or not, while night guards still reach p90 0.224. So the
+    scored-frame features no longer need a blunt whole-frame veto, and a
+    flashlight in daylight can finally be detected instead of discarded.
+    The warmup ratio keeps the gate because it is a whole-frame reading over
+    the IR-flare frames, where a dusk clip's colourful foliage genuinely does
+    dominate -- removing it there flips real animals (cam08/7360 the rooikat,
+    cam10/7631) to guard on `warmup_flashlight_ratio` alone.
 
-    `daylight_hint` is the EXOGENOUS answer to the same question -- pass
-    `src.features.is_daylight(timestamp)` (or that OR'd with `is_twilight`).
-    When it is `False`, the image-statistic gate above is overruled: the clock
-    says it is night, so whatever colour is in frame is not ambient daylight.
-    This matters because the gate is not camera-neutral. Measured 2026-09-08
-    over all 16,272 genuinely-night clips, 29.7% trip the gate anyway, and it
-    is concentrated in the cameras that record colour-cast night footage:
-    cam16 95.4%, cam01b 94.8%, cam14 87.0%, cam04 55.4%, cam01a 54.8%,
-    cam01 43.3%, cam05 40.6% -- against cam07 3.8%, cam06 5.3%, cam02 5.6%.
-    On those cameras every flashlight feature is forced to 0.0 on nearly every
-    clip, which is why cam01b's green-light rule fires on 1.1% of its clips
-    and cam16's on 2.6%, against cam03's 40.4%. Raw-pixel checks confirm the
-    green is really there and detectable (12/12 sampled cam01b and cam16 night
-    clips carry >50 green-mask pixels, up to 36k, hue 36-40, saturation 255).
-    Leave it `None` (the default) for the pre-2026-09-08 behaviour.
+    `daylight_hint` is the EXOGENOUS answer to the daylight question -- pass
+    `src.features.daylight_hint(timestamp)`. When it is `False`, the image
+    statistic above is overruled: the clock says night, so whatever colour is
+    in frame is not ambient daylight. This matters because the gate is not
+    camera-neutral. Measured 2026-09-08 over all 16,272 genuinely-night clips,
+    29.7% trip it anyway, concentrated in the cameras that record colour-cast
+    night footage: cam16 95.4%, cam01b 94.8%, cam14 87.0%, cam04 55.4%,
+    cam01a 54.8%, cam01 43.3%, cam05 40.6% -- against cam07 3.8%, cam06 5.3%,
+    cam02 5.6%. Raw-pixel checks confirm the green is really there and
+    detectable (12/12 sampled cam01b and cam16 night clips carry >50
+    green-mask pixels, up to 36k, hue 36-40, saturation 255).
+    Leave it `None` (the default) to rely on the image statistic alone.
 
     `reference_background`, when supplied, additionally computes
     `scenery_motion_fraction` (see `detect_clip`) -- the fraction of this
@@ -1990,7 +1994,6 @@ def extract_clip_features(
     track = [(x / frame_width, y / frame_height) for x, y in centroids]
     best_width = float(cv2.boundingRect(best_contour)[2])
     color_fraction = sum(color_fractions) / len(color_fractions) if color_fractions else 0.0
-    is_daylight_color = color_fraction > daylight_color_fraction and daylight_hint is not False
 
     return {
         "outside_pixel_fraction": outside_pixel_fraction(points, zone),
@@ -2002,14 +2005,10 @@ def extract_clip_features(
         "solidity": solidity(best_contour),
         "saturation_ratio": saturation_ratio(best_frame, best_contour),
         "color_fraction": color_fraction,
-        "green_light_ratio": (
-            0.0
-            if is_daylight_color
-            else green_light_ratio(best_frame, best_contour, exclude_mask=ignore_mask)
+        "green_light_ratio": green_light_ratio(
+            best_frame, best_contour, exclude_mask=ignore_mask
         ),
-        "green_light_flicker": (
-            0.0 if is_daylight_color else green_light_flicker(whole_frame_green_ratios)
-        ),
+        "green_light_flicker": green_light_flicker(whole_frame_green_ratios),
         # Peak flashlight-hue fraction of the WHOLE frame, the scored-frame
         # counterpart of warmup_flashlight_ratio. green_light_ratio only looks
         # inside the tracked contour, so it reads 0.0 whenever the tracker is
@@ -2024,16 +2023,12 @@ def extract_clip_features(
         # the current rule set it buys one event. Both numbers would have to
         # improve before it earns a place above the geometry rule.
         "whole_frame_green_ratio": (
-            0.0
-            if is_daylight_color or not whole_frame_green_ratios
-            else max(whole_frame_green_ratios)
+            max(whole_frame_green_ratios) if whole_frame_green_ratios else 0.0
         ),
         "warmup_flashlight_ratio": warmup_flashlight_ratio,
         **_warmup_motion_features(detection, zone, frame_width, frame_height),
         "flashlight_subject_fraction": (
-            0.0
-            if is_daylight_color or not frames_with_box
-            else flashlight_bbox_frames / frames_with_box
+            0.0 if not frames_with_box else flashlight_bbox_frames / frames_with_box
         ),
         "row_normalised_area": row_normalised_area(best_contour, ref_row),
         "edge_density": edge_density(best_frame, best_contour),

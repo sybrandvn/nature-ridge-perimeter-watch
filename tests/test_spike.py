@@ -782,49 +782,45 @@ def test_extract_clip_features_scenery_motion_fraction_zero_without_reference(mo
     assert result["scenery_motion_fraction"] == pytest.approx(0.0)
 
 
-def _green_lit_frames():
-    """A moving subject on a heavily green-cast frame -- what cam01b's and
-    cam16's night footage actually looks like."""
+def _flare_then_settled(light_bgr, size: int = 60):
+    """Three ramping IR-warmup frames the detector will drop, then settled
+    frames -- so warmup_flashlight_ratio has something to score."""
     frames = []
+    for level in (20, 60, 100):
+        frame = np.zeros((size, size, 3), dtype=np.uint8)
+        frame[:, :] = (level, int(level * 1.4), level)  # colour-cast ramp
+        cv2.rectangle(frame, (20, 20), (32, 32), light_bgr, thickness=-1)
+        frames.append(frame)
     for pos in (5, 12, 19, 26, 33, 40):
-        frame = _frame_with_square(pos)
-        frame[:, :, 1] = np.clip(frame[:, :, 1].astype(int) + 90, 0, 255).astype(np.uint8)
-        cv2.rectangle(frame, (pos, 30), (pos + 8, 38), (40, 255, 40), thickness=-1)
+        frame = np.full((size, size, 3), 140, dtype=np.uint8)
+        cv2.rectangle(frame, (pos, pos), (pos + 8, pos + 8), (240, 240, 240), thickness=-1)
         frames.append(frame)
     return frames
 
 
-def test_daylight_hint_false_overrules_the_colour_gate(monkeypatch):
-    frames = _green_lit_frames()
+def test_daylight_hint_no_longer_gates_the_scored_frame_features(monkeypatch):
+    # The scored-frame green features are now protected by the saturation
+    # floor instead of a whole-frame veto, so the hint must not change them.
+    frames = [_foliage_frame(pos, subject=(40, 255, 40)) for pos in (5, 12, 19, 26, 33, 40)]
+    out = {}
+    for hint in (None, True, False):
+        monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+        out[hint] = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=hint)
+    assert out[None] is not None
+    assert out[None]["green_light_ratio"] > 0.5
+    assert out[True] == out[None] == out[False]
+
+
+def test_daylight_hint_false_overrules_the_colour_gate_on_the_warmup_ratio(monkeypatch):
+    frames = _flare_then_settled((40, 255, 40))
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    gated = spike.extract_clip_features("clip.mp4", _ZONE)
+    gated = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=True)
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
     hinted = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=False)
 
     assert gated is not None and hinted is not None
-    assert gated["color_fraction"] > 0.15  # the image statistic says "daylight"
-    assert gated["green_light_ratio"] == pytest.approx(0.0)  # ...so it was zeroed
-    assert hinted["green_light_ratio"] > 0.0  # the clock says night, so it isn't
-
-
-def test_daylight_hint_true_leaves_the_colour_gate_alone(monkeypatch):
-    frames = _green_lit_frames()
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    result = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=True)
-
-    assert result is not None
-    assert result["green_light_ratio"] == pytest.approx(0.0)
-    assert result["green_light_flicker"] == pytest.approx(0.0)
-
-
-def test_daylight_hint_none_is_the_pre_existing_behaviour(monkeypatch):
-    frames = _green_lit_frames()
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    default = spike.extract_clip_features("clip.mp4", _ZONE)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    explicit_none = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=None)
-
-    assert default == explicit_none
+    assert gated["warmup_flashlight_ratio"] == pytest.approx(0.0)
+    assert hinted["warmup_flashlight_ratio"] > 0.0
 
 
 def test_daylight_hint_does_not_invent_colour_where_there_is_none(monkeypatch):
@@ -853,15 +849,6 @@ def test_whole_frame_green_ratio_sees_a_light_outside_the_tracked_blob(monkeypat
     assert result is not None
     assert result["whole_frame_green_ratio"] > 0.0
     assert "whole_frame_green_ratio" in spike.FEATURE_COLUMNS
-
-
-def test_whole_frame_green_ratio_respects_the_daylight_gate(monkeypatch):
-    frames = _green_lit_frames()
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    gated = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=True)
-
-    assert gated is not None
-    assert gated["whole_frame_green_ratio"] == pytest.approx(0.0)
 
 
 def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(monkeypatch):
@@ -1434,20 +1421,20 @@ def test_extract_clip_features_flags_swinging_flashlight(monkeypatch, tmp_path):
     assert result["green_light_flicker"] > 0.1
 
 
-def test_extract_clip_features_zeroes_green_light_in_broad_daylight_colour(monkeypatch, tmp_path):
-    # Dusk/daytime footage with real ambient colour (green foliage covering
-    # most of the frame) can pass the same hue/saturation/value check as the
-    # guard's flashlight if the subject itself picks up a green cast -- the
-    # broad-frame colour_fraction gate should suppress both green features
-    # here even though the un-gated per-contour check would fire.
-    def _frame_with_green_square(pos: int, size: int = 60) -> np.ndarray:
-        frame = np.zeros((size, size, 3), dtype=np.uint8)
-        frame[:, :] = (0, 150, 0)  # broad saturated ambient green background
-        cv2.rectangle(frame, (pos, pos), (pos + 8, pos + 8), (0, 220, 0), thickness=-1)
-        return frame
+def _foliage_frame(pos: int, size: int = 60, subject=(109, 190, 109)) -> np.ndarray:
+    """Daylight foliage as it actually measures: green but only lightly
+    saturated (S ~70, vs a real flashlight's S ~168)."""
+    frame = np.zeros((size, size, 3), dtype=np.uint8)
+    frame[:, :] = (109, 150, 109)
+    cv2.rectangle(frame, (pos, pos), (pos + 8, pos + 8), subject, thickness=-1)
+    return frame
 
-    positions = (5, 12, 19, 26, 33, 40)
-    frames = [_frame_with_green_square(pos) for pos in positions]
+
+def test_extract_clip_features_ignores_low_saturation_daylight_foliage(monkeypatch, tmp_path):
+    # The saturation floor, not the whole-frame colour gate, is what rejects
+    # daylight foliage now -- so this reads 0.0 even though color_fraction is
+    # high and no gate is applied to the scored-frame features any more.
+    frames = [_foliage_frame(pos) for pos in (5, 12, 19, 26, 33, 40)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
     result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
@@ -1456,6 +1443,19 @@ def test_extract_clip_features_zeroes_green_light_in_broad_daylight_colour(monke
     assert result["color_fraction"] > 0.15
     assert result["green_light_ratio"] == 0.0
     assert result["green_light_flicker"] == 0.0
+
+
+def test_extract_clip_features_still_sees_a_flashlight_in_broad_daylight(monkeypatch, tmp_path):
+    # The point of sharpening the mask: a genuinely saturated light is no
+    # longer discarded just because the clip is colourful.
+    frames = [_foliage_frame(pos, subject=(40, 255, 40)) for pos in (5, 12, 19, 26, 33, 40)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+
+    assert result is not None
+    assert result["color_fraction"] > 0.15
+    assert result["green_light_ratio"] > 0.5
 
 
 def test_extract_clip_features_flags_the_tracked_box_itself_as_the_flashlight(
@@ -1492,19 +1492,12 @@ def test_extract_clip_features_flashlight_subject_fraction_zero_for_real_subject
     assert result["flashlight_subject_fraction"] == pytest.approx(0.0)
 
 
-def test_extract_clip_features_flashlight_subject_fraction_zeroed_in_daylight(
+def test_extract_clip_features_flashlight_subject_fraction_ignores_foliage(
     monkeypatch, tmp_path
 ):
-    # Same broad-frame daylight-colour gate as green_light_ratio/flicker --
-    # ambient green foliage covering the frame shouldn't get tagged FLASHLIGHT.
-    def _frame_with_green_square(pos: int, size: int = 60) -> np.ndarray:
-        frame = np.zeros((size, size, 3), dtype=np.uint8)
-        frame[:, :] = (0, 150, 0)  # broad saturated ambient green background
-        cv2.rectangle(frame, (pos, pos), (pos + 8, pos + 8), (0, 220, 0), thickness=-1)
-        return frame
-
-    positions = (5, 12, 19, 26, 33, 40)
-    frames = [_frame_with_green_square(pos) for pos in positions]
+    # Lightly-saturated ambient foliage shouldn't get tagged FLASHLIGHT --
+    # now rejected by the saturation floor rather than a whole-frame gate.
+    frames = [_foliage_frame(pos) for pos in (5, 12, 19, 26, 33, 40)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
     result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)

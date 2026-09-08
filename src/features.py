@@ -139,13 +139,35 @@ def color_saturation_fraction(frame_bgr: np.ndarray, *, saturation_threshold: in
     return float(np.count_nonzero(saturation > saturation_threshold)) / saturation.size
 
 
+# One definition of "this pixel is the guard's flashlight", shared by
+# green_light_mask and therefore by every feature and overlay derived from it.
+#
+# min_saturation was 60 until 2026-09-08, which admitted essentially all
+# daylight foliage: measured over real clips, a flashlight's green components
+# run S p50 168 (p90 237) while sunlit grass runs S p50 69 with a p99 of only
+# 99 -- saturation separates the two at AUC 0.907, and 60 sits below the whole
+# grass distribution. Raising it collapses daylight foliage's peak whole-frame
+# green reading from 0.164 to 0.0001 while costing a real flashlight only about
+# half its reading (0.053 -> 0.025).
+#
+# min_blob_area drops connected components below that many pixels. It is the
+# smaller effect of the two and does NOT work alone -- daylight grass is not
+# speckle, it forms large contiguous regions (median largest-per-frame
+# component 827px, bigger than a real flashlight's 580px). It earns its place
+# only once the saturation floor has removed the bulk, where it halves what is
+# left (daylight non-guard clips reading > 0.02: 13.3% -> 6.7%).
+FLASHLIGHT_MIN_SATURATION = 130
+FLASHLIGHT_MIN_BLOB_AREA = 8
+
+
 def green_light_mask(
     frame_bgr: np.ndarray,
     *,
     hue_low: int = 33,
     hue_high: int = 85,
-    min_saturation: int = 60,
+    min_saturation: int = FLASHLIGHT_MIN_SATURATION,
     min_value: int = 60,
+    min_blob_area: int = FLASHLIGHT_MIN_BLOB_AREA,
 ) -> np.ndarray:
     """Boolean mask of pixels reading as the guard's flashlight (green, lit,
     saturated), shared by `green_light_ratio` and any overlay that draws it so
@@ -157,10 +179,26 @@ def green_light_mask(
     cam01/16167's real flashlight frames +19%) with no measurable change on
     known foliage false-positive references (cam03/9066, cam03/8767) or the
     cam08/4306 true-flashlight reference.
+
+    `min_blob_area` drops connected components smaller than that many pixels.
+    A flashlight is one contiguous lit patch even at distance; sunlit grass and
+    foliage produce scattered single-pixel speckle that satisfies the same
+    hue/saturation test. Without it the only defence against daylight foliage
+    was the whole-frame `color_fraction` gate, which is a blunt instrument --
+    see `scripts.spike.extract_clip_features`. 0 (the default) keeps every
+    matching pixel, i.e. the pre-2026-09-08 behaviour.
     """
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-    return (hue >= hue_low) & (hue <= hue_high) & (sat >= min_saturation) & (val >= min_value)
+    mask = (hue >= hue_low) & (hue <= hue_high) & (sat >= min_saturation) & (val >= min_value)
+    if min_blob_area <= 0 or not mask.any():
+        return mask
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8), connectivity=8
+    )
+    keep = np.zeros(count, dtype=bool)
+    keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= min_blob_area
+    return keep[labels]
 
 
 def green_light_ratio(
@@ -169,8 +207,9 @@ def green_light_ratio(
     *,
     hue_low: int = 33,
     hue_high: int = 85,
-    min_saturation: int = 60,
+    min_saturation: int = FLASHLIGHT_MIN_SATURATION,
     min_value: int = 60,
+    min_blob_area: int = FLASHLIGHT_MIN_BLOB_AREA,
     exclude_mask: np.ndarray | None = None,
 ) -> float:
     """Fraction of contour pixels whose HSV hue falls in the green band with
@@ -180,6 +219,10 @@ def green_light_ratio(
     clips, which is a narrower and likely more reliable signal than
     `saturation_ratio` alone (that also fires on any colour anomaly, e.g. a
     reddish insect glare). Hue bounds use OpenCV's 0-179 scale.
+
+    `min_blob_area` (see `green_light_mask`) requires the matching pixels to
+    form a contiguous patch, which is what separates a real light from sunlit
+    grass speckle.
 
     `exclude_mask`, when given (see `ignore_region_mask`), removes pixels from
     both the numerator and denominator -- a known per-camera artifact region
@@ -200,6 +243,7 @@ def green_light_ratio(
         hue_high=hue_high,
         min_saturation=min_saturation,
         min_value=min_value,
+        min_blob_area=min_blob_area,
     )
     return float(np.count_nonzero(green[inside])) / int(np.count_nonzero(inside))
 

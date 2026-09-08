@@ -4,9 +4,11 @@ Written 2026-08-28, updated repeatedly since; last updated 2026-09-08. **If you 
 picking this up, start at "Handoff for a new agent (2026-09-08, session close #13)" at the very
 bottom, just above "Conventions"** — on branch `feat/phase2-corpus-and-cv` (cut from `main`, which
 now has all of Phase 1 merged). The `prefer_flashlight_candidate` mechanism was extended to
-override an already-active track, not just a fresh pick, and now fixes cam07/11174 (the clip that
-originally motivated it) — still opt-in, still not the default. `docs/plan.md` is the full plan and
-stays authoritative; this file is the short version of where things actually stand and what to do
+override an already-active track and now fixes cam07/11174, but a full 16,886-clip corpus sweep
+found a real bug before it shipped: its candidate-level colour scoring has no exclude mask, so it
+can be fooled by an un-ignored stationary light on cameras other than cam07. Still opt-in, with a
+concrete fix now scoped before it can be reconsidered for default. `docs/plan.md` is the full plan
+and stays authoritative; this file is the short version of where things actually stand and what to do
 next.
 
 ## Where the project is
@@ -1346,6 +1348,74 @@ measurement was cheap to do now.
    1, same family of problem.
 5. Everything in #12's list that's still open (gate 2 retirement follow-through, the resident
    population, `color_fraction`→`is_daylight` swap for the incident-branch gate).
+
+### Full-corpus sweep (item 1 above), done same session — found a real, well-scoped bug before it shipped
+
+Ran the active-track flashlight override against all 16,886 downloaded clips (not just the 678
+labelled ones), flag off vs on, parallelised 12-way
+(`data/reports/scratch/flashlight_active_override_full_2026-09-08/measure_full.py`, 75.2 minutes,
+zero exceptions). **1,258 of 16,886 clips changed (7.5%).**
+
+| transition | count |
+| --- | --- |
+| `unclassified` → `guard_candidate` | 436 |
+| `incident_candidate` → `guard_candidate` | 242 |
+| `guard_candidate` → `unclassified` | 236 |
+| `environment_candidate` → `guard_candidate` | 163 |
+| `animal_candidate` → `guard_candidate` | 32 |
+| `incident_candidate` → `unclassified` | 30 |
+| `guard_candidate` → `incident_candidate` | 27 |
+| everything else | 92 |
+
+By camera: cam07 518 (80% of the `incident_candidate`→`guard_candidate` moves, 194 of 242 — this
+is the already-validated population from earlier this session), then cam05 195, cam06 146, cam04
+128, cam03 83, and a long tail. The `animal_candidate`→`guard_candidate` transitions (the ones that
+most need scrutiny, since they touch a protected class with no ground truth to check them against
+at full-corpus scale) are heavily concentrated too: cam01b 15, cam04 14, cam05 3.
+
+**Spot-checked the non-cam07 clusters directly (bounding boxes, then actual pixels) and found a
+real, previously-unknown bug, not just "more of the same trade-off."** cam04's 14
+`animal_candidate`→`guard_candidate` clips all show the identical shape: the OFF track sits on a
+small, often near-identical box across genuinely different clips (a tell that it's tracking
+nothing real — confirmed visually on cam04/6079: OFF's box is over blank, textureless ground; the
+actual content in frame is a **small stationary green-tinted light fixture at the top of a fence
+post**, clearly visible once you look at the full frame, not a crop). ON's override correctly finds
+real motion adjacent to that light — except the light itself is what makes the candidate
+"flashlight-scoring," not a person. Checked cam01b/16936 the same way: same shape exactly, a tiny
+(11-13px!) genuine fixed light/reflection near a wire, not an animal or a guard.
+
+**Root cause, confirmed by reading the code, not just inferring it: `prefer_flashlight_candidate`'s
+per-candidate `green_light_ratio` scoring (in `detect_clip`, both the fresh-pick and active-track
+paths) is called with no `exclude_mask` at all.** Every OTHER consumer of `green_light_ratio` in
+this codebase (the whole-track scoring in `extract_clip_features`, the render overlay) is passed an
+`exclude_mask` built from `zone.ignore` (hand-traced) and/or `detect_stationary_light_mask`
+(auto-detected) — this is the exact, multi-session-old infrastructure built specifically so a known
+fixed light can never read as "the guard's flashlight." `prefer_flashlight_candidate`'s
+candidate-level scoring is the one place in the codebase that bypasses it, because it runs inside
+`detect_clip` itself, and the auto-detected stationary-light mask isn't computed until
+`extract_clip_features`, downstream of `detect_clip`. Confirmed neither cam04 nor cam01b (nor
+cam07, which is NOT affected by this — its real flashlight sightings dominate and it apparently has
+no confounding fixed light) has an `ignore` polygon configured that would have masked this by
+accident.
+
+**This is why cam07's numbers stand (nothing there was fooled by this bug) but the cluster on other
+cameras cannot be trusted yet.** Not fixed this session — the fix is well-scoped (thread the same
+exclude mask already computed elsewhere into the candidate-scoring calls, or run a lightweight
+per-clip stationary-light check before scoring) but deserves its own implementation and validation
+pass, not a rushed patch at the end of an already-long session. **This is exactly what "sweep the
+full corpus before shipping" is for — the 678-clip labelled sample never touched a camera with this
+confound, so it looked clean and wasn't.**
+
+**Updated recommendation: still off by default, and now with a concrete blocker, not just an
+abundance of caution.** Before this can be defaulted on:
+1. Thread an exclude mask (ignore polygons + auto-detected stationary lights) into
+   `prefer_flashlight_candidate`'s candidate scoring.
+2. Re-run this same full-corpus sweep after that fix and confirm the cam04/cam01b-style clusters
+   disappear while cam07's validated corrections survive unchanged.
+3. Only then reconsider promotion to default.
+
+Full per-clip results: `data/reports/scratch/flashlight_active_override_full_2026-09-08/results_full.csv`.
+Spot-check renders: `data/reports/debug_render/full_sweep_spotcheck_2026-09-08/`.
 
 ## Handoff for a new agent (2026-09-08, session close #12)
 

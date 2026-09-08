@@ -1,11 +1,12 @@
 # Handoff: gate-2 pass/fail is still open; Phase 1 foundation is now built
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-08. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-08, session close #10)" at the very
-bottom, just above "Conventions"** — it has current state, a real bug found and fixed in the
-warmup-motion ranker feature, and a bigger, corpus-wide `best_contour` selection issue found but
-deliberately not yet fixed. `docs/plan.md` is the full plan and stays authoritative; this file is
-the short version of where things actually stand and what to do next.
+picking this up, start at "Handoff for a new agent (2026-09-08, session close #11)" at the very
+bottom, just above "Conventions"** — it has current state: the `best_contour` selection fix from
+session #10 is now wired up, tested, and measured end-to-end against the real labelled corpus.
+Net positive with zero hard-constraint cost, but a real near-miss found too — kept off by default
+pending a full-corpus sweep and a re-derived threshold. `docs/plan.md` is the full plan and stays
+authoritative; this file is the short version of where things actually stand and what to do next.
 
 ## Where the project is
 
@@ -1193,6 +1194,138 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-08, session close #11)
+
+**Read this section first — it supersedes #10 for current state.** 573 tests passing
+(`uv run ruff check . --fix && uv run pytest -q`), branch `feat/phase1-finalisation`. This session
+picked up #10's suggested next step directly: the user's own framing was "we don't need to keep
+only one contour, we can keep all of them and change how the pick is made — biggest doesn't
+necessarily mean the real subject, especially bright objects vs. a flashlight." That is exactly
+what the previous session had half-built and left uncommitted.
+
+### What was actually there at the start of this session
+
+The previous session's uncommitted diff (`scripts/spike.py`, `src/features.py`) had real
+plumbing — `track_contour`'s `flashlight_scores` parameter, `_run_track_pass`'s
+`flashlight_scores_per_frame`, and `src.features.FLASHLIGHT_CANDIDATE_MIN_RATIO` (deliberately the
+same 0.02 as `classify()`'s own `GREEN_LIGHT_RATIO_MIN`) — all correctly wired to each other. But
+`detect_clip`'s own `prefer_flashlight_candidate` parameter was a dead stub: declared in the
+signature, mentioned nowhere in the docstring, and never read anywhere in the function body. No
+tests existed for any of it. Flipping the flag did nothing.
+
+### What shipped this session
+
+- **Finished the wiring.** `detect_clip` now computes `green_light_ratio` for every raw motion
+  candidate in every frame when `prefer_flashlight_candidate=True`, and threads the resulting
+  per-frame score lists into both the forward and the backward `_run_track_pass` calls (reversed
+  correctly for the backward one). Off (the default) is a true no-op — confirmed byte-identical
+  behaviour, not just "should be."
+- **Threaded through the two real callers.** `extract_clip_features` gained the same parameter
+  (forwarded to `detect_clip`), and `scripts/render_debug.py` gained `--prefer-flashlight-candidate`
+  so a specific clip (e.g. cam07/11174) can be rendered before/after for a human to look at
+  directly, not just read numbers about.
+- **6 new tests** (`tests/test_spike.py`): 5 pure `track_contour` cases (prefers a lit candidate
+  over a larger unlit one; still prefers size among multiple lit candidates; falls back to
+  largest-wins when nothing clears the bar; `None` is byte-identical to the old behaviour; the
+  min-reacquire-area floor still applies before colour is even considered) and one end-to-end
+  `detect_clip` test with two independently-moving synthetic contours (a big non-green blob, a
+  small green one) confirming the flag actually changes which one gets tracked.
+
+All of the above is additive and off-by-default — safe to ship regardless of what the measurement
+below says. **Not yet committed as of writing this** — do that first if picking this up fresh.
+
+### The real measurement: 678 labelled clips, flag off vs on, real footage
+
+Script: `data/reports/scratch/flashlight_candidate_2026-09-08/measure.py` (gitignored, local-only,
+per this repo's scratch-analysis convention). Runs `extract_clip_features` twice per labelled clip
+(flag off, flag on) through the real `classify()` pipeline, with the same reference-background and
+`daylight_hint` wiring `scripts/backtest.py` uses in production, and diffs the resulting category.
+Full per-clip output: `data/reports/scratch/flashlight_candidate_2026-09-08/results.csv`.
+
+**18 of 678 labelled clips changed category:**
+
+| direction | count | clips |
+| --- | --- | --- |
+| guard clip corrected INTO `guard_candidate` | **14** | cam13/3617, cam04/8129, cam01/8987, cam08/10852, cam08/10860, cam08/13158, cam01/16167, cam01b/16998, cam01b/17513, cam07/18318, cam01a/18603, cam14/19550, cam14/19551, cam13/22532 |
+| guard clip regressed OUT of a correct read | 1 | cam08/8538: `guard_candidate` → `unclassified` |
+| environment clip regressed | 2 | cam09/3970: `environment_candidate` → `guard_candidate`; cam04/20227: `environment_candidate` → `unclassified` |
+| animal clip changed, alert channel unaffected either way | 1 | cam01/16028: `environment_candidate` → `guard_candidate` (never alerting before or after) |
+| incident clips changed | **0** | — |
+
+Two of the 14 corrected clips are already-named problems in this file: **cam08/10852** and
+**cam01a/18603** are exactly the short/truncated-preview clips session #6 used to illustrate "the
+short clip reads `incident_candidate`, the full sibling reads `guard_candidate`" — this fix
+independently corrects the short clip's own read, before any sibling-waiting design is even built.
+**cam01/16167** is the clip repeatedly flagged across sessions #3/#8 for flashlight-hue and
+light-drift issues — also now reading correctly.
+
+**The hard constraint held exactly.** Of the 47 labelled animal+incident clips, only 1 changed
+(cam01/16028 above), and it was not in the alert channel (`incident_candidate`/`animal_candidate`)
+either before or after. Zero clips moved into the alert channel that weren't there before; the 7
+guard clips that moved OUT of `incident_candidate` were false alarms being fixed, not real
+detections being lost. `is_blinding_foreground` also flipped True→False on 8 of the corrected
+guard clips plus cam04/20227 — a secondary, consistent improvement (the tracked box is the real
+subject now, not an oversized bright obstruction blob).
+
+### The catch: this does not fix the clip that motivated it
+
+Checked cam07/11174 directly against the real file (`data/history/cam07/11174.mp4`), not just the
+aggregate corpus number: it does **not** change category (`incident_candidate` both ways). Tracing
+the actual per-frame candidates at the exact fresh-acquisition frame the session #10 investigator
+found: the real flashlight contour scores `green_light_ratio = 0.0178`, the bush scores `0.0`, and
+`FLASHLIGHT_CANDIDATE_MIN_RATIO` is `0.02` — a **0.002 miss**, not a wrong mechanism. The threshold
+was borrowed unmodified from `classify()`'s `GREEN_LIGHT_RATIO_MIN`, which is calibrated on a
+finished track's best frame across a whole clip — a different, generally-higher-scoring population
+than one raw candidate in one single frame. The corpus-wide win above comes entirely from *other*
+clips where a candidate happened to clear 0.02, not from the named motivating example.
+
+### A real risk found, not yet realised on this sample
+
+Spot-checking candidate-level `green_light_ratio` (not the whole-track feature) on clips already
+known to be dangerous for green-hue detection:
+
+| clip | why it's dangerous | max candidate `green_light_ratio` |
+| --- | --- | --- |
+| cam03/9066 | documented night-foliage-reads-as-flashlight confound | **1.0** |
+| cam03/8767 | same confound | **1.0** |
+| cam10/7631 | a real animal clip already flagged elsewhere as fragile to green-light changes | **0.0246** (over the 0.02 bar) |
+| cam08/7360, cam10/9405 | real animal clips (rooikat, tiny animal) | 0.0 |
+
+A single foliage sub-blob can score a full 1.0 — worse than the whole-track version of this same
+confound (which tops out at 0.42-0.45 per session #9's item 3). None of these three clips'
+end-to-end `classify()` output actually changed when checked directly (confirmed by rerunning
+`extract_clip_features` on all three, both flag values) — but that is three clips, not proof of
+safety, and it means the margin is thin enough that a different frame or a different clip on the
+same camera could plausibly cross it. This is the same shape of lesson `min_reacquire_area` and the
+static-lock scoring already taught this repo: a mechanism can look clean on the cases you thought
+to check and still have a real, demonstrated failure mode sitting one clip away. **Only the 678
+labelled clips were swept — the other ~16,400 downloaded, unlabelled clips were not.**
+
+### Recommendation: keep it, keep it off by default, don't stop here
+
+Net positive on every labelled clip checked (+14/-3, zero hard-constraint cost) is a real result,
+not nothing — but it is not yet safe to flip `prefer_flashlight_candidate=True` on as the default,
+per this repo's own established discipline (`min_reacquire_area` needed two correction rounds after
+a narrower validation missed a regression; this validation is narrower still, since it never
+touched the unlabelled majority of the corpus). Current state (flag defaults to `False`
+everywhere) is the correct place to leave it for now. Concrete next steps, in order:
+
+1. **Re-derive `FLASHLIGHT_CANDIDATE_MIN_RATIO` for this specific population** (per-candidate,
+   per-frame) instead of reusing `GREEN_LIGHT_RATIO_MIN`. It is simultaneously too loose (crosses
+   on a pure-foliage candidate at 1.0) and too tight (misses the named cam07/11174 case by 0.002)
+   — strong evidence it's the wrong number for this job, not just an unlucky threshold.
+2. **Sweep the full downloaded corpus, not just the 678 labelled clips**, watching specifically for
+   the foliage/animal near-miss pattern found in cam03/9066, cam03/8767, cam10/7631 — those three
+   didn't flip category this time, but nothing here guarantees no clip anywhere does.
+3. **Investigate the 3 real regressions** (cam08/8538, cam09/3970, cam04/20227) before accepting
+   them as an acceptable cost — none were looked at frame-by-frame this session.
+4. Consider requiring the lit candidate to be evidenced across more than one frame (persistence,
+   not a single-frame score) before it can override the largest-area pick — would likely kill the
+   single-frame foliage-spike risk above while keeping the real corrections, but unmeasured.
+
+Debug renders for direct visual comparison:
+`data/reports/scratch/flashlight_candidate_2026-09-08/cam07_11174_{off,on}.mp4`.
 
 ## Handoff for a new agent (2026-09-08, session close #10)
 

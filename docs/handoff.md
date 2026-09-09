@@ -1,14 +1,15 @@
-# Handoff: Phase 1 merged to main; Phase 2 branch open; gate 2 retired as a blocking gate
+# Handoff: detection/classification validated at full-corpus scale; next focus is organising Phase 2's code
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-08. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-08, session close #13)" at the very
-bottom, just above "Conventions"** — on branch `feat/phase2-corpus-and-cv` (cut from `main`, which
-now has all of Phase 1 merged). The `prefer_flashlight_candidate` mechanism was extended to
-override an already-active track and now fixes cam07/11174. A full 16,886-clip corpus sweep ran
-clean (1,258/16,886 changed, no disqualifying finding) — a suspected stationary-light bug in that
-sweep's non-cam07 clusters was investigated and retracted same session, confirmed by the user
-against the actual footage as genuine corrections, not false positives. Still opt-in pending the
-"Ship readiness" leak-tolerance call, not a correctness blocker. `docs/plan.md` is the full plan
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-09. **If you are a new agent
+picking this up, start at "Handoff for a new agent (2026-09-09, session close #14)" at the very
+bottom, just above "Conventions"** — on branch `feat/phase2-refactor` (cut from `main`, which now
+has all of Phase 1 and Phase 2's empirical detection/classification work merged). The detection
+work itself is in a good, validated state (`prefer_flashlight_candidate` checked clean at full
+16,886-clip corpus scale; the one thing left before it can default on is a business call, not a
+correctness question — see "Ship readiness" in `docs/plan.md`). The next focus, per the user
+directly, is reorganising Phase 2's code into the module boundaries `docs/plan.md` always
+specified, without changing behaviour — see that file's "Phase 2 refactor brief". `docs/plan.md`
+is the full plan
 and stays authoritative; this file is the short version of where things actually stand and what to do
 next.
 
@@ -1198,6 +1199,48 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-09, session close #14)
+
+**Read this section first.** `feat/phase2-corpus-and-cv` is merged to `main`; a new
+`feat/phase2-refactor` branch is open with one explicit focus: **organise Phase 2's code, not
+change its behaviour.** If you're picking this up fresh, go straight to `docs/plan.md`'s "Phase 2
+refactor brief" section — it has the per-step reality check and a suggested order
+(`classify.py` → `backtester.py` → `motion.py` caching, with the browser zone editor and a
+backfill/parsing audit as separate lower-priority tracks). This section is the short version.
+
+### Where detection/classification itself stands (closing out session #13)
+
+`prefer_flashlight_candidate` (both the fresh-pick and active-track pieces) is validated at full
+16,886-clip corpus scale with no disqualifying finding — see session #13 below for the full
+numbers and for a retraction worth reading once: a "stationary light bug" I diagnosed from grainy
+IR stills turned out to be a misread once the user checked the actual footage, and every flagged
+clip was a genuine correction. The mechanism is still off by default, not because of any known
+defect but because the one thing left is a business call, not an engineering one: **Ship
+readiness criterion #3 in `docs/plan.md`** (how much guard/environment leak per night is
+tolerable) is still unset. Nothing is blocking that decision from being made whenever it's wanted.
+
+### The ask for the next agent: organise, don't rebuild
+
+The empirical work across sessions #1-#13 solved real detection/classification problems but did it
+inside `scripts/spike.py` and `scripts/backtest.py` rather than the module boundaries
+`docs/plan.md` originally specified (`src/motion.py`, `src/classify.py`, `src/backtester.py`). That
+was the right call at the time — gate 2 was undecided and refactoring a moving target would have
+been wasted work — but gate 2 is retired now and the target has stopped moving as much. Time to
+clean it up.
+
+**This is explicitly a refactor, not new detection work.** The full test suite and
+`scripts/check_incident_regression.py` must stay green throughout, and any extracted module's
+output should be checked byte-identical against the pre-refactor version on the full labelled
+corpus before being trusted — same discipline this repo has applied to every real detector change,
+now applied to moving code around instead of changing what it computes. See `docs/plan.md`'s Phase
+2 refactor brief for the concrete per-step breakdown; short version: `classify.py` (extract
+`scripts/backtest.py::classify()`, add reason codes — nothing to build, just organise) and
+`backtester.py` (wire in the `backtest_runs`/`backtest_results` DB functions that already exist and
+already have tests, currently called by nothing) are both low-risk, high-value, and independent of
+each other. `motion.py` (caching `detect_clip`'s output) is real but riskier — its cache key has to
+cover every one of `detect_clip`'s 20+ tuning parameters or a config change will silently serve
+stale results — and should come after the other two are done and stable, not first.
 
 ## Handoff for a new agent (2026-09-08, session close #13)
 

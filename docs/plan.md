@@ -446,18 +446,35 @@ Phase 2 work (below) is judged against this bar, not against a resurrected Gate 
     escalation. Unknown camera, missing fence line, above depth cutoff, or undecodable video
     resolve to `ambiguous`. Typed interface for a future ML resolver, unimplemented.
 
-**Reconcile this list with what actually exists before treating any of it as "to do" (first task
-for whoever starts Phase 2 proper).** The empirical work since Phase 0c built real equivalents of
-several of these under different names, ad hoc, while gate 2 sat undecided: `src/zones.py` (step
-23) already exists and is in daily use; `scripts/backtest.py::classify()` already does step 25's
-job, just not as a separate typed module with its own reason-code interface; `src/features.py` +
-`scripts/spike.py::detect_clip` do step 22's extraction, but **without** the caching step 22
-specifies — the `blob_tracks` table (step 17) exists in the schema and nothing writes to it, so
-every backtest run re-extracts every clip from video. Step 24 (browser zone editor) is the one
-item on this list with no ad hoc equivalent anywhere — still fully open. Steps 20/21 (camera-ID
-parsing hardening, resumable full backfill) need a real check against current `scripts/
-download_clips.py`/`scripts/meta_backfill.py`, not assumed done just because the corpus has grown
-to 17,000+ clips.
+## Phase 2 refactor brief (2026-09-09) — organise what already exists before building what doesn't
+
+The empirical work since Phase 0c built real equivalents of most of steps 20-25 under different
+names, ad hoc, while gate 2 sat undecided (now retired — see Ship readiness above). **This is
+reorganisation, not new detection logic.** The single rule for all of it: behaviour must not
+change. `uv run ruff check . --fix && uv run pytest -q` and `scripts/check_incident_regression.py`
+must stay green throughout, and any extracted module's output should be verified byte-identical
+against the pre-refactor code on the full labelled corpus before being trusted, same discipline as
+every `detect_clip`-level change already in `docs/handoff.md`'s history. Adding new tests during
+extraction is expected (a bare function with no dedicated test suite of its own is exactly the kind
+of thing this refactor should leave better documented and better covered than it found it) — that
+is not "changing behaviour."
+
+**Per-step reality check, most valuable to least:**
+
+| step | plan says | what actually exists | verdict |
+| --- | --- | --- | --- |
+| 25 `classify.py` | typed rule engine, reason codes per decision | `scripts/backtest.py::classify()` — one function, no reason codes, string category only | **Extract to `src/classify.py`, add reason codes.** Highest value: every rule's threshold is currently a magic number in one big if-chain with only prose comments explaining why. A typed `ClassificationResult(category, reason, contributing_features)` is the concrete deliverable, and it's what step 25 always wanted for "a future ML resolver" anyway. |
+| 28 `backtester.py` | immutable runs: timestamp, config snapshot/hash, git revision | `src/db.py` has full `backtest_runs`/`backtest_results` schema + insert/query functions **already written and unit-tested** — `scripts/backtest.py` never calls them. Every real run today is a throwaway CSV. | **Wire the existing functions in, don't write new ones.** Cheapest win on this list — the hard part (schema, functions) is done. |
+| 23 `zones.py` | polyline/side/depth/ignore on top of cached tracks | `src/zones.py` exists, in daily use | **Already done**, just not literally "on top of cached tracks" (see step 22) since nothing is cached yet. No action needed unless step 22 changes its inputs. |
+| 22 `motion.py` | cached zone-independent blob tracks, `EXTRACTOR_VERSION` | `scripts/spike.py::detect_clip` + `src/features.py` do the extraction; the `blob_tracks` table (step 17) exists and nothing writes to it | **Real gap, real risk.** `detect_clip` has 20+ tuning parameters and several sessions of hard-won correctness fixes (warmup handling, anchor sweep, reference-bg veto, the flashlight-candidate work) — extracting it needs the cache key to include every parameter that affects its output, or a config change silently serves stale cached results. Do this only after 25 and 28 are done and stable; it's the riskiest item here. |
+| 24 browser zone editor | draw polyline/depth/ignore in a browser, atomic dated write | **Nothing** — every fence trace to date is "hand the user an upscaled frame, they draw in a paint tool, colour-threshold it back out" (`README.md` section 4) | Real, standalone feature work, not a refactor of anything existing. Lowest priority of the five unless retracing cameras becomes frequent enough that the manual process is the bottleneck — it currently isn't (18 cameras, dated-history schema already handles remounts). |
+| 20/21 backfill/parsing | hardened camera-ID parsing, resumable full backfill | `scripts/meta_backfill.py`/`scripts/download_clips.py`, 17,000+ clips backfilled without incident | Probably fine in practice but **never verified against the original spec** (every caption shape, health-notification formats, flood-wait/reconnect, dedup). Worth a real audit before assuming done, but not urgent — nothing has broken.
+
+**Suggested order for whoever picks this up: 25 → 28 → 22, with 24 and the 20/21 audit as
+separate, lower-priority tracks.** 25 and 28 are pure extraction of things that already work
+correctly, with no dependency between them and no risk to the detection pipeline itself — good
+places to build confidence in the refactor discipline before touching 22, which is the one item
+that can actually make results silently wrong if the cache key is incomplete.
 
 ### Phase 3: Labels, backtester, retrospective sequences
 26. `scripts/label.py`: resumable, prints the clip path by default, optional configured player,

@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
+from src.backtester import record_run  # noqa: E402
 from src.classify import classify_detailed, is_blinding_foreground  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
 from src.features import daylight_hint, is_daylight  # noqa: E402
@@ -171,6 +172,12 @@ def main() -> None:  # pragma: no cover - requires real downloaded footage
         action="store_true",
         help="disable the reference-background scenery veto, for before/after comparison",
     )
+    parser.add_argument(
+        "--no-record",
+        action="store_true",
+        help="skip recording this pass as an immutable backtest_runs/backtest_results row "
+        "(src.backtester) -- for a scratch/exploratory run nobody needs to find again",
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
@@ -188,10 +195,16 @@ def main() -> None:  # pragma: no cover - requires real downloaded footage
             reference_root=args.reference_bg,
         )
     )
+
+    run_id = None
+    if not args.no_record:
+        run_id = record_run(conn, rows)
     conn.close()
 
     write_csv(rows, args.out)
     print(f"Wrote {len(rows)} rows to {args.out}")
+    if run_id is not None:
+        print(f"Recorded as backtest run {run_id!r}")
     from collections import Counter
 
     print(Counter(r["category"] for r in rows))

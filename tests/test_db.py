@@ -375,6 +375,33 @@ def test_backtest_run_lifecycle_and_isolation(conn):
     assert runs == {"run-1": "completed", "run-2": "running"}
 
 
+def test_add_backtest_result_accepts_real_classify_categories(conn):
+    # schema v6 (2026-09-09): predicted_class stores src.classify's actual
+    # eight *_candidate/no_motion/unclassified categories, not just the
+    # four-class guard_side/outside_alert/outside_priority/ambiguous
+    # vocabulary docs/plan.md step 25 originally specified and never built.
+    db.create_run(
+        conn,
+        run_id="run-1",
+        thresholds_path="src/classify.py",
+        thresholds_hash="hash1",
+        cameras_path="config/cameras.yaml",
+        cameras_hash="hash2",
+    )
+    db.add_backtest_result(
+        conn,
+        run_id="run-1",
+        channel_id=CHANNEL,
+        message_id=1,
+        camera_id="cam01",
+        predicted_class="incident_candidate",
+        reason_codes=["outside_no_colour"],
+        features={"outside_pixel_fraction": 0.7},
+    )
+    results = list(db.iter_backtest_results(conn, "run-1"))
+    assert results[0]["predicted_class"] == "incident_candidate"
+
+
 def test_add_backtest_result_rejects_invalid_prediction(conn):
     db.create_run(
         conn,

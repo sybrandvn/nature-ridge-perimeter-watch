@@ -44,15 +44,40 @@ documented, deliberate tradeoff:
     open "should the lower bound be relaxed" question in
     docs/detection_improvement_review.md section 2.3.
   - cam15-2025-07-15T00:29 (15453+15454, the porcupine): both clips read
-    outside_pixel_fraction=0.5, exactly the fence line, never a clean
-    majority -- fails the >0.6 geometry gate outright. Unrelated to the
-    fence-distance band. NOT previously documented.
-  - cam10/17146 (bird on the fence rail): implausible_height_fraction=0.8
-    routes it to environment_candidate via the metric physics gate. The
-    ground-plane assumption that gate depends on breaks when the subject's
-    feet are on the fence rail rather than the ground -- the exact "bird sat
-    on the fence" confound docs/plan.md's fence-base-line section names as an
-    open risk. NOT previously documented.
+    outside_pixel_fraction=0.5 (single-track geometry), exactly the fence
+    line, never a clean majority. 15454's (bug-fixed, see docs/detection_
+    improvement_review.md section 1.1) multi-object reading DOES show a real
+    outside majority (multi_object_dominant_outside_fraction=0.87,
+    multi_object_count=12) -- checked directly whether using that as an
+    OR-alternative geometry gate would safely recover it: NO. Swept every
+    evidence floor from count>=5,mdof>0.6 to count>=15,mdof>0.8 against the
+    full labelled corpus (2026-09-09) -- environment leak never drops below
+    ~7-10 clips for this one recovery, because a storm/wind clip's scattered
+    motion reads as "one dominant object, mostly outside" almost as often as
+    a real intruder does. Not a threshold-tuning problem; do not re-attempt
+    this exact idea (see docs/detection_improvement_review.md section 6's
+    "do not retry" table).
+  - cam10/17146 (bird on the fence rail): outside_pixel_fraction=0.0 AND the
+    multi-object reading agrees (0.0) -- this clip reads fully INSIDE the
+    fence by every geometry signal available, which is the real root cause,
+    not the implausible_height_fraction=0.8 metric-gate routing to
+    environment_candidate first (checked directly: even without that gate,
+    the outside-geometry rule would never fire on an inside reading anyway).
+    This surfaces a genuine, previously-undocumented structural gap:
+    classify() has NO path from "animal, seen entirely inside the fence" to
+    animal_candidate at all -- the inside-only fallback only ever produces
+    guard_candidate/resident_candidate. Checked how big this population
+    really is: of 6 labelled animal/incident clips reading inside by every
+    geometry signal, 4 already have an alerting sibling in the same event
+    (not a live gap). The remaining 2 are cam15/15453 (covered by its own
+    sibling 15454's fragile-but-real outside reading -- see above) and THIS
+    clip, which has no sibling and no usable calibrated-height signal either
+    (the ground-plane assumption implausible_height_fraction flags as broken
+    is exactly why height can't substitute). Population after event-level
+    dedup: 1 clip. Too thin to engineer a rule against -- same call this
+    repo already made for the `resident` rule at a similarly small sample
+    (docs/handoff.md session #12). Revisit once more labelled examples of an
+    animal seen inside the fence exist.
 
 These three are NOT added to KNOWN_ANIMAL_EXCEPTIONS -- doing so would be
 exactly the silent burial Ship readiness criterion #2 exists to prevent. This

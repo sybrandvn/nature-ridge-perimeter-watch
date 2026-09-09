@@ -1517,6 +1517,40 @@ def test_multi_object_outside_features_excludes_beyond_depth_cutoff():
     assert result["multi_object_count"] == 0.0
 
 
+def test_multi_object_outside_features_no_evidence_uses_fallback_not_zero():
+    # No multi_tracks at all -- with no fallback given, both readings default
+    # to 0.0 (a confident "inside" claim); with a fallback given, they should
+    # use it instead, since a bare 0.0 with zero real evidence would be a
+    # false claim, not an absence of one. This is the fix for a real
+    # regression found 2026-09-09: 5 labelled animal clips with
+    # multi_object_count==0 (their real subject was tracked mostly via
+    # RECOVERY, which multi_tracks never sees) lost their alert status when
+    # this feature was swapped in for outside_pixel_fraction with no fallback.
+    detection = _clip_detection_with_tracks([])
+    no_fallback = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    assert no_fallback["multi_object_outside_fraction_weighted"] == 0.0
+    assert no_fallback["multi_object_dominant_outside_fraction"] == 0.0
+
+    with_fallback = spike._multi_object_outside_features(
+        detection, _VERTICAL_ZONE, 60, 60, fallback_outside_fraction=0.83
+    )
+    assert with_fallback["multi_object_outside_fraction_weighted"] == pytest.approx(0.83)
+    assert with_fallback["multi_object_dominant_outside_fraction"] == pytest.approx(0.83)
+    assert with_fallback["multi_object_count"] == 0.0
+
+
+def test_multi_object_outside_features_fallback_ignored_when_real_evidence_exists():
+    # A fallback is only for the zero-evidence case -- it must never override
+    # a real per-object reading, even a fallback that disagrees with it.
+    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 10, 10))]]  # outside, x=0.167
+    detection = _clip_detection_with_tracks(tracks)
+    result = spike._multi_object_outside_features(
+        detection, _VERTICAL_ZONE, 60, 60, fallback_outside_fraction=0.0
+    )
+    assert result["multi_object_dominant_outside_fraction"] == pytest.approx(1.0)
+    assert result["multi_object_outside_fraction_weighted"] == pytest.approx(1.0)
+
+
 def test_extract_clip_features_wires_multi_object_features_into_the_result(monkeypatch):
     square = _rect_contour(5, 5, 10, 10)
     frames = [_fake_frame_detection(0, square)]
@@ -1543,6 +1577,36 @@ def test_extract_clip_features_wires_multi_object_features_into_the_result(monke
         "multi_object_count",
     ):
         assert key in result
+
+
+def test_extract_clip_features_multi_object_falls_back_to_outside_pixel_fraction(monkeypatch):
+    # multi_tracks is empty (e.g. the real subject was mostly tracked via
+    # recovery, which multi_tracks never sees -- see the 5-animal-clip
+    # regression this fallback fixes) but a real best_contour still exists,
+    # so outside_pixel_fraction is genuinely 1.0. The wired-in call must pass
+    # that value through as the fallback, not silently claim 0.0.
+    square = _rect_contour(5, 5, 10, 10)  # base-point x=0.167, outside under _VERTICAL_ZONE
+    frames = [_fake_frame_detection(0, square)]
+    clip_detection = spike.ClipDetection(
+        frames=frames,
+        background=_blank_frame()[:, :, 0],
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=0,
+        total_frames=1,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=[[]],  # no real per-object evidence at all
+    )
+    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+
+    result = spike.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
+
+    assert result is not None
+    assert result["multi_object_count"] == 0.0
+    assert result["outside_pixel_fraction"] == pytest.approx(1.0)
+    assert result["multi_object_dominant_outside_fraction"] == pytest.approx(1.0)
+    assert result["multi_object_outside_fraction_weighted"] == pytest.approx(1.0)
 
 
 def test_extract_clip_features_returns_none_without_motion(monkeypatch, tmp_path):

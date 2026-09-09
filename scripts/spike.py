@@ -1775,7 +1775,12 @@ def _warmup_motion_features(
 
 
 def _multi_object_outside_features(
-    detection: ClipDetection, zone: CameraZone, frame_width: int, frame_height: int
+    detection: ClipDetection,
+    zone: CameraZone,
+    frame_width: int,
+    frame_height: int,
+    *,
+    fallback_outside_fraction: float | None = None,
 ) -> dict[str, float]:
     """Per-object, whole-clip fence-side reading over EVERY persistently-
     tracked object in the scored frames (`detection.multi_tracks`), not just
@@ -1823,13 +1828,48 @@ def _multi_object_outside_features(
     first cut; revisit if `dominant_id` selection near a merge ever looks
     wrong on real clips.
 
+    `fallback_outside_fraction`: `multi_tracks` only sees genuinely
+    background-diffed blobs (`per_frame_blobs`), never a RECOVERED/appearance-
+    matched detection the single-tracked-target pipeline also draws on -- so a
+    clip whose real subject is mostly recovered (a fast, small, intermittently
+    -detected animal, say) can have ZERO real per-object evidence here even
+    though `outside_pixel_fraction` correctly read it. Measured 2026-09-09:
+    swapping this feature in for `outside_pixel_fraction` with no fallback
+    cost exactly the 5 labelled animal clips with `multi_object_count == 0`
+    their alert status, all for this reason. When given, both readings default
+    to `fallback_outside_fraction` (typically the caller's own
+    `outside_pixel_fraction` for the same clip) rather than a bare 0.0 when no
+    real per-object evidence exists at all -- 0.0 is a confident "inside"
+    claim this function has no basis for making with zero evidence.
+
     NOT wired into classify() -- reporting/measurement only until proven
     against the labelled corpus, same discipline as `outside_frame_fraction`
-    and `warmup_outside_fraction` before it.
+    and `warmup_outside_fraction` before it. As of 2026-09-09 a straight
+    swap-in for `outside_pixel_fraction` (dominant reading, with this
+    fallback) measured guard=55/429 environment=7/159 animal=15/37
+    incident=10/10 against the shipped guard=23/429 environment=5/159
+    animal=15/37 incident=7/10 -- incident recall genuinely improves (the 3
+    gained clips are exactly the known cam06/21519, cam09/21521, cam10/21523
+    "blank precursor" clips this repo already tracks by ID), but guard leak
+    more than doubles. A frame-count/area "minimum evidence" floor was tried
+    as a fix for the guard leak and REJECTED after checking real per-object
+    data: the thinnest-evidence dominant object in the whole checked sample
+    was the genuinely-valuable cam06/21519 gain (seen in 1 of 4 frames), while
+    the worst guard leaks had the MOST substantial evidence (cam08/4293: 12 of
+    12 frames, largest area in the sample) -- a floor would filter out the
+    exact clip it should keep and leave the exact clips it should suppress.
+    Not usable as a classify() gate until the guard leak's actual cause is
+    understood (needs visual inspection of what the "dominant" object in a
+    leaking guard clip actually is -- a flashlight beam? a second real
+    entity? multi-object tracker fragmentation? -- not a hand-tuned number).
     """
     zeros = {
-        "multi_object_outside_fraction_weighted": 0.0,
-        "multi_object_dominant_outside_fraction": 0.0,
+        "multi_object_outside_fraction_weighted": (
+            0.0 if fallback_outside_fraction is None else fallback_outside_fraction
+        ),
+        "multi_object_dominant_outside_fraction": (
+            0.0 if fallback_outside_fraction is None else fallback_outside_fraction
+        ),
         "multi_object_count": 0.0,
     }
     if not detection.multi_tracks:
@@ -2286,7 +2326,13 @@ def extract_clip_features(
         **_warmup_motion_features(
             detection, zone, frame_width, frame_height, threshold=threshold
         ),
-        **_multi_object_outside_features(detection, zone, frame_width, frame_height),
+        **_multi_object_outside_features(
+            detection,
+            zone,
+            frame_width,
+            frame_height,
+            fallback_outside_fraction=outside_pixel_fraction(points, zone),
+        ),
         "flashlight_subject_fraction": (
             0.0 if not frames_with_box else flashlight_bbox_frames / frames_with_box
         ),

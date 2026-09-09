@@ -459,22 +459,42 @@ extraction is expected (a bare function with no dedicated test suite of its own 
 of thing this refactor should leave better documented and better covered than it found it) — that
 is not "changing behaviour."
 
+**Steps 25 and 28 are DONE (2026-09-09)** — see `docs/phase2_refactor_execution_plan.md` for the
+full step-by-step record and `docs/handoff.md`'s session #15 for the short version. Two decisions
+worth recording here since they affect anyone touching `src/classify.py` or `src/db.py` next:
+
+- **`backtest_results.predicted_class` was WIDENED, not mapped.** `src.classify.classify()` emits
+  eight `*_candidate`/`no_motion`/`unclassified` categories; the CHECK constraint only accepted the
+  planned four-class routing vocabulary (`guard_side`/`outside_alert`/`outside_priority`/
+  `ambiguous`) this step's own plan text specifies below, which was never built. Rather than map the
+  eight measured categories onto those four, schema v6 (`scripts/migrate_schema_v6.py`) widened the
+  constraint to accept both. Mapping would have encoded an alerting policy nobody has validated;
+  choosing one is gated on Ship readiness criterion #3 above, still unset. If that vocabulary is
+  ever actually built, the mapping decision still needs to happen then, not retroactively now.
+- **The `classification` thresholds now live in `config/thresholds.yaml`**, wired via
+  `src.config.ClassificationThresholds` — user-directed 2026-09-09, beyond this brief's original
+  scope but landed alongside it since it's what step 25's "classify.py never hardcodes a number"
+  text below always meant. The file's OLD `classification` section was stale and unconsumed before
+  this (values like `outside_pixel_fraction.alert_min: 0.5` against the real, measured `0.6`) — the
+  16 real values were taken FROM `src.classify`'s code, not reconciled toward the old file. `motion`
+  is untouched and still unconsumed (see step 22 below); `motion_fingerprint()` was verified
+  unchanged by the classification rewrite, so nothing about step 22's future cache key was disturbed.
+
 **Per-step reality check, most valuable to least:**
 
 | step | plan says | what actually exists | verdict |
 | --- | --- | --- | --- |
-| 25 `classify.py` | typed rule engine, reason codes per decision | `scripts/backtest.py::classify()` — one function, no reason codes, string category only | **Extract to `src/classify.py`, add reason codes.** Highest value: every rule's threshold is currently a magic number in one big if-chain with only prose comments explaining why. A typed `ClassificationResult(category, reason, contributing_features)` is the concrete deliverable, and it's what step 25 always wanted for "a future ML resolver" anyway. |
-| 28 `backtester.py` | immutable runs: timestamp, config snapshot/hash, git revision | `src/db.py` has full `backtest_runs`/`backtest_results` schema + insert/query functions **already written and unit-tested** — `scripts/backtest.py` never calls them. Every real run today is a throwaway CSV. | **Wire the existing functions in, don't write new ones.** Cheapest win on this list — the hard part (schema, functions) is done. |
+| 25 `classify.py` | typed rule engine, reason codes per decision | **DONE.** `src/classify.py`: `classify_detailed()` returns `ClassificationResult(category, reason, contributing)`, `classify()` is a one-line wrapper. All 16 thresholds load from `config/thresholds.yaml` via `src.config.ClassificationThresholds`, no hardcoded constants left. | Landed 2026-09-09. Verified byte-identical to the pre-refactor code on the full 678-clip labelled corpus at every intermediate step (extraction, config wiring, reason codes) — see the execution plan doc for the per-step diffs. |
+| 28 `backtester.py` | immutable runs: timestamp, config snapshot/hash, git revision | **DONE.** `src/backtester.py::record_run()` wires the existing `create_run`/`finish_run`/`add_backtest_result` functions in; wired into `scripts/backtest.py::main()` by default (`--no-record` to skip). | Landed 2026-09-09, needed schema v6 (see above) since the existing CHECK constraint couldn't accept a real `classify()` output. |
 | 23 `zones.py` | polyline/side/depth/ignore on top of cached tracks | `src/zones.py` exists, in daily use | **Already done**, just not literally "on top of cached tracks" (see step 22) since nothing is cached yet. No action needed unless step 22 changes its inputs. |
-| 22 `motion.py` | cached zone-independent blob tracks, `EXTRACTOR_VERSION` | `scripts/spike.py::detect_clip` + `src/features.py` do the extraction; the `blob_tracks` table (step 17) exists and nothing writes to it | **Real gap, real risk.** `detect_clip` has 20+ tuning parameters and several sessions of hard-won correctness fixes (warmup handling, anchor sweep, reference-bg veto, the flashlight-candidate work) — extracting it needs the cache key to include every parameter that affects its output, or a config change silently serves stale cached results. Do this only after 25 and 28 are done and stable; it's the riskiest item here. |
+| 22 `motion.py` | cached zone-independent blob tracks, `EXTRACTOR_VERSION` | `scripts/spike.py::detect_clip` + `src/features.py` do the extraction; the `blob_tracks` table (step 17) exists and nothing writes to it | **Real gap, real risk, now next in line.** `detect_clip` has 20+ tuning parameters and several sessions of hard-won correctness fixes (warmup handling, anchor sweep, reference-bg veto, the flashlight-candidate work) — extracting it needs the cache key to include every parameter that affects its output, or a config change silently serves stale cached results. `src.config.ThresholdsConfig.motion_fingerprint()` and `blob_tracks`'s composite key already exist and are tested, so the cache *machinery* is further along than this row implies — but nothing defines `EXTRACTOR_VERSION`, and `motion_fingerprint()` hashes `thresholds.yaml`'s `motion:` section, which is **not** where `detect_clip`'s real parameters live (they're defaults in its own signature). Wiring `motion:` up is the same class of work 25 just did for `classification:`, against a function with 22 parameters and a silent-staleness failure mode instead of 16 values and a loud one — needs its own session. |
 | 24 browser zone editor | draw polyline/depth/ignore in a browser, atomic dated write | **Nothing** — every fence trace to date is "hand the user an upscaled frame, they draw in a paint tool, colour-threshold it back out" (`README.md` section 4) | Real, standalone feature work, not a refactor of anything existing. Lowest priority of the five unless retracing cameras becomes frequent enough that the manual process is the bottleneck — it currently isn't (18 cameras, dated-history schema already handles remounts). |
 | 20/21 backfill/parsing | hardened camera-ID parsing, resumable full backfill | `scripts/meta_backfill.py`/`scripts/download_clips.py`, 17,000+ clips backfilled without incident | Probably fine in practice but **never verified against the original spec** (every caption shape, health-notification formats, flood-wait/reconnect, dedup). Worth a real audit before assuming done, but not urgent — nothing has broken.
 
-**Suggested order for whoever picks this up: 25 → 28 → 22, with 24 and the 20/21 audit as
-separate, lower-priority tracks.** 25 and 28 are pure extraction of things that already work
-correctly, with no dependency between them and no risk to the detection pipeline itself — good
-places to build confidence in the refactor discipline before touching 22, which is the one item
-that can actually make results silently wrong if the cache key is incomplete.
+**Suggested order for whoever picks this up next: 22, with 24 and the 20/21 audit as separate,
+lower-priority tracks.** 25 and 28 (above) are done and verified; 22 is the one item that can
+actually make results silently wrong if its cache key is incomplete, so it deserves a session on
+its own rather than being folded into whatever comes next.
 
 ### Phase 3: Labels, backtester, retrospective sequences
 26. `scripts/label.py`: resumable, prints the clip path by default, optional configured player,

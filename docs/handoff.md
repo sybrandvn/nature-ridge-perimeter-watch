@@ -1,15 +1,17 @@
-# Handoff: detection/classification validated at full-corpus scale; next focus is organising Phase 2's code
+# Handoff: Phase 2 refactor's classify()/backtester steps landed; motion.py caching is next
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-09. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-09, session close #14)" at the very
+picking this up, start at "Handoff for a new agent (2026-09-09, session close #15)" at the very
 bottom, just above "Conventions"** — on branch `feat/phase2-refactor` (cut from `main`, which now
 has all of Phase 1 and Phase 2's empirical detection/classification work merged). The detection
 work itself is in a good, validated state (`prefer_flashlight_candidate` checked clean at full
 16,886-clip corpus scale; the one thing left before it can default on is a business call, not a
-correctness question — see "Ship readiness" in `docs/plan.md`). The next focus, per the user
-directly, is reorganising Phase 2's code into the module boundaries `docs/plan.md` always
-specified, without changing behaviour — see that file's "Phase 2 refactor brief". `docs/plan.md`
-is the full plan
+correctness question — see "Ship readiness" in `docs/plan.md`). Session #15 finished the two
+lowest-risk items from the Phase 2 refactor brief (`classify.py` and `backtester.py`); the next
+focus is `motion.py` caching, the one item in that brief that can actually make results silently
+wrong if done carelessly — see that file's "Phase 2 refactor brief" and
+`docs/phase2_refactor_execution_plan.md` for the full step-by-step record of what session #15 did.
+`docs/plan.md` is the full plan
 and stays authoritative; this file is the short version of where things actually stand and what to do
 next.
 
@@ -1199,6 +1201,104 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-09, session close #15)
+
+**Read this section first — it supersedes #14 for current state.** Same branch
+(`feat/phase2-refactor`), 632 tests passing, working tree clean. This session executed
+`docs/plan.md`'s Phase 2 refactor brief's two lowest-risk items — `classify.py` and
+`backtester.py` — following a written step-by-step plan at
+`docs/phase2_refactor_execution_plan.md`, which has the full per-step record (what moved, every
+verification command, every result). This section is the short version of what changed and what a
+fresh agent needs to know before touching this code.
+
+### What landed
+
+`src/classify.py` now exists: `classify_detailed()` holds the same rule chain
+`scripts/backtest.py::classify()` always had, returning a typed
+`ClassificationResult(category, reason, contributing)` — 15 reason codes, one per rule, so a
+caller can finally say *which* rule produced a category, not just what the category was.
+`classify()` is now a one-line wrapper (`classify_detailed(...).category`) kept for every existing
+caller. `is_blinding_foreground()` moved alongside it. `scripts/backtest.py` keeps only the
+screening harness around them (`run_backtest`, `iter_clips_with_files`, `write_csv`, `main`).
+
+**Beyond the brief's original scope, at the user's explicit direction**: the 16 thresholds
+`classify()` compares against — previously six named module constants plus nine inline magic
+numbers — now live in `config/thresholds.yaml`'s `classification:` section, loaded via a new
+`src.config.ClassificationThresholds` and `load_thresholds_config(...).classification_thresholds()`.
+`classify()`/`is_blinding_foreground()` both take an optional `thresholds:
+ClassificationThresholds | None` parameter, defaulting to a memoised parse of the real file. This
+finally makes true what that file's header comment always claimed ("classify.py never hardcodes a
+number") — **it was false before this session**: nothing loaded that section, and its old values
+were stale and wrong (`outside_pixel_fraction.alert_min: 0.5` against the real, measured `0.6`; a
+whole `aspect_ratio` section whose rule was retired 2026-09-04). **If you go looking at
+`config/thresholds.yaml`'s git history and see those old values, do not treat them as a prior
+"real" operating point to reconcile toward — the new 16 values were taken FROM `src.classify`'s
+code, which was always the actual source of truth.** `motion:` is untouched and still unconsumed —
+see "Next: motion.py caching" below.
+
+One coupling worth knowing about if you ever touch `green_light_ratio_min`:
+`src/features.py`'s `FLASHLIGHT_CANDIDATE_MIN_RATIO` is deliberately pinned to the same value (one
+"is this a real flashlight" bar shared between `classify()` and `scripts.spike`'s track-scoring).
+That used to be visible as two adjacent module constants; now that `classify()`'s side lives in
+YAML the coupling is invisible in the code, so `tests/test_config.py::
+test_flashlight_candidate_ratio_stays_coupled_to_classify_threshold` is what catches a future
+desync. If it ever fails, the fix is almost certainly to also change `FLASHLIGHT_CANDIDATE_MIN_RATIO`
+in `src/features.py`, not to silence the test.
+
+`src/backtester.py::record_run()` wires the `backtest_runs`/`backtest_results` DB functions
+(existing, unit-tested, previously called by nothing) into `scripts/backtest.py::main()`, which now
+records every real run by default (`--no-record` to skip). Needed a schema bump — see next.
+
+**Schema v6** (`scripts/migrate_schema_v6.py`, applied to `data/perimeter_watch.db`, backed up
+first to `data/perimeter_watch.db.bak-2026-09-09-pre-v6`): `backtest_results.predicted_class`'s
+CHECK constraint used to accept only the four-class routing vocabulary
+(`guard_side`/`outside_alert`/`outside_priority`/`ambiguous`) that plan step 25 always specified but
+was never built. `classify()` emits eight different categories instead. The constraint was
+**widened to accept both**, not mapped — collapsing eight measured categories onto four routing
+classes would encode an alerting policy nobody has validated, and picking one is gated on Ship
+readiness criterion #3, still unset. **If you have another copy of this database (a laptop, a
+backup, a second checkout), it needs `uv run python scripts/migrate_schema_v6.py` run against it
+too** — `db.connect()` hard-errors on any schema_version mismatch, so every tool refuses to open an
+unmigrated copy.
+
+### Verification discipline this session actually followed
+
+Every step was checked byte-identical against the pre-refactor code on the full 678-clip labelled
+corpus (`uv run python scripts/backtest.py --labelled-only --out ...`, diffed against a Step-0
+baseline captured before any edit) — extraction, the config wiring, and the reason-code addition
+all came back with **zero mismatches** on every classification-affecting column. The one step
+whose CSV output legitimately differs (adding the `reason` column) was checked by comparing every
+*other* column instead. `scripts/check_incident_regression.py` stayed at 5/5 incident events
+throughout. A full, unlabelled-corpus (16,886 clip) pass was also run after the last commit as an
+additional smoke test — see the execution plan doc's Step 10 for that result if it matters to you;
+it has no pre-refactor baseline to diff against (only a labelled-only one was captured at Step 0),
+so it can only confirm "no crash, sane distribution," not byte-identical output, on the ~16,200
+clips outside the labelled set.
+
+### Next: `motion.py` caching (plan step 22) — the risky one, do it its own session
+
+This is the one item left in the Phase 2 refactor brief that can make results silently *wrong*
+rather than just slow, so give it a session of its own rather than folding it into something else.
+`scripts/spike.py::detect_clip` takes 22 tuning keyword arguments and carries several sessions of
+hard-won correctness fixes (warmup handling, anchor sweep, reference-bg veto, the
+flashlight-candidate work) — extracting it to a cached `src/motion.py` needs the cache key to cover
+every parameter that affects its output, or a config change will silently serve stale cached
+results.
+
+Two things worth knowing before starting, found this session while doing the equivalent work for
+`classify.py`: the cache *machinery* is further along than the brief implies —
+`src.config.ThresholdsConfig.motion_fingerprint()` and the `blob_tracks` table (composite key on
+`extractor_version` + `motion_fingerprint`) already exist and are tested. What's missing is (1) no
+`EXTRACTOR_VERSION` constant is defined anywhere, and (2) `motion_fingerprint()` hashes
+`thresholds.yaml`'s `motion:` section, which is **not** where `detect_clip`'s real parameters
+live — they're defaults in its own function signature, untouched by this session on purpose
+(nothing in `scripts/spike.py` changed). Wiring `motion:` up is the same class of work this session
+just did for `classification:` (real values from the code, a typed loader, `detect_clip` reads from
+it instead of hardcoded defaults) — but against a function with 22 parameters instead of 16 values,
+and a failure mode that's silent (stale cache) instead of loud (wrong category, caught immediately
+by the incident regression check). Same discipline applies: byte-identical corpus verification at
+every step, and don't retune anything while moving it.
 
 ## Handoff for a new agent (2026-09-09, session close #14)
 

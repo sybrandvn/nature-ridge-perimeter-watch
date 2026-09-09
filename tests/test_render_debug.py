@@ -5,8 +5,14 @@ import numpy as np
 import pytest
 
 from scripts import render_debug
-from scripts.render_debug import DEFAULTS, _draw_dashed_rect, _draw_light_mask, render_clip
-from scripts.spike import detect_clip
+from scripts.render_debug import (
+    DEFAULTS,
+    _draw_dashed_rect,
+    _draw_light_mask,
+    _draw_multi_tracks,
+    render_clip,
+)
+from scripts.spike import TrackedObject, detect_clip
 from src.config import CameraZone
 
 HEIGHT, WIDTH = 48, 64
@@ -130,6 +136,63 @@ def test_draw_dashed_rect_draws_fewer_pixels_than_a_solid_rectangle():
     cv2.rectangle(solid, (5, 5), (55, 40), (255, 0, 255), 2)
     assert dashed.any()
     assert np.count_nonzero(dashed) < np.count_nonzero(solid)
+
+
+def test_draw_multi_tracks_marks_a_real_flashlight_object_distinctly():
+    # Two persistent objects in the same frame: track 0 sits on a real,
+    # highly-saturated green patch (the flashlight); track 1 sits on plain
+    # grey (the actual subject). Only track 0's box/label should be drawn in
+    # COLOR_LIGHT and carry "FLASHLIGHT" -- confirms the fix for the render
+    # never marking ANY multi-track object as a flashlight before this.
+    frame = np.full((HEIGHT, WIDTH, 3), 90, dtype=np.uint8)
+    cv2.rectangle(frame, (2, 2), (12, 12), (40, 255, 40), thickness=-1)  # real flashlight hue
+    flashlight_track = TrackedObject(track_id=0, bbox=(2, 2, 12, 12))
+    subject_track = TrackedObject(track_id=1, bbox=(40, 30, 60, 46))
+
+    canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    _draw_multi_tracks(
+        canvas,
+        [flashlight_track, subject_track],
+        scale=1,
+        multi_track_history={},
+        frame_bgr=frame,
+    )
+
+    # The flashlight track's box border is drawn in COLOR_LIGHT.
+    assert tuple(int(c) for c in canvas[2, 7]) == render_debug.COLOR_LIGHT
+    # The subject track's box border is its own stable per-id colour, not
+    # COLOR_LIGHT -- confirms the check is per-object, not clip-wide.
+    subject_color = render_debug._track_color(1)
+    assert tuple(int(c) for c in canvas[30, 50]) == subject_color
+    assert subject_color != render_debug.COLOR_LIGHT
+
+
+def test_draw_multi_tracks_skips_the_flashlight_check_without_a_frame():
+    # frame_bgr=None (the default, and every pre-existing caller) must behave
+    # exactly as before this feature existed -- no crash, no flashlight check.
+    canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    track = TrackedObject(track_id=0, bbox=(2, 2, 12, 12))
+
+    _draw_multi_tracks(canvas, [track], scale=1, multi_track_history={})
+
+    assert tuple(int(c) for c in canvas[2, 7]) == render_debug._track_color(0)
+
+
+def test_draw_multi_tracks_daylight_gated_suppresses_the_flashlight_check():
+    # Same real flashlight-hue patch as the first test, but daylight_gated --
+    # must not mark it, same "a flashlight in daylight footage isn't
+    # necessarily the guard's" caution the single-track check already
+    # applies via its own daylight_gated parameter.
+    frame = np.full((HEIGHT, WIDTH, 3), 90, dtype=np.uint8)
+    cv2.rectangle(frame, (2, 2), (12, 12), (40, 255, 40), thickness=-1)
+    track = TrackedObject(track_id=0, bbox=(2, 2, 12, 12))
+    canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+    _draw_multi_tracks(
+        canvas, [track], scale=1, multi_track_history={}, frame_bgr=frame, daylight_gated=True
+    )
+
+    assert tuple(int(c) for c in canvas[2, 7]) == render_debug._track_color(0)
 
 
 def test_render_clip_returns_none_for_an_unreadable_clip(tmp_path, zone):

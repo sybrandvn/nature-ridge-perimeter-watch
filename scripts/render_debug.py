@@ -414,6 +414,9 @@ def _draw_multi_tracks(
     *,
     scale: int,
     multi_track_history: dict[int, list[tuple[int, int]]],
+    frame_bgr: np.ndarray | None = None,
+    exclude_mask: np.ndarray | None = None,
+    daylight_gated: bool = False,
 ) -> None:
     """Outline every persistently-identified subject from
     `ClipDetection.multi_tracks` in its own stable colour, plus a short fading
@@ -424,9 +427,29 @@ def _draw_multi_tracks(
     Purely additive: drawn UNDER the single-track box/trail/label so the
     feature-scoring track (still the operator's primary reference) stays on
     top and unobscured.
+
+    Added 2026-09-09: each object is ALSO checked for flashlight-ness, the
+    same `flashlight_bbox_overlap > FLASHLIGHT_SUBJECT_THRESHOLD` test the
+    single tracked box already uses below -- previously only that ONE object
+    was ever checked, so a real flashlight sitting in a DIFFERENT persistent
+    track (the classify() rule `multi_object_flashlight` now catches, e.g.
+    cam07/11174) never showed up as a flashlight in the render at all, even
+    though the classifier's own reason code said it was. `frame_bgr=None`
+    (the default, and every pre-existing caller/test) skips the check
+    entirely and draws exactly as before -- purely additive.
     """
     for track in tracks:
-        color = _track_color(track.track_id)
+        x0, y0, x1, y1 = track.bbox  # corner form, unscaled -- see the bug-fix
+        # note in _multi_object_outside_features for why this matters.
+        is_flashlight = (
+            frame_bgr is not None
+            and not daylight_gated
+            and flashlight_bbox_overlap(
+                frame_bgr, (x0, y0, x1 - x0, y1 - y0), exclude_mask=exclude_mask
+            )
+            > FLASHLIGHT_SUBJECT_THRESHOLD
+        )
+        color = COLOR_LIGHT if is_flashlight else _track_color(track.track_id)
         x0, y0, x1, y1 = (c * scale for c in track.bbox)
         centroid = (int((x0 + x1) / 2), int((y0 + y1) / 2))
         history = multi_track_history.setdefault(track.track_id, [])
@@ -443,6 +466,8 @@ def _draw_multi_tracks(
         label = f"#{track.track_id}"
         if track.merged_ids:
             label += "+" + "+".join(f"#{i}" for i in track.merged_ids)
+        if is_flashlight:
+            label += " FLASHLIGHT"
         _text(canvas, label, (x0, min(canvas.shape[0] - 2, y1 + 12)), color=color, scale=0.35)
 
 
@@ -700,6 +725,9 @@ def render_clip(
                     detection.multi_tracks[detected.index],
                     scale=scale,
                     multi_track_history=multi_track_history,
+                    frame_bgr=detected.frame,
+                    exclude_mask=ignore_mask,
+                    daylight_gated=daylight_gated,
                 )
 
             instant_speed = None

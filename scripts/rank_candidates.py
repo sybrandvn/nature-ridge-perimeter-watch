@@ -2,11 +2,14 @@
 
 Fits a small hand-rolled logistic regression (no sklearn; matches the rest of
 this repo) on the labelled ground truth -- positive = animal/incident,
-negative = every other real class -- over the 19 numeric features in
-`scripts.spike.FEATURE_COLUMNS`, scores every downloaded+detected clip in the
-corpus, and writes a per-camera stratified review queue: the top N unlabelled
-clips per camera by score, plus a matching `.message_ids` file for
-`scripts/label.py --message-ids-file`.
+negative = every other real class -- over every numeric feature in
+`scripts.spike.FEATURE_COLUMNS` (NUMERIC_FEATURES; deliberately not a hardcoded
+count here -- FEATURE_COLUMNS has grown repeatedly and a number in a docstring
+goes stale silently, which is exactly what happened to this line before
+2026-09-09: it said "19" long after the real count had grown past 50), scores
+every downloaded+detected clip in the corpus, and writes a per-camera
+stratified review queue: the top N unlabelled clips per camera by score, plus
+a matching `.message_ids` file for `scripts/label.py --message-ids-file`.
 
 Always uses whatever detector `scripts.spike.extract_clip_features` currently
 wraps -- rerun this whenever the detector changes, since every feature value
@@ -67,8 +70,15 @@ _NON_FEATURE_COLUMNS = (
     "label",
     "time_of_day",
     "is_daylight",
-    "has_reference_background",
 )
+# `has_reference_background` was excluded here until 2026-09-09 -- restored as
+# a real model input. `scenery_motion_fraction` reads 0.0 both when no scenery
+# motion was found AND when no reference existed to check against at all (a
+# real distinction docs/handoff.md explicitly warns not to conflate -- see its
+# "do not let 'no reference' silently read as 'no scenery motion'" note); with
+# the disambiguating flag excluded, the model could never tell those two
+# cases apart. Costs nothing when a value is missing (every row gets 0.0/1.0,
+# see the `NUMERIC_FEATURES` population loops below).
 NUMERIC_FEATURES = tuple(c for c in FEATURE_COLUMNS if c not in _NON_FEATURE_COLUMNS)
 POSITIVE_LABELS = ("animal", "incident")
 NEGATIVE_LABELS = ("guard", "environment", "resident", "unknown")
@@ -301,6 +311,69 @@ def leave_one_out_auc(x: np.ndarray, y: np.ndarray, **fit_kwargs: Any) -> float:
     return auc(scores[pos], scores[~pos])
 
 
+# Below this line: per-camera standardisation (docs/detection_improvement_
+# review.md section 5.1), added 2026-09-09, opt-in via --per-camera-standardize
+# (default off until measured -- see rank_and_write's own docstring for the
+# measurement this session ran before considering flipping that default).
+#
+# docs/gate2_separability_finding.md's own "Can we find similar events in the
+# corpus?" section names the real failure this targets: only ~1.5% of the
+# corpus is labelled, coverage is wildly uneven per camera (cam08 28.4%,
+# cam07 0.35%), and the model ends up learning "not guard-like FOR THE SMALL,
+# WELL-LABELLED CAMERAS" as its proxy for positive -- cam07, which has almost
+# no labels, reads as uniformly anomalous and dominates the top of the queue
+# for the wrong reason. That doc measured standardising per camera fixes this
+# (top-500 recall 5/15 -> 9/15) but it was never implemented -- until now.
+#
+# Uses EVERY detected clip for a camera (not just its labelled ones) to define
+# that camera's own "normal" -- exactly what a labelled-only mean/std cannot
+# do for a camera like cam07 that has almost no labels but thousands of real
+# clips establishing its own baseline.
+MIN_CAMERA_ROWS_FOR_OWN_STATS = 5
+
+
+def per_camera_stats(
+    rows: list[dict[str, Any]], features: tuple[str, ...]
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Per-camera (mean, std) over `features`, from EVERY row given (a caller
+    should pass every detected clip for the camera's own baseline to be
+    meaningful, not just labelled ones). Degenerate std (a feature that never
+    varies for this camera, or a camera with fewer than
+    MIN_CAMERA_ROWS_FOR_OWN_STATS rows) reads as std=1.0, same convention as
+    the existing global standardisation's own `std[std == 0] = 1.0`."""
+    by_camera: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_camera[row["camera_id"]].append(row)
+    stats: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for camera_id, camera_rows in by_camera.items():
+        if len(camera_rows) < MIN_CAMERA_ROWS_FOR_OWN_STATS:
+            continue
+        x = np.array([[r[f] for f in features] for r in camera_rows])
+        mean = x.mean(axis=0)
+        std = x.std(axis=0)
+        std[std == 0] = 1.0
+        stats[camera_id] = (mean, std)
+    return stats
+
+
+def standardize_per_camera(
+    rows: list[dict[str, Any]],
+    features: tuple[str, ...],
+    camera_stats: dict[str, tuple[np.ndarray, np.ndarray]],
+    global_mean: np.ndarray,
+    global_std: np.ndarray,
+) -> np.ndarray:
+    """Standardise each row against ITS OWN camera's (mean, std) from
+    `camera_stats`, falling back to the given global (mean, std) for any
+    camera not in `camera_stats` (too few of its own rows -- see
+    `per_camera_stats`'s `MIN_CAMERA_ROWS_FOR_OWN_STATS` floor)."""
+    out = np.zeros((len(rows), len(features)))
+    for i, row in enumerate(rows):
+        mean, std = camera_stats.get(row["camera_id"], (global_mean, global_std))
+        out[i] = [(row[f] - m) / s for f, m, s in zip(features, mean, std, strict=True)]
+    return out
+
+
 def clip_duration_seconds(file_path: str) -> float:
     cap = cv2.VideoCapture(file_path)
     try:
@@ -361,29 +434,106 @@ def stratified_top_n(
 
 
 def rank_and_write(
-    rows: list[dict[str, Any]], *, top_per_camera: int, out_path: str
+    rows: list[dict[str, Any]],
+    *,
+    top_per_camera: int,
+    out_path: str,
+    per_camera_standardize: bool = False,
 ) -> list[dict[str, Any]]:
     """Fit on the labelled+detected rows, score every detected row, and write
-    the per-camera stratified unlabelled queue. Returns the written queue."""
+    the per-camera stratified unlabelled queue. Returns the written queue.
+
+    `per_camera_standardize` (default False -- see the module's own top-level
+    docstring section on this): when True, every row is standardised against
+    its OWN camera's (mean, std) -- computed from ALL of that camera's
+    detected rows, not just labelled ones -- rather than one global mean/std
+    over the labelled set.
+
+    Measured 2026-09-09 against the full labelled corpus's cached feature
+    vectors (664 clips with a real detection -> 348 events after
+    prefer_longest_per_event): LOO AUC 0.884 (global) -> 0.755 (per-camera) --
+    a real, substantial DROP on this specific measurement, not the improvement
+    docs/gate2_separability_finding.md's earlier finding suggested.
+
+    Read that comparison carefully before trusting it either way -- it is
+    NOT the same test that doc ran, and the difference matters: this
+    measurement's per-camera stats were built from the LABELLED SUBSET alone
+    (no full-corpus decode was run this session -- 16,886 clips through
+    detect_clip is a multi-hour job), so a sparsely-labelled camera's "own"
+    mean/std here is still built from only a handful of rows, which is
+    exactly the population per-camera standardisation is supposed to need
+    MORE data than that to help with. `docs/gate2_separability_finding.md`'s
+    original finding measured something different: corpus-wide top-500 RANK
+    RECALL against the full 16.5k-clip corpus (using every clip, including
+    unlabelled ones, to define each camera's baseline) -- the real target
+    case (a camera like cam07 with thousands of clips and almost no labels)
+    is precisely what this cheaper measurement cannot exercise, since it only
+    ever sees the labelled subset.
+
+    Net: this session's measurement is a real negative result under labelled-
+    only conditions, and is NOT evidence against the original corpus-wide
+    finding, which used a materially different (and more expensive) test. The
+    machinery (`per_camera_stats`/`standardize_per_camera`) is built, tested,
+    and available via this flag -- but flipping the default needs the
+    original, full-corpus-decode measurement re-run and re-confirmed, not
+    inferred from this cheaper substitute. Left available, off by default.
+    """
     detected = [r for r in rows if r.get("detected")]
     labelled = [r for r in detected if r["label"] in POSITIVE_LABELS + NEGATIVE_LABELS]
     if not labelled:
         raise ValueError("no labelled+detected rows to fit against")
 
-    x_labelled = np.array([[r[f] for f in NUMERIC_FEATURES] for r in labelled])
-    y_labelled = np.array([1.0 if r["label"] in POSITIVE_LABELS else 0.0 for r in labelled])
-    mean = x_labelled.mean(axis=0)
-    std = x_labelled.std(axis=0)
-    std[std == 0] = 1.0
-    x_labelled_std = (x_labelled - mean) / std
+    # Fit and cross-validate on one row per physical EVENT, not one per clip
+    # (fixed 2026-09-09; see docs/detection_improvement_review.md section
+    # 1.3). Labels are event-shared -- both the short "(Initial*)" preview and
+    # the fuller "(Stopped*)" clip of the same trigger carry the identical
+    # label (docs/plan.md's "Ground truth labels") -- so fitting per clip
+    # trains near-duplicate rows for the same class, and leave_one_out_auc's
+    # hold-one-out was near-meaningless: holding out one clip while its
+    # near-identical sibling stayed in training measures almost nothing.
+    # prefer_longest_per_event already existed for exactly this collapse
+    # (used on the unlabelled queue below since 2026-08-30); applying it here
+    # too also drops blank/duplicate startup rows from the fit for free, since
+    # the longest clip in an event is never the blank/duplicate one -- see
+    # scripts/label.py's schema-v5 note on why a blank precursor still
+    # inherits its event's real label despite having nothing to show.
+    labelled_for_fit = prefer_longest_per_event(labelled)
+
+    y_labelled = np.array(
+        [1.0 if r["label"] in POSITIVE_LABELS else 0.0 for r in labelled_for_fit]
+    )
+    x_labelled_raw = np.array([[r[f] for f in NUMERIC_FEATURES] for r in labelled_for_fit])
+    global_mean = x_labelled_raw.mean(axis=0)
+    global_std = x_labelled_raw.std(axis=0)
+    global_std[global_std == 0] = 1.0
+
+    if per_camera_standardize:
+        # Every DETECTED row (not just labelled_for_fit) defines a camera's
+        # own baseline -- see per_camera_stats's own docstring for why this
+        # is the whole point.
+        camera_stats = per_camera_stats(detected, NUMERIC_FEATURES)
+        x_labelled_std = standardize_per_camera(
+            labelled_for_fit, NUMERIC_FEATURES, camera_stats, global_mean, global_std
+        )
+    else:
+        x_labelled_std = (x_labelled_raw - global_mean) / global_std
 
     weights = fit_logistic(x_labelled_std, y_labelled)
     loo = leave_one_out_auc(x_labelled_std, y_labelled)
     n_pos = int(y_labelled.sum())
-    print(f"labelled rows: {len(labelled)} ({n_pos} positive) -- leave-one-out AUC: {loo:.3f}")
+    print(
+        f"labelled rows: {len(labelled)} clips -> {len(labelled_for_fit)} events "
+        f"({n_pos} positive) -- leave-one-out AUC: {loo:.3f}"
+        f"{' (per-camera standardised)' if per_camera_standardize else ''}"
+    )
 
-    x_all = np.array([[r[f] for f in NUMERIC_FEATURES] for r in detected])
-    x_all_std = (x_all - mean) / std
+    if per_camera_standardize:
+        x_all_std = standardize_per_camera(
+            detected, NUMERIC_FEATURES, camera_stats, global_mean, global_std
+        )
+    else:
+        x_all_raw = np.array([[r[f] for f in NUMERIC_FEATURES] for r in detected])
+        x_all_std = (x_all_raw - global_mean) / global_std
     scores = predict_proba(x_all_std, weights)
     for row, score in zip(detected, scores, strict=True):
         row["score"] = round(float(score), 3)
@@ -662,6 +812,14 @@ def main() -> None:  # pragma: no cover - requires the real corpus/db
         action="store_true",
         help="disable the reference-background scenery veto, for before/after comparison",
     )
+    parser.add_argument(
+        "--per-camera-standardize",
+        action="store_true",
+        help="standardise each feature against its OWN camera's mean/std (over every"
+        " detected clip for that camera, not just labelled ones) instead of one global"
+        " mean/std over the labelled set -- off by default, see rank_and_write's"
+        " docstring for the measurement behind that default",
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
@@ -685,7 +843,12 @@ def main() -> None:  # pragma: no cover - requires the real corpus/db
     conn.close()
 
     print(f"detected: {sum(1 for r in rows if r.get('detected'))}/{len(rows)}")
-    rank_and_write(rows, top_per_camera=args.top_per_camera, out_path=args.out)
+    rank_and_write(
+        rows,
+        top_per_camera=args.top_per_camera,
+        out_path=args.out,
+        per_camera_standardize=args.per_camera_standardize,
+    )
     if args.maintenance_out:
         write_maintenance_candidates(
             rows, top_per_camera=args.top_per_camera, out_path=args.maintenance_out

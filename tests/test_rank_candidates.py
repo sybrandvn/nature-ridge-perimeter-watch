@@ -48,6 +48,57 @@ def test_leave_one_out_auc_on_separable_data():
     assert rc.leave_one_out_auc(x, y, iterations=500) > 0.9
 
 
+def test_per_camera_stats_uses_own_camera_mean_and_std():
+    rows = [
+        {"camera_id": "cam01", "f": v}
+        for v in (10.0, 12.0, 14.0, 16.0, 18.0)  # mean 14, std ~2.83
+    ] + [
+        {"camera_id": "cam02", "f": v}
+        for v in (100.0, 102.0, 104.0, 106.0, 108.0)  # mean 104
+    ]
+    stats = rc.per_camera_stats(rows, ("f",))
+    mean1, std1 = stats["cam01"]
+    mean2, std2 = stats["cam02"]
+    assert mean1[0] == pytest.approx(14.0)
+    assert mean2[0] == pytest.approx(104.0)
+    assert std1[0] == pytest.approx(std2[0])  # same spread, just shifted
+
+
+def test_per_camera_stats_skips_a_camera_with_too_few_rows():
+    rows = [{"camera_id": "cam01", "f": v} for v in (1.0, 2.0)]  # under the floor
+    stats = rc.per_camera_stats(rows, ("f",))
+    assert "cam01" not in stats
+
+
+def test_per_camera_stats_degenerate_std_reads_as_one():
+    rows = [{"camera_id": "cam01", "f": 5.0} for _ in range(6)]  # never varies
+    stats = rc.per_camera_stats(rows, ("f",))
+    _, std = stats["cam01"]
+    assert std[0] == pytest.approx(1.0)
+
+
+def test_standardize_per_camera_uses_each_rows_own_camera():
+    rows = [
+        {"camera_id": "cam01", "f": 14.0},  # cam01's own mean -- should standardise to 0
+        {"camera_id": "cam02", "f": 104.0},  # cam02's own mean -- should also standardise to 0
+    ]
+    camera_stats = {
+        "cam01": (np.array([14.0]), np.array([2.0])),
+        "cam02": (np.array([104.0]), np.array([2.0])),
+    }
+    x = rc.standardize_per_camera(
+        rows, ("f",), camera_stats, np.array([59.0]), np.array([45.0])
+    )
+    assert x[0, 0] == pytest.approx(0.0)
+    assert x[1, 0] == pytest.approx(0.0)
+
+
+def test_standardize_per_camera_falls_back_to_global_for_an_unknown_camera():
+    rows = [{"camera_id": "cam99", "f": 10.0}]
+    x = rc.standardize_per_camera(rows, ("f",), {}, np.array([0.0]), np.array([5.0]))
+    assert x[0, 0] == pytest.approx(2.0)  # (10 - 0) / 5, the global stats
+
+
 def test_stratified_top_n_caps_per_camera_not_globally():
     rows = [
         {"camera_id": "cam01", "score": s} for s in (0.9, 0.8, 0.7, 0.6)
@@ -98,6 +149,33 @@ def test_rank_and_write_scores_and_writes_only_unlabelled(tmp_path: Path):
     ids_path = out_path.with_suffix(".message_ids")
     assert ids_path.exists()
     assert set(ids_path.read_text().split()) == {"3", "4"}
+
+
+def test_rank_and_write_per_camera_standardize_does_not_crash_and_still_scores(tmp_path: Path):
+    # cam01: a small, well-labelled camera (matches this option's motivating
+    # case, docs/gate2_separability_finding.md's cam08-style camera).
+    # cam02: many detected clips, almost none labelled (the cam07-style
+    # camera the option exists for) -- must still get a real per-camera
+    # baseline from its own unlabelled volume.
+    rows = [
+        _detected_row("cam01", 1, "animal", aspect_ratio=0.5, jitter=1.0),
+        _detected_row("cam01", 2, "guard", aspect_ratio=1.2, green_light_ratio=0.3),
+        _detected_row("cam01", 3, "guard", aspect_ratio=1.1, green_light_ratio=0.25),
+        _detected_row("cam01", 4, "guard", aspect_ratio=1.15, green_light_ratio=0.28),
+        _detected_row("cam01", 5, "guard", aspect_ratio=1.05, green_light_ratio=0.32),
+        _detected_row("cam01", 6, None, aspect_ratio=0.5, jitter=1.0),  # unlabelled, animal-like
+    ] + [
+        _detected_row("cam02", 100 + i, None, aspect_ratio=1.0 + i * 0.01)
+        for i in range(10)
+    ]
+    out_path = tmp_path / "candidates.csv"
+
+    queue = rc.rank_and_write(
+        rows, top_per_camera=10, out_path=str(out_path), per_camera_standardize=True
+    )
+
+    assert out_path.exists()
+    assert all("score" in r for r in queue)
 
 
 def _write_video(path: Path, num_frames: int, fps: float = 5.0) -> str:

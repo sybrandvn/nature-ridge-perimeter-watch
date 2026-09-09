@@ -544,6 +544,8 @@ class ClassificationThresholds:
     solidity_max: float
     blob_white_fraction_min: float
     long_flare_frames_min: float
+    neighbour_subject_height_min: float
+    neighbour_subject_height_max: float
 
 
 # field name -> (yaml section, yaml key). The nesting exists for the humans
@@ -565,6 +567,8 @@ _CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
     "solidity_max": ("insect", "solidity_max"),
     "blob_white_fraction_min": ("blinding", "blob_white_fraction_min"),
     "long_flare_frames_min": ("blinding", "long_flare_frames_min"),
+    "neighbour_subject_height_min": ("neighbour", "subject_height_min"),
+    "neighbour_subject_height_max": ("neighbour", "subject_height_max"),
 }
 
 

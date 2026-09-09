@@ -16,7 +16,7 @@ from typing import Any
 
 from src.errors import DbError
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # What the event was. Shared by every clip in an event (see labels.label below) --
 # a startup/prefix clip that's part of an `incident` event is still `incident`, just
@@ -38,13 +38,14 @@ VALID_STARTUP_STATES = ("clear", "blank", "duplicate")
 VALID_SOURCES = ("live", "backfill")
 # The four routing classes docs/plan.md step 25 always intended
 # (guard_side/outside_alert/outside_priority/ambiguous) were never built --
-# src.classify.classify() emits the eight *_candidate/no_motion/unclassified
-# categories below instead, which is what backtest_results actually needs to
-# store (schema v6, 2026-09-09). Widened rather than replaced: mapping the
-# eight measured categories onto the planned four would encode an alerting
-# policy nobody has validated, and choosing one is gated on Ship readiness
-# criterion #3 in docs/plan.md, still unset. The four-class set is kept in
-# case that vocabulary is ever actually built.
+# src.classify.classify() emits the *_candidate/no_motion/unclassified
+# categories below instead (nine as of 2026-09-09's neighbour_candidate,
+# schema v7 -- was eight/schema v6), which is what backtest_results actually
+# needs to store. Widened rather than replaced: mapping the measured
+# categories onto the planned four would encode an alerting policy nobody has
+# validated, and choosing one is gated on Ship readiness criterion #3 in
+# docs/plan.md, still unset. The four-class set is kept in case that
+# vocabulary is ever actually built.
 VALID_PREDICTIONS = (
     "guard_side",
     "outside_alert",
@@ -56,6 +57,7 @@ VALID_PREDICTIONS = (
     "environment_candidate",
     "insect_candidate",
     "resident_candidate",
+    "neighbour_candidate",
     "unclassified",
     "no_motion",
 )
@@ -142,7 +144,7 @@ CREATE TABLE IF NOT EXISTS backtest_results (
             'guard_side', 'outside_alert', 'outside_priority', 'ambiguous',
             'guard_candidate', 'animal_candidate', 'incident_candidate',
             'environment_candidate', 'insect_candidate', 'resident_candidate',
-            'unclassified', 'no_motion'
+            'neighbour_candidate', 'unclassified', 'no_motion'
         )
     ),
     reason_codes_json TEXT NOT NULL,

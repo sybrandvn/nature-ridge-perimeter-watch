@@ -362,6 +362,48 @@ def test_classify_insect_candidate():
     assert classify(_features(jitter=60, solidity=0.5)) == "insect_candidate"
 
 
+def _neighbour_features(**overrides) -> dict[str, float]:
+    base = _features(
+        outside_pixel_fraction=0.9,
+        uncalibrated=0.0,
+        subject_height_m=1.3,
+        is_daylight=True,
+    )
+    base.update(overrides)
+    return base
+
+
+def test_classify_neighbour_candidate_person_sized_outside_daylight():
+    assert classify(_neighbour_features()) == "neighbour_candidate"
+
+
+def test_classify_neighbour_candidate_requires_real_daylight_not_a_pixel_statistic():
+    # color_fraction alone (an image statistic) must not substitute for the
+    # real is_daylight signal -- same "colour is not a daylight proxy" lesson
+    # as the inside-only fallback's own resident/guard split.
+    assert classify(_neighbour_features(is_daylight=False)) == "unclassified"
+
+
+def test_classify_neighbour_candidate_requires_calibrated_camera():
+    # uncalibrated=1.0 (the default when a camera has no metric calibration)
+    # means subject_height_m is not trustworthy -- must not fire on it.
+    assert classify(_neighbour_features(uncalibrated=1.0)) == "unclassified"
+
+
+def test_classify_neighbour_candidate_rejects_animal_sized_subject():
+    assert classify(_neighbour_features(subject_height_m=0.3)) == "unclassified"
+
+
+def test_classify_neighbour_candidate_rejects_too_tall_subject():
+    assert classify(_neighbour_features(subject_height_m=2.6)) == "unclassified"
+
+
+def test_classify_neighbour_candidate_never_overrides_an_earlier_rule():
+    # A real flashlight sighting must win even if the blob also happens to be
+    # person-sized, outside, and in daylight -- rule order is load-bearing.
+    assert classify(_neighbour_features(green_light_ratio=0.2)) == "guard_candidate"
+
+
 def test_classify_unclassified_when_nothing_fires():
     assert classify(_features()) == "unclassified"
 

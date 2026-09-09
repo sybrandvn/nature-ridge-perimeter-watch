@@ -546,6 +546,12 @@ _GOLDEN_THRESHOLDS = {
     "solidity_max": 0.85,
     "blob_white_fraction_min": 0.4,
     "long_flare_frames_min": 18.0,
+    # neighbour_candidate, added 2026-09-09 (docs/detection_improvement_review.md
+    # section 2.2): person-sized (real-world height) + outside + real daylight.
+    # 4/5 labelled neighbour clips fire (3/3 events); see src/classify.py's
+    # docstring for the full derivation and the one miss's explanation.
+    "neighbour_subject_height_min": 0.9,
+    "neighbour_subject_height_max": 2.2,
 }
 
 

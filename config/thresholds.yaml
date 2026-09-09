@@ -82,6 +82,15 @@ classification:
   animal:
     row_normalised_area_max: 3000.0
 
+  # classify() docstring, "neighbour_candidate" (added 2026-09-09). Person-sized
+  # outside a fence, in real daylight, on a calibrated camera -- 4/5 labelled
+  # neighbour clips (3/3 events), zero cost to incident/animal/resident/guard;
+  # 3/159 environment clips move from unclassified into this low-priority
+  # review channel.
+  neighbour:
+    subject_height_min: 0.9
+    subject_height_max: 2.2
+
   # classify() docstring, "insect_candidate".
   insect:
     jitter_min: 50

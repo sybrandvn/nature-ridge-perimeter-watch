@@ -193,6 +193,44 @@ Rules:
     barely better than random) -- do not reuse it, that premise inverted for
     real this time, confirmed on a much bigger sample than the original
     2026-08-31 measurement.
+  - neighbour_candidate: outside_pixel_fraction > 0.6 (same threshold the
+    animal/incident rule above uses) and a calibrated, person-sized real-world
+    height (neighbour_subject_height_min=0.9 to _max=2.2 m) and real daylight
+    (`is_daylight`, the same exogenous signal the inside-only fallback below
+    uses, NOT an image statistic -- see that rule's own note on why colour-
+    derived daylight proxies keep failing on this corpus).
+    Added 2026-09-09, from docs/detection_improvement_review.md section 2.2 --
+    the site's neighbour/resident axes ("who, where, when") were already
+    covered by existing features, just never recombined this way. Checked
+    AFTER the animal/incident outside-geometry block (so it only ever catches
+    what that block's median_fence_distance band excludes -- a neighbour
+    typically stands right at the fence, at or under the band's 0.1 lower
+    bound, which is exactly why they fall through that block unclassified
+    rather than being mis-routed into it) and BEFORE insect_candidate
+    (deliberately arbitrary relative to that rule -- see its own note, it
+    fires on 0/22 environment clips under the current tracker and is
+    effectively dead).
+    Measured against the real rule chain, on the labelled corpus's cached
+    feature vectors (678 rows): 4/5 neighbour CLIPS fire (3/3 neighbour
+    EVENTS -- see docs/plan.md's "Ground truth labels" for the event-grouping
+    convention -- since the one miss, cam01/10560, has its own sibling
+    cam01/10561 catch this rule while 10560 itself is already correctly
+    routed to environment_candidate by the earlier animal_row_area rule).
+    Zero cost to incident/animal/resident/guard (0/10, 0/37, 0/8, 0/429
+    change category). Cost: 3/159 environment clips move from unclassified to
+    neighbour_candidate (cam12/3715, cam10/3796, cam10/3855) -- all three are
+    daylight, person-height-shaped false triggers this rule cannot yet tell
+    from a real neighbour without more examples; acceptable, since
+    neighbour_candidate is a low-priority review channel, not the alert
+    channel. Daylight's own rarity in this corpus (304 of 16,887 clips, 1.8%)
+    is what keeps this rule's reach small by construction -- it can only ever
+    fire on clips the sun table already says are genuine daylight.
+    Deliberately does NOT use daytime-outside height as a general subject/noise
+    discriminator -- checked directly, height does NOT separate animal from
+    environment on this population (environment's own height distribution
+    spans the same range guard's does), only species/size. This rule works
+    because it ALSO requires real daylight, which is rare and specific, not
+    because height alone separates real subjects from vegetation.
   - insect_candidate: jitter > 50 and solidity < 0.85
     (measured 2026-08-31: 0/22 environment clips now reach jitter>50 under the
     current tracker -- this rule is effectively dead, the persistent-tracking
@@ -329,9 +367,10 @@ def classify_detailed(
     `warmup_flashlight`, `blob_count_peak`, `blob_count_sustained`,
     `implausible_height`, `blinding_blob_white`, `motion_pixel_sustained`,
     `animal_row_area`, `outside_colour`, `outside_no_colour`,
-    `jitter_solidity`, `inside_only_daylight`, `inside_only_night`,
-    `no_rule_matched`), never renamed or reused for a different rule -- a
-    caller may match on it. `contributing` holds exactly the feature values
+    `outside_person_daylight`, `jitter_solidity`, `inside_only_daylight`,
+    `inside_only_night`, `no_rule_matched`), never renamed or reused for a
+    different rule -- a caller may match on it. `contributing` holds exactly
+    the feature values
     that rule's condition compared, read with the same accessor (`[...]` vs
     `.get(..., default)`) the condition itself uses, so it carries the same
     KeyError contract classify() always has."""
@@ -442,6 +481,23 @@ def classify_detailed(
             },
         )
     if (
+        features["outside_pixel_fraction"] > thresholds.outside_pixel_fraction_min
+        and features.get("uncalibrated", 1.0) == 0.0
+        and thresholds.neighbour_subject_height_min
+        <= (features.get("subject_height_m") or 0.0)
+        <= thresholds.neighbour_subject_height_max
+        and features.get("is_daylight", False)
+    ):
+        return ClassificationResult(
+            "neighbour_candidate",
+            "outside_person_daylight",
+            {
+                "outside_pixel_fraction": features["outside_pixel_fraction"],
+                "subject_height_m": features.get("subject_height_m") or 0.0,
+                "is_daylight": features.get("is_daylight", False),
+            },
+        )
+    if (
         features["jitter"] > thresholds.jitter_min
         and features["solidity"] < thresholds.solidity_max
     ):
@@ -517,6 +573,7 @@ def is_blinding_foreground(
 _EVENT_CATEGORY_PRIORITY = (
     "incident_candidate",
     "animal_candidate",
+    "neighbour_candidate",
     "environment_candidate",
     "insect_candidate",
     "guard_candidate",

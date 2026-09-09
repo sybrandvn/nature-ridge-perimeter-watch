@@ -1462,10 +1462,11 @@ def test_multi_object_outside_features_zero_when_frames_have_no_objects():
 
 
 def test_multi_object_outside_features_single_object_all_outside():
-    # bbox base-point x = (5 + 10/2) / 60 = 0.167 -- left of the x=0.5 fence.
+    # bbox is corner form (x0, y0, x1, y1): a 10x10 box at (5,5)-(15,15).
+    # base-point x = (5 + 15) / 2 / 60 = 0.167 -- left of the x=0.5 fence.
     tracks = [
-        [spike.TrackedObject(track_id=0, bbox=(5, 5, 10, 10))],
-        [spike.TrackedObject(track_id=0, bbox=(5, 5, 10, 10))],
+        [spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))],
+        [spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))],
     ]
     detection = _clip_detection_with_tracks(tracks)
     result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
@@ -1481,8 +1482,9 @@ def test_multi_object_outside_features_dominant_is_the_largest_by_total_area_not
     # even though object 0 appeared in far more frames -- this is exactly the
     # cam07/22393 scenario: a small artifact seen across many frames must not
     # outrank a single genuinely large detection of the real subject.
+    # bbox is corner form (x0, y0, x1, y1).
     small_outside = spike.TrackedObject(track_id=0, bbox=(0, 0, 10, 10))  # x=0.083, outside
-    large_inside = spike.TrackedObject(track_id=1, bbox=(40, 0, 30, 30))  # x=0.917, inside
+    large_inside = spike.TrackedObject(track_id=1, bbox=(40, 0, 70, 30))  # x=0.917, inside
     tracks = [[small_outside]] * 5 + [[large_inside]]
     detection = _clip_detection_with_tracks(tracks)
     result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
@@ -1494,8 +1496,9 @@ def test_multi_object_outside_features_weighted_blends_by_area():
     # Object 0: fully outside, area 100 (10x10). Object 1: fully inside, area
     # 900 (30x30). Weighted average must lean toward object 1's 0.0 (inside),
     # not a plain 50/50 average of the two objects' own fractions.
+    # bbox is corner form (x0, y0, x1, y1).
     outside_obj = spike.TrackedObject(track_id=0, bbox=(0, 0, 10, 10))
-    inside_obj = spike.TrackedObject(track_id=1, bbox=(40, 0, 30, 30))
+    inside_obj = spike.TrackedObject(track_id=1, bbox=(40, 0, 70, 30))
     tracks = [[outside_obj, inside_obj]]
     detection = _clip_detection_with_tracks(tracks)
     result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
@@ -1509,9 +1512,10 @@ def test_multi_object_outside_features_excludes_beyond_depth_cutoff():
     zone = CameraZone(
         fence=((0.5, 0.0), (0.5, 1.0)), outside="left", depth_cutoff=0.5, ignore=()
     )
-    # base-point y = (0+10)/60 = 0.167, below the 0.5 depth cutoff -- ambiguous,
-    # must be excluded entirely rather than read as a false 0.0.
-    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 0, 10, 10))]]
+    # bbox is corner form (x0, y0, x1, y1): base-point y = 10/60 = 0.167,
+    # below the 0.5 depth cutoff -- ambiguous, must be excluded entirely
+    # rather than read as a false 0.0.
+    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 0, 15, 10))]]
     detection = _clip_detection_with_tracks(tracks)
     result = spike._multi_object_outside_features(detection, zone, 60, 60)
     assert result["multi_object_count"] == 0.0
@@ -1542,7 +1546,8 @@ def test_multi_object_outside_features_no_evidence_uses_fallback_not_zero():
 def test_multi_object_outside_features_fallback_ignored_when_real_evidence_exists():
     # A fallback is only for the zero-evidence case -- it must never override
     # a real per-object reading, even a fallback that disagrees with it.
-    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 10, 10))]]  # outside, x=0.167
+    # bbox is corner form; a 10x10 box at (5,5)-(15,15), outside, x=0.167.
+    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
     detection = _clip_detection_with_tracks(tracks)
     result = spike._multi_object_outside_features(
         detection, _VERTICAL_ZONE, 60, 60, fallback_outside_fraction=0.0
@@ -1554,7 +1559,9 @@ def test_multi_object_outside_features_fallback_ignored_when_real_evidence_exist
 def test_extract_clip_features_wires_multi_object_features_into_the_result(monkeypatch):
     square = _rect_contour(5, 5, 10, 10)
     frames = [_fake_frame_detection(0, square)]
-    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 10, 10))]]
+    # TrackedObject.bbox is corner form (x0, y0, x1, y1), matching the same
+    # 10x10 box _rect_contour(5, 5, 10, 10) draws.
+    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
     clip_detection = spike.ClipDetection(
         frames=frames,
         background=_blank_frame()[:, :, 0],

@@ -1879,13 +1879,25 @@ def _multi_object_outside_features(
     areas: dict[int, float] = {}
     for frame_tracks in detection.multi_tracks:
         for obj in frame_tracks:
-            x, y, w, h = obj.bbox
-            point = ((x + w / 2.0) / frame_width, (y + h) / frame_height)
+            # obj.bbox is corner form (x0, y0, x1, y1) -- see _contour_bbox and
+            # track_multiple_objects' own dead-reckoning step, both of which
+            # use this convention, and scripts/render_debug.py's renderer,
+            # which unpacks it the same way. Do NOT read this as (x, y, w, h):
+            # that silently sends the sample point below the frame for any
+            # blob in the lower half (classify_zone has no bounds check and
+            # side_name extrapolates), and turns `areas` into a function of
+            # position rather than size, corrupting `dominant_id`'s "biggest
+            # object" selection. Found and fixed 2026-09-09 -- see
+            # docs/detection_improvement_review.md section 1.1 for the
+            # measured corpus impact (105/141 sampled clips' weighted
+            # fraction changed, 49/141 dominant-object flips >0.5).
+            x0, y0, x1, y1 = obj.bbox
+            point = ((x0 + x1) / 2.0 / frame_width, y1 / frame_height)
             verdict = classify_zone(point, zone)
             if verdict not in ("outside", "inside"):
                 continue
             verdicts.setdefault(obj.track_id, []).append(verdict == "outside")
-            areas[obj.track_id] = areas.get(obj.track_id, 0.0) + float(w * h)
+            areas[obj.track_id] = areas.get(obj.track_id, 0.0) + float((x1 - x0) * (y1 - y0))
 
     if not verdicts:
         return zeros

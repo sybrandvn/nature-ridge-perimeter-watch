@@ -273,7 +273,8 @@ as a triage pointer, never as ground truth.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -295,71 +296,185 @@ def default_thresholds() -> ClassificationThresholds:
     return load_thresholds_config(_REPO_THRESHOLDS_PATH).classification_thresholds()
 
 
-def classify(
+@dataclass(frozen=True)
+class ClassificationResult:
+    """One clip's category plus which rule produced it and the feature values
+    that rule compared. `category` is byte-identical to what classify() has
+    always returned; `reason` and `contributing` are additive (plan.md step 25,
+    2026-09-09 -- see docs/phase2_refactor_execution_plan.md)."""
+
+    category: str
+    reason: str
+    contributing: Mapping[str, float]
+
+
+def classify_detailed(
     features: dict[str, float] | None,
     thresholds: ClassificationThresholds | None = None,
-) -> str:
-    """Pure rule lookup -- see the module docstring for what each rule means and
-    where its thresholds come from. `guard_candidate` is checked first since
-    most rules below assume a real flashlight sighting has already been pulled
-    out. `environment_candidate` (both the blob_count and the metric physics
-    gate) is checked next, before the shape-based rules, so a stormy/windy
-    clip's scattered blobs -- or a geometrically-impossible reading -- don't
-    get read as a shape signal.
+) -> ClassificationResult:
+    """The rule chain itself -- see the module docstring for what each rule
+    means and where its thresholds come from. `guard_candidate` is checked
+    first since most rules below assume a real flashlight sighting has already
+    been pulled out. `environment_candidate` (both the blob_count and the
+    metric physics gate) is checked next, before the shape-based rules, so a
+    stormy/windy clip's scattered blobs -- or a geometrically-impossible
+    reading -- don't get read as a shape signal.
 
     `thresholds` defaults to the repo's real config/thresholds.yaml
     (`default_thresholds()`) when not given; pass an explicit
     `ClassificationThresholds` to vary one value without touching that file
-    (see tests/test_classify.py)."""
+    (see tests/test_classify.py).
+
+    `reason` is one fixed code per rule (`no_features`, `green_light`,
+    `warmup_flashlight`, `blob_count_peak`, `blob_count_sustained`,
+    `implausible_height`, `blinding_blob_white`, `motion_pixel_sustained`,
+    `animal_row_area`, `outside_colour`, `outside_no_colour`,
+    `jitter_solidity`, `inside_only_daylight`, `inside_only_night`,
+    `no_rule_matched`), never renamed or reused for a different rule -- a
+    caller may match on it. `contributing` holds exactly the feature values
+    that rule's condition compared, read with the same accessor (`[...]` vs
+    `.get(..., default)`) the condition itself uses, so it carries the same
+    KeyError contract classify() always has."""
     if thresholds is None:
         thresholds = default_thresholds()
     if features is None:
-        return "no_motion"
+        return ClassificationResult("no_motion", "no_features", {})
     if (
         features["green_light_ratio"] > thresholds.green_light_ratio_min
         or features["green_light_flicker"] > thresholds.green_light_flicker_min
     ):
-        return "guard_candidate"
+        return ClassificationResult(
+            "guard_candidate",
+            "green_light",
+            {
+                "green_light_ratio": features["green_light_ratio"],
+                "green_light_flicker": features["green_light_flicker"],
+            },
+        )
     if features.get("warmup_flashlight_ratio", 0.0) > thresholds.warmup_flashlight_ratio_min:
-        return "guard_candidate"
+        return ClassificationResult(
+            "guard_candidate",
+            "warmup_flashlight",
+            {"warmup_flashlight_ratio": features.get("warmup_flashlight_ratio", 0.0)},
+        )
     if features["blob_count"] > thresholds.blob_count_peak_min:
-        return "environment_candidate"
+        return ClassificationResult(
+            "environment_candidate", "blob_count_peak", {"blob_count": features["blob_count"]}
+        )
     if features.get("blob_count_median", 0.0) > thresholds.blob_count_median_min:
-        return "environment_candidate"
+        return ClassificationResult(
+            "environment_candidate",
+            "blob_count_sustained",
+            {"blob_count_median": features.get("blob_count_median", 0.0)},
+        )
     if (
         features.get("uncalibrated", 1.0) == 0.0
         and features.get("implausible_height_fraction", 0.0)
         > thresholds.implausible_height_fraction_min
     ):
-        return "environment_candidate"
+        return ClassificationResult(
+            "environment_candidate",
+            "implausible_height",
+            {
+                "uncalibrated": features.get("uncalibrated", 1.0),
+                "implausible_height_fraction": features.get("implausible_height_fraction", 0.0),
+            },
+        )
     if (
         features["outside_pixel_fraction"] > thresholds.outside_pixel_fraction_min
         and features["median_fence_distance"] > thresholds.median_fence_distance_min
         and features["median_fence_distance"] < thresholds.median_fence_distance_max
     ):
         if features.get("blob_white_fraction", 0.0) >= thresholds.blob_white_fraction_min:
-            return "environment_candidate"
+            return ClassificationResult(
+                "environment_candidate",
+                "blinding_blob_white",
+                {
+                    "outside_pixel_fraction": features["outside_pixel_fraction"],
+                    "median_fence_distance": features["median_fence_distance"],
+                    "blob_white_fraction": features.get("blob_white_fraction", 0.0),
+                },
+            )
         if (
             features.get("motion_pixel_fraction_median", 0.0)
             > thresholds.motion_pixel_fraction_median_min
         ):
-            return "environment_candidate"
+            return ClassificationResult(
+                "environment_candidate",
+                "motion_pixel_sustained",
+                {
+                    "outside_pixel_fraction": features["outside_pixel_fraction"],
+                    "median_fence_distance": features["median_fence_distance"],
+                    "motion_pixel_fraction_median": features.get(
+                        "motion_pixel_fraction_median", 0.0
+                    ),
+                },
+            )
         if features["color_fraction"] > thresholds.color_fraction_min:
             if features.get("row_normalised_area", 0.0) > thresholds.row_normalised_area_max:
-                return "environment_candidate"
-            return "animal_candidate"
-        return "incident_candidate"
+                return ClassificationResult(
+                    "environment_candidate",
+                    "animal_row_area",
+                    {
+                        "outside_pixel_fraction": features["outside_pixel_fraction"],
+                        "median_fence_distance": features["median_fence_distance"],
+                        "color_fraction": features["color_fraction"],
+                        "row_normalised_area": features.get("row_normalised_area", 0.0),
+                    },
+                )
+            return ClassificationResult(
+                "animal_candidate",
+                "outside_colour",
+                {
+                    "outside_pixel_fraction": features["outside_pixel_fraction"],
+                    "median_fence_distance": features["median_fence_distance"],
+                    "color_fraction": features["color_fraction"],
+                    "row_normalised_area": features.get("row_normalised_area", 0.0),
+                },
+            )
+        return ClassificationResult(
+            "incident_candidate",
+            "outside_no_colour",
+            {
+                "outside_pixel_fraction": features["outside_pixel_fraction"],
+                "median_fence_distance": features["median_fence_distance"],
+                "color_fraction": features["color_fraction"],
+            },
+        )
     if (
         features["jitter"] > thresholds.jitter_min
         and features["solidity"] < thresholds.solidity_max
     ):
-        return "insect_candidate"
+        return ClassificationResult(
+            "insect_candidate",
+            "jitter_solidity",
+            {"jitter": features["jitter"], "solidity": features["solidity"]},
+        )
     if (
         features.get("zone_classifiable_fraction", 0.0) > 0.0
         and features["outside_pixel_fraction"] == 0.0
     ):
-        return "resident_candidate" if features.get("is_daylight", False) else "guard_candidate"
-    return "unclassified"
+        is_daylight = features.get("is_daylight", False)
+        return ClassificationResult(
+            "resident_candidate" if is_daylight else "guard_candidate",
+            "inside_only_daylight" if is_daylight else "inside_only_night",
+            {
+                "zone_classifiable_fraction": features.get("zone_classifiable_fraction", 0.0),
+                "outside_pixel_fraction": features["outside_pixel_fraction"],
+                "is_daylight": is_daylight,
+            },
+        )
+    return ClassificationResult("unclassified", "no_rule_matched", {})
+
+
+def classify(
+    features: dict[str, float] | None,
+    thresholds: ClassificationThresholds | None = None,
+) -> str:
+    """Backwards-compatible category-only view of classify_detailed() -- see
+    that function for the rule chain, the threshold source, and what each
+    reason code means."""
+    return classify_detailed(features, thresholds).category
 
 
 def is_blinding_foreground(

@@ -9,7 +9,13 @@ re-derivation, not a test fix. See src/classify.py's module docstring.
 
 import pytest
 
-from src.classify import classify, classify_event, default_thresholds, is_blinding_foreground
+from src.classify import (
+    classify,
+    classify_detailed,
+    classify_event,
+    default_thresholds,
+    is_blinding_foreground,
+)
 
 
 def _features(**overrides) -> dict[str, float]:
@@ -582,3 +588,198 @@ def test_is_blinding_foreground_default_thresholds_matches_explicit_default():
     assert is_blinding_foreground(features) == is_blinding_foreground(
         features, default_thresholds()
     )
+
+
+# --------------------------------------------------------------------------
+# classify_detailed() -- one test per reason code, asserting both the code and
+# that category matches classify()'s own return for the same features. Every
+# feature combination here is lifted from an existing classify() test above,
+# not invented fresh, so each reason-code assertion rides on an
+# already-validated rule trigger.
+# --------------------------------------------------------------------------
+
+
+def test_reason_no_features():
+    result = classify_detailed(None)
+    assert result.category == "no_motion" == classify(None)
+    assert result.reason == "no_features"
+    assert result.contributing == {}
+
+
+def test_reason_green_light():
+    features = _features(green_light_ratio=0.2)
+    result = classify_detailed(features)
+    assert result.category == "guard_candidate" == classify(features)
+    assert result.reason == "green_light"
+    assert result.contributing == {"green_light_ratio": 0.2, "green_light_flicker": 0.0}
+
+
+def test_reason_warmup_flashlight():
+    features = _features(warmup_flashlight_ratio=0.01)
+    result = classify_detailed(features)
+    assert result.category == "guard_candidate" == classify(features)
+    assert result.reason == "warmup_flashlight"
+    assert result.contributing == {"warmup_flashlight_ratio": 0.01}
+
+
+def test_reason_blob_count_peak():
+    features = _features(blob_count=11)
+    result = classify_detailed(features)
+    assert result.category == "environment_candidate" == classify(features)
+    assert result.reason == "blob_count_peak"
+    assert result.contributing == {"blob_count": 11}
+
+
+def test_reason_blob_count_sustained():
+    features = _features(blob_count_median=4.5)
+    result = classify_detailed(features)
+    assert result.category == "environment_candidate" == classify(features)
+    assert result.reason == "blob_count_sustained"
+    assert result.contributing == {"blob_count_median": 4.5}
+
+
+def test_reason_implausible_height():
+    features = _features(uncalibrated=0.0, implausible_height_fraction=0.6)
+    result = classify_detailed(features)
+    assert result.category == "environment_candidate" == classify(features)
+    assert result.reason == "implausible_height"
+    assert result.contributing == {"uncalibrated": 0.0, "implausible_height_fraction": 0.6}
+
+
+def test_reason_blinding_blob_white():
+    features = _features(
+        outside_pixel_fraction=0.65, median_fence_distance=0.2, blob_white_fraction=0.5
+    )
+    result = classify_detailed(features)
+    assert result.category == "environment_candidate" == classify(features)
+    assert result.reason == "blinding_blob_white"
+    assert result.contributing == {
+        "outside_pixel_fraction": 0.65,
+        "median_fence_distance": 0.2,
+        "blob_white_fraction": 0.5,
+    }
+
+
+def test_reason_motion_pixel_sustained():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        motion_pixel_fraction_median=0.13,
+    )
+    result = classify_detailed(features)
+    assert result.category == "environment_candidate" == classify(features)
+    assert result.reason == "motion_pixel_sustained"
+    assert result.contributing == {
+        "outside_pixel_fraction": 0.65,
+        "median_fence_distance": 0.2,
+        "motion_pixel_fraction_median": 0.13,
+    }
+
+
+def test_reason_animal_row_area():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        color_fraction=0.2,
+        row_normalised_area=3500.0,
+    )
+    result = classify_detailed(features)
+    assert result.category == "environment_candidate" == classify(features)
+    assert result.reason == "animal_row_area"
+    assert result.contributing == {
+        "outside_pixel_fraction": 0.65,
+        "median_fence_distance": 0.2,
+        "color_fraction": 0.2,
+        "row_normalised_area": 3500.0,
+    }
+
+
+def test_reason_outside_colour():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        color_fraction=0.2,
+        row_normalised_area=100.0,
+    )
+    result = classify_detailed(features)
+    assert result.category == "animal_candidate" == classify(features)
+    assert result.reason == "outside_colour"
+    assert result.contributing == {
+        "outside_pixel_fraction": 0.65,
+        "median_fence_distance": 0.2,
+        "color_fraction": 0.2,
+        "row_normalised_area": 100.0,
+    }
+
+
+def test_reason_outside_no_colour():
+    features = _features(outside_pixel_fraction=0.65, median_fence_distance=0.2)
+    result = classify_detailed(features)
+    assert result.category == "incident_candidate" == classify(features)
+    assert result.reason == "outside_no_colour"
+    assert result.contributing == {
+        "outside_pixel_fraction": 0.65,
+        "median_fence_distance": 0.2,
+        "color_fraction": 0.0,
+    }
+
+
+def test_reason_jitter_solidity():
+    features = _features(jitter=60, solidity=0.5)
+    result = classify_detailed(features)
+    assert result.category == "insect_candidate" == classify(features)
+    assert result.reason == "jitter_solidity"
+    assert result.contributing == {"jitter": 60, "solidity": 0.5}
+
+
+def test_reason_inside_only_daylight():
+    features = _features(zone_classifiable_fraction=0.5, is_daylight=True)
+    result = classify_detailed(features)
+    assert result.category == "resident_candidate" == classify(features)
+    assert result.reason == "inside_only_daylight"
+    assert result.contributing == {
+        "zone_classifiable_fraction": 0.5,
+        "outside_pixel_fraction": 0.0,
+        "is_daylight": True,
+    }
+
+
+def test_reason_inside_only_night():
+    features = _features(zone_classifiable_fraction=0.5, is_daylight=False)
+    result = classify_detailed(features)
+    assert result.category == "guard_candidate" == classify(features)
+    assert result.reason == "inside_only_night"
+    assert result.contributing == {
+        "zone_classifiable_fraction": 0.5,
+        "outside_pixel_fraction": 0.0,
+        "is_daylight": False,
+    }
+
+
+def test_reason_no_rule_matched():
+    result = classify_detailed(_features())
+    assert result.category == "unclassified" == classify(_features())
+    assert result.reason == "no_rule_matched"
+    assert result.contributing == {}
+
+
+def test_all_15_reason_codes_are_distinct():
+    # Guards against a copy-paste reusing a reason code across two branches.
+    codes = {
+        "no_features",
+        "green_light",
+        "warmup_flashlight",
+        "blob_count_peak",
+        "blob_count_sustained",
+        "implausible_height",
+        "blinding_blob_white",
+        "motion_pixel_sustained",
+        "animal_row_area",
+        "outside_colour",
+        "outside_no_colour",
+        "jitter_solidity",
+        "inside_only_daylight",
+        "inside_only_night",
+        "no_rule_matched",
+    }
+    assert len(codes) == 15

@@ -68,6 +68,31 @@ Rules:
     responds to within the same clip would be routed to guard. The existing
     green_light rule above already carries that same risk, and the 4.3x margin
     is the mitigation; revisit if a labelled incident ever exceeds 0.002.
+  - guard_candidate (per-object flashlight): multi_object_max_flashlight_ratio
+    > GREEN_LIGHT_RATIO_MIN (same threshold as the single-track green_light
+    rule above -- added 2026-09-09, from docs/detection_improvement_review.md
+    section 3 stage 2). `green_light_ratio` only ever samples inside whichever
+    single contour the best-contour pipeline happened to follow, which reads
+    0.0 whenever the tracker is on the wrong object (confirmed on cam07/11174:
+    a real flashlight sits on the fence, the tracked box is on a bush 40% of
+    the frame away). `multi_object_max_flashlight_ratio` scores EVERY
+    persistently-tracked object independently (see
+    `scripts.spike._multi_object_flashlight_features`), so it sees the beam
+    regardless of which object won the single-track pick.
+    Measured on the full 678-clip labelled corpus, checked against ONLY the
+    clips this rule and every rule ABOVE it did not already catch (so the
+    number below is the real incremental effect, not corpus-wide overlap with
+    the existing green_light rule): 35 guard clips move OUT of a wrong
+    category into guard_candidate (12 of those FROM the alert channel itself
+    -- 2 from animal_candidate, 10 from incident_candidate -- a direct leak
+    reduction), 11 environment clips move between two already-suppressed
+    categories (environment_candidate/unclassified -> guard_candidate, no
+    alert-channel effect either way). **Zero leak into animal, incident,
+    neighbour, or resident** -- confirmed directly, not inferred (0 of any
+    of those four categories' clips clear this bar at all, corpus-wide).
+    Placed alongside the other two guard rules, ABOVE the environment/outside
+    rules, for the same reason warmup_flashlight is: a real flashlight
+    sighting should never fall through to a shape-based read.
   - environment_candidate: blob_count > 10 (added 2026-08-31, checked before
     animal_candidate/incident_candidate/insect_candidate so a stormy/windy clip's
     scattered foliage blobs don't get read as a shape signal. Measured against
@@ -364,13 +389,13 @@ def classify_detailed(
     (see tests/test_classify.py).
 
     `reason` is one fixed code per rule (`no_features`, `green_light`,
-    `warmup_flashlight`, `blob_count_peak`, `blob_count_sustained`,
-    `implausible_height`, `blinding_blob_white`, `motion_pixel_sustained`,
-    `animal_row_area`, `outside_colour`, `outside_no_colour`,
-    `outside_person_daylight`, `jitter_solidity`, `inside_only_daylight`,
-    `inside_only_night`, `no_rule_matched`), never renamed or reused for a
-    different rule -- a caller may match on it. `contributing` holds exactly
-    the feature values
+    `warmup_flashlight`, `multi_object_flashlight`, `blob_count_peak`,
+    `blob_count_sustained`, `implausible_height`, `blinding_blob_white`,
+    `motion_pixel_sustained`, `animal_row_area`, `outside_colour`,
+    `outside_no_colour`, `outside_person_daylight`, `jitter_solidity`,
+    `inside_only_daylight`, `inside_only_night`, `no_rule_matched`), never
+    renamed or reused for a different rule -- a caller may match on it.
+    `contributing` holds exactly the feature values
     that rule's condition compared, read with the same accessor (`[...]` vs
     `.get(..., default)`) the condition itself uses, so it carries the same
     KeyError contract classify() always has."""
@@ -395,6 +420,16 @@ def classify_detailed(
             "guard_candidate",
             "warmup_flashlight",
             {"warmup_flashlight_ratio": features.get("warmup_flashlight_ratio", 0.0)},
+        )
+    if features.get("multi_object_max_flashlight_ratio", 0.0) > thresholds.green_light_ratio_min:
+        return ClassificationResult(
+            "guard_candidate",
+            "multi_object_flashlight",
+            {
+                "multi_object_max_flashlight_ratio": features.get(
+                    "multi_object_max_flashlight_ratio", 0.0
+                )
+            },
         )
     if features["blob_count"] > thresholds.blob_count_peak_min:
         return ClassificationResult(

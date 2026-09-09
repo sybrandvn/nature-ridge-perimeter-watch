@@ -76,6 +76,29 @@ def test_classify_warmup_flashlight_below_threshold_does_not_fire():
     assert classify(features) == "incident_candidate"
 
 
+def test_classify_guard_candidate_on_multi_object_flashlight():
+    # green_light_ratio itself reads 0.0 (the single tracked contour is on
+    # the wrong object, e.g. cam07/11174's bush) but a DIFFERENT persistently-
+    # tracked object in the same clip scores as a real flashlight.
+    features = _features(multi_object_max_flashlight_ratio=0.2)
+    assert classify(features) == "guard_candidate"
+
+
+def test_classify_multi_object_flashlight_beats_animal_incident_geometry():
+    features = _features(
+        multi_object_max_flashlight_ratio=0.2,
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+        color_fraction=0.0,
+    )
+    assert classify(features) == "guard_candidate"
+
+
+def test_classify_multi_object_flashlight_below_threshold_does_not_fire():
+    features = _features(multi_object_max_flashlight_ratio=0.01)
+    assert classify(features) == "unclassified"
+
+
 def test_classify_warmup_flashlight_absent_key_is_safe():
     assert classify(_features()) == "unclassified"
 

@@ -1616,6 +1616,153 @@ def test_extract_clip_features_multi_object_falls_back_to_outside_pixel_fraction
     assert result["multi_object_outside_fraction_weighted"] == pytest.approx(1.0)
 
 
+# --------------------------------------------------------------------------
+# _multi_object_flashlight_features -- per-object flashlight scoring
+# (docs/detection_improvement_review.md section 3, stage 2). A real
+# high-saturation green BGR value, matching the constant already used
+# elsewhere in this file for "this is a real flashlight, not foliage"
+# (see _flare_then_settled's callers -- FLASHLIGHT_MIN_SATURATION is 130,
+# foliage measures ~S70, a real flashlight ~S168).
+# --------------------------------------------------------------------------
+
+_FLASHLIGHT_BGR = (40, 255, 40)
+
+
+def _frame_with_flashlight_and_subject(size: int = 60) -> np.ndarray:
+    """A small bright-green patch (the flashlight) in one corner, well
+    separated from a large plain patch (the subject/bush) in another."""
+    frame = np.full((size, size, 3), 90, dtype=np.uint8)
+    cv2.rectangle(frame, (2, 2), (10, 10), _FLASHLIGHT_BGR, thickness=-1)  # the flashlight
+    cv2.rectangle(frame, (35, 35), (55, 55), (90, 90, 90), thickness=-1)  # the other object
+    return frame
+
+
+def _clip_detection_with_tracks_and_frames(
+    multi_tracks, frames_bgr, *, frame_width=60, frame_height=60
+):
+    frame_detections = [
+        spike.FrameDetection(
+            index=i,
+            frame=frame_bgr,
+            mask=np.zeros((frame_height, frame_width), dtype=np.uint8),
+            all_contours=[],
+            blobs=[],
+            largest=None,
+            centroid=None,
+            motion_pixel_fraction=0.0,
+            median_grey=0.0,
+            is_flare=False,
+        )
+        for i, frame_bgr in enumerate(frames_bgr)
+    ]
+    return spike.ClipDetection(
+        frames=frame_detections,
+        background=_blank_frame(size=frame_width)[:, :, 0],
+        frame_width=frame_width,
+        frame_height=frame_height,
+        warmup_dropped=0,
+        total_frames=len(multi_tracks),
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=multi_tracks,
+    )
+
+
+def test_multi_object_flashlight_features_zero_with_no_tracks():
+    detection = _clip_detection_with_tracks_and_frames([], [])
+    result = spike._multi_object_flashlight_features(detection, _VERTICAL_ZONE, 60, 60)
+    assert result == {
+        "multi_object_flashlight_track_count": 0.0,
+        "multi_object_max_flashlight_ratio": 0.0,
+        "multi_object_dominant_excl_flashlight_outside_fraction": 0.0,
+        "multi_object_dominant_excl_flashlight_has_evidence": 0.0,
+    }
+
+
+def test_multi_object_flashlight_features_identifies_a_separate_flashlight_track():
+    # The flashlight (track 0, tiny bbox around the green patch, top-left,
+    # OUTSIDE under _VERTICAL_ZONE) and the real subject (track 1, large
+    # bbox around the plain grey patch, bottom-right, INSIDE) are two
+    # separate objects. The dominant reading, excluding the flashlight
+    # track, must reflect the SUBJECT's side, not the flashlight's.
+    flashlight = spike.TrackedObject(track_id=0, bbox=(2, 2, 10, 10))
+    subject = spike.TrackedObject(track_id=1, bbox=(35, 35, 55, 55))
+    frames_bgr = [_frame_with_flashlight_and_subject()]
+    detection = _clip_detection_with_tracks_and_frames([[flashlight, subject]], frames_bgr)
+
+    result = spike._multi_object_flashlight_features(detection, _VERTICAL_ZONE, 60, 60)
+
+    assert result["multi_object_flashlight_track_count"] == 1.0
+    assert result["multi_object_max_flashlight_ratio"] > 0.5
+    assert result["multi_object_dominant_excl_flashlight_has_evidence"] == 1.0
+    # subject bbox midpoint x = (35+55)/2/60 = 0.75, right of the x=0.5 fence
+    # -- INSIDE under _VERTICAL_ZONE's outside="left".
+    assert result["multi_object_dominant_excl_flashlight_outside_fraction"] == pytest.approx(0.0)
+
+
+def test_multi_object_flashlight_features_no_evidence_when_only_object_is_the_flashlight():
+    flashlight = spike.TrackedObject(track_id=0, bbox=(2, 2, 10, 10))
+    frames_bgr = [_frame_with_flashlight_and_subject()]
+    detection = _clip_detection_with_tracks_and_frames([[flashlight]], frames_bgr)
+
+    result = spike._multi_object_flashlight_features(detection, _VERTICAL_ZONE, 60, 60)
+
+    assert result["multi_object_flashlight_track_count"] == 1.0
+    assert result["multi_object_max_flashlight_ratio"] > 0.5
+    # No non-flashlight object exists at all -- must not read as a confident
+    # 0.0 (fully inside), same "absence vs a real zero" discipline as
+    # multi_object_count's own zone_classifiable_fraction guard.
+    assert result["multi_object_dominant_excl_flashlight_has_evidence"] == 0.0
+    assert result["multi_object_dominant_excl_flashlight_outside_fraction"] == 0.0
+
+
+def test_multi_object_flashlight_features_exclude_mask_suppresses_a_known_fixed_light():
+    flashlight = spike.TrackedObject(track_id=0, bbox=(2, 2, 10, 10))
+    subject = spike.TrackedObject(track_id=1, bbox=(35, 35, 55, 55))
+    frames_bgr = [_frame_with_flashlight_and_subject()]
+    detection = _clip_detection_with_tracks_and_frames([[flashlight, subject]], frames_bgr)
+    exclude_mask = np.zeros((60, 60), dtype=bool)
+    exclude_mask[0:15, 0:15] = True  # covers the flashlight patch entirely
+
+    result = spike._multi_object_flashlight_features(
+        detection, _VERTICAL_ZONE, 60, 60, exclude_mask=exclude_mask
+    )
+
+    assert result["multi_object_flashlight_track_count"] == 0.0
+    assert result["multi_object_max_flashlight_ratio"] == 0.0
+
+
+def test_extract_clip_features_wires_multi_object_flashlight_features_into_the_result(
+    monkeypatch,
+):
+    square = _rect_contour(5, 5, 10, 10)
+    frames = [_fake_frame_detection(0, square)]
+    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
+    clip_detection = spike.ClipDetection(
+        frames=frames,
+        background=_blank_frame()[:, :, 0],
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=0,
+        total_frames=1,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=tracks,
+    )
+    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+
+    result = spike.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
+
+    assert result is not None
+    for key in (
+        "multi_object_flashlight_track_count",
+        "multi_object_max_flashlight_ratio",
+        "multi_object_dominant_excl_flashlight_outside_fraction",
+        "multi_object_dominant_excl_flashlight_has_evidence",
+    ):
+        assert key in result
+
+
 def test_extract_clip_features_returns_none_without_motion(monkeypatch, tmp_path):
     frames = [_blank_frame() for _ in range(5)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))

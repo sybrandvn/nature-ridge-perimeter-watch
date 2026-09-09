@@ -106,6 +106,10 @@ FEATURE_COLUMNS = (
     "multi_object_outside_fraction_weighted",
     "multi_object_dominant_outside_fraction",
     "multi_object_count",
+    "multi_object_flashlight_track_count",
+    "multi_object_max_flashlight_ratio",
+    "multi_object_dominant_excl_flashlight_outside_fraction",
+    "multi_object_dominant_excl_flashlight_has_evidence",
     "aspect_ratio",
     "solidity",
     "saturation_ratio",
@@ -1918,6 +1922,118 @@ def _multi_object_outside_features(
     }
 
 
+def _multi_object_flashlight_features(
+    detection: ClipDetection,
+    zone: CameraZone,
+    frame_width: int,
+    frame_height: int,
+    *,
+    exclude_mask: np.ndarray | None = None,
+    flashlight_min_ratio: float = FLASHLIGHT_CANDIDATE_MIN_RATIO,
+) -> dict[str, float]:
+    """Scores EVERY persistently-tracked object (`detection.multi_tracks`) for
+    flashlight-ness independently, rather than only ever checking whichever
+    single contour the best-contour pipeline happened to follow.
+
+    Added 2026-09-09 (docs/detection_improvement_review.md section 3, stage
+    2 of the object-linking design): `green_light_ratio`'s own signature
+    already accepts an arbitrary contour, so this is a mechanically small
+    extension of an existing primitive, not new colour-detection work -- the
+    only new part is synthesizing a rectangular contour from each object's
+    own bbox (`_bbox_to_rect_contour`, the same approach
+    `flashlight_bbox_overlap` already uses for the single tracked box) and
+    scoring it per frame the object appears in, taking the PEAK across those
+    frames as that object's own flashlight score (same convention as every
+    other single-clip flashlight peak feature -- `warmup_flashlight_ratio`,
+    `whole_frame_green_ratio`).
+
+    Direct fix for the cam07/11174 family of failure this session's review
+    names: a real flashlight beam sitting in its OWN separate track, while a
+    much larger unrelated object (a bush) is what the single best-contour
+    pipeline follows and therefore all it scores. `green_light_ratio`
+    (contour-restricted, single track) reads 0.0 on that clip even though the
+    beam is plainly visible one object over. This feature can see it: it
+    does not matter which object the single-track pipeline decided to follow.
+
+    `multi_object_dominant_excl_flashlight_outside_fraction` answers a
+    different, related question -- given that a flashlight-scoring track
+    exists, what does the fence-side reading look like for the largest
+    OTHER (non-flashlight) object -- the "ignore the beam, follow the
+    person" reading `prefer_flashlight_candidate`'s active-track override
+    cannot express (it can only make the SINGLE track follow one thing or
+    the other; this reads both independently, which is what the user's own
+    framing asked for: "flashlight should always be separately tracked...
+    leaves room for tracking the main object"). `_has_evidence` disambiguates
+    a real 0.0 (fully inside) from "no non-flashlight object exists at all"
+    (e.g. a clip with only one tracked object, and it IS the flashlight) --
+    same "don't let an absence read as a confident zero" discipline
+    `_multi_object_outside_features`'s own `zone_classifiable_fraction`
+    guard and this repo's `uncalibrated`/`has_reference_background` flags
+    already use.
+
+    Reporting-only, like `_multi_object_outside_features` before it -- not
+    read by classify() without its own measurement pass first, same
+    discipline every detect_clip-level addition in this repo follows.
+    """
+    zeros = {
+        "multi_object_flashlight_track_count": 0.0,
+        "multi_object_max_flashlight_ratio": 0.0,
+        "multi_object_dominant_excl_flashlight_outside_fraction": 0.0,
+        "multi_object_dominant_excl_flashlight_has_evidence": 0.0,
+    }
+    if not detection.multi_tracks:
+        return zeros
+
+    flashlight_scores: dict[int, float] = {}
+    verdicts: dict[int, list[bool]] = {}
+    areas: dict[int, float] = {}
+    for frame_index, frame_tracks in enumerate(detection.multi_tracks):
+        frame_bgr = (
+            detection.frames[frame_index].frame if frame_index < len(detection.frames) else None
+        )
+        for obj in frame_tracks:
+            # obj.bbox is corner form (x0, y0, x1, y1) -- see the note in
+            # _multi_object_outside_features above.
+            x0, y0, x1, y1 = obj.bbox
+            if frame_bgr is not None:
+                ratio = green_light_ratio(
+                    frame_bgr, _bbox_to_rect_contour(obj.bbox), exclude_mask=exclude_mask
+                )
+                flashlight_scores[obj.track_id] = max(
+                    flashlight_scores.get(obj.track_id, 0.0), ratio
+                )
+            point = ((x0 + x1) / 2.0 / frame_width, y1 / frame_height)
+            verdict = classify_zone(point, zone)
+            if verdict in ("outside", "inside"):
+                verdicts.setdefault(obj.track_id, []).append(verdict == "outside")
+            areas[obj.track_id] = areas.get(obj.track_id, 0.0) + float((x1 - x0) * (y1 - y0))
+
+    flashlight_track_ids = {
+        tid for tid, score in flashlight_scores.items() if score > flashlight_min_ratio
+    }
+    non_flashlight_areas = {
+        tid: area
+        for tid, area in areas.items()
+        if tid not in flashlight_track_ids and tid in verdicts
+    }
+    dominant_excl_fraction = 0.0
+    has_evidence = 0.0
+    if non_flashlight_areas:
+        dominant_id = max(non_flashlight_areas, key=lambda tid: non_flashlight_areas[tid])
+        votes = verdicts[dominant_id]
+        dominant_excl_fraction = sum(votes) / len(votes)
+        has_evidence = 1.0
+
+    return {
+        "multi_object_flashlight_track_count": float(len(flashlight_track_ids)),
+        "multi_object_max_flashlight_ratio": (
+            max(flashlight_scores.values()) if flashlight_scores else 0.0
+        ),
+        "multi_object_dominant_excl_flashlight_outside_fraction": dominant_excl_fraction,
+        "multi_object_dominant_excl_flashlight_has_evidence": has_evidence,
+    }
+
+
 def _metric_track_features(
     considered: list[FrameDetection],
     zone: CameraZone,
@@ -2344,6 +2460,9 @@ def extract_clip_features(
             frame_width,
             frame_height,
             fallback_outside_fraction=outside_pixel_fraction(points, zone),
+        ),
+        **_multi_object_flashlight_features(
+            detection, zone, frame_width, frame_height, exclude_mask=ignore_mask
         ),
         "flashlight_subject_fraction": (
             0.0 if not frames_with_box else flashlight_bbox_frames / frames_with_box

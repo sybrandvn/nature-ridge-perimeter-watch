@@ -1418,6 +1418,133 @@ def test_detect_clip_populates_multi_tracks_for_two_independent_subjects(monkeyp
     assert all(len(frame_tracks) == 2 for frame_tracks in detection.multi_tracks)
 
 
+# --------------------------------------------------------------------------
+# _multi_object_outside_features -- vertical fence (x=0.5) so left/right of
+# the line maps cleanly to a bbox's normalised x, unlike module `_ZONE`
+# (a horizontal fence line, degenerate for `_fence_x_at_y`: every point reads
+# "right"/inside regardless of x, see src/zones.py's fallback-to-first-point
+# behaviour for a zero-slope segment -- not useful for this feature's tests).
+# --------------------------------------------------------------------------
+
+_VERTICAL_ZONE = CameraZone(
+    fence=((0.5, 0.0), (0.5, 1.0)), outside="left", depth_cutoff=0.0, ignore=()
+)
+
+
+def _clip_detection_with_tracks(multi_tracks, *, frame_width=60, frame_height=60):
+    return spike.ClipDetection(
+        frames=[],
+        background=_blank_frame(size=frame_width)[:, :, 0],
+        frame_width=frame_width,
+        frame_height=frame_height,
+        warmup_dropped=0,
+        total_frames=len(multi_tracks),
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=multi_tracks,
+    )
+
+
+def test_multi_object_outside_features_zero_with_no_tracks():
+    detection = _clip_detection_with_tracks([])
+    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    assert result == {
+        "multi_object_outside_fraction_weighted": 0.0,
+        "multi_object_dominant_outside_fraction": 0.0,
+        "multi_object_count": 0.0,
+    }
+
+
+def test_multi_object_outside_features_zero_when_frames_have_no_objects():
+    detection = _clip_detection_with_tracks([[], [], []])
+    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    assert result["multi_object_count"] == 0.0
+
+
+def test_multi_object_outside_features_single_object_all_outside():
+    # bbox base-point x = (5 + 10/2) / 60 = 0.167 -- left of the x=0.5 fence.
+    tracks = [
+        [spike.TrackedObject(track_id=0, bbox=(5, 5, 10, 10))],
+        [spike.TrackedObject(track_id=0, bbox=(5, 5, 10, 10))],
+    ]
+    detection = _clip_detection_with_tracks(tracks)
+    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    assert result["multi_object_outside_fraction_weighted"] == pytest.approx(1.0)
+    assert result["multi_object_dominant_outside_fraction"] == pytest.approx(1.0)
+    assert result["multi_object_count"] == 1.0
+
+
+def test_multi_object_outside_features_dominant_is_the_largest_by_total_area_not_frame_count():
+    # Object 0: outside, tiny bbox (10x10=100px), present in 5 frames -- total
+    # area 500. Object 1: inside, large bbox (30x30=900px), present in only 1
+    # frame -- total area 900. Dominant must be object 1 (bigger TOTAL area)
+    # even though object 0 appeared in far more frames -- this is exactly the
+    # cam07/22393 scenario: a small artifact seen across many frames must not
+    # outrank a single genuinely large detection of the real subject.
+    small_outside = spike.TrackedObject(track_id=0, bbox=(0, 0, 10, 10))  # x=0.083, outside
+    large_inside = spike.TrackedObject(track_id=1, bbox=(40, 0, 30, 30))  # x=0.917, inside
+    tracks = [[small_outside]] * 5 + [[large_inside]]
+    detection = _clip_detection_with_tracks(tracks)
+    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    assert result["multi_object_count"] == 2.0
+    assert result["multi_object_dominant_outside_fraction"] == pytest.approx(0.0)  # object 1
+
+
+def test_multi_object_outside_features_weighted_blends_by_area():
+    # Object 0: fully outside, area 100 (10x10). Object 1: fully inside, area
+    # 900 (30x30). Weighted average must lean toward object 1's 0.0 (inside),
+    # not a plain 50/50 average of the two objects' own fractions.
+    outside_obj = spike.TrackedObject(track_id=0, bbox=(0, 0, 10, 10))
+    inside_obj = spike.TrackedObject(track_id=1, bbox=(40, 0, 30, 30))
+    tracks = [[outside_obj, inside_obj]]
+    detection = _clip_detection_with_tracks(tracks)
+    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    # weighted = (1.0*100 + 0.0*900) / 1000 = 0.1
+    assert result["multi_object_outside_fraction_weighted"] == pytest.approx(0.1)
+    # dominant = object 1 (larger area), which is fully inside
+    assert result["multi_object_dominant_outside_fraction"] == pytest.approx(0.0)
+
+
+def test_multi_object_outside_features_excludes_beyond_depth_cutoff():
+    zone = CameraZone(
+        fence=((0.5, 0.0), (0.5, 1.0)), outside="left", depth_cutoff=0.5, ignore=()
+    )
+    # base-point y = (0+10)/60 = 0.167, below the 0.5 depth cutoff -- ambiguous,
+    # must be excluded entirely rather than read as a false 0.0.
+    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 0, 10, 10))]]
+    detection = _clip_detection_with_tracks(tracks)
+    result = spike._multi_object_outside_features(detection, zone, 60, 60)
+    assert result["multi_object_count"] == 0.0
+
+
+def test_extract_clip_features_wires_multi_object_features_into_the_result(monkeypatch):
+    square = _rect_contour(5, 5, 10, 10)
+    frames = [_fake_frame_detection(0, square)]
+    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 10, 10))]]
+    clip_detection = spike.ClipDetection(
+        frames=frames,
+        background=_blank_frame()[:, :, 0],
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=0,
+        total_frames=1,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=tracks,
+    )
+    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+
+    result = spike.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
+
+    assert result is not None
+    for key in (
+        "multi_object_outside_fraction_weighted",
+        "multi_object_dominant_outside_fraction",
+        "multi_object_count",
+    ):
+        assert key in result
+
+
 def test_extract_clip_features_returns_none_without_motion(monkeypatch, tmp_path):
     frames = [_blank_frame() for _ in range(5)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))

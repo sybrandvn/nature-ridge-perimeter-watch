@@ -103,6 +103,9 @@ FEATURE_COLUMNS = (
     "outside_pixel_fraction",
     "zone_classifiable_fraction",
     "outside_frame_fraction",
+    "multi_object_outside_fraction_weighted",
+    "multi_object_dominant_outside_fraction",
+    "multi_object_count",
     "aspect_ratio",
     "solidity",
     "saturation_ratio",
@@ -1771,6 +1774,98 @@ def _warmup_motion_features(
     }
 
 
+def _multi_object_outside_features(
+    detection: ClipDetection, zone: CameraZone, frame_width: int, frame_height: int
+) -> dict[str, float]:
+    """Per-object, whole-clip fence-side reading over EVERY persistently-
+    tracked object in the scored frames (`detection.multi_tracks`), not just
+    the single largest/tracked contour every other outside-fraction feature
+    reads. `multi_tracks` already runs unconditionally inside `detect_clip`
+    for diagnostic overlays (see `track_multiple_objects`); this is the first
+    feature to actually read it rather than discard it after rendering.
+
+    Motivation, from a real recurring cam07 failure (found 2026-09-09,
+    reviewing the fence_bottom-era `outside_pixel_fraction` thresholds with
+    the user): `_warmup_motion_features`'s own docstring already documents a
+    static bright artifact (a branch) that the SAME best-contour pick locks
+    onto in both the warmup and scored frames of cam07/18570. cam07/22393 is
+    the same pattern with a spider web: the guard exits frame during warmup,
+    never appears in a scored frame at all, and the geometry rule reads a
+    coincidentally-outside web as "the subject" because nothing else was
+    there to outrank it. A single best-contour reading has no way to tell
+    "the one thing found happens to be outside" apart from "the real subject
+    is outside" -- per-object identity does, because the web and a guard
+    (were they both genuinely present) would be two separate tracks with two
+    separate verdicts instead of one blended number.
+
+    Two clip-level readings, deliberately kept separate rather than folded
+    into one:
+      - `multi_object_outside_fraction_weighted`: every object that moved,
+        area-weighted by each object's own total tracked bbox area -- "how
+        much of everything that moved was outside."
+      - `multi_object_dominant_outside_fraction`: just the single object with
+        the largest total tracked area -- a track-wide, multi-candidate-aware
+        alternative to `outside_pixel_fraction`'s single-BEST-FRAME reading.
+    Plus `multi_object_count`: distinct persistent objects seen, a genuinely
+    different signal from `blob_count` (a per-frame count with no identity
+    across frames).
+
+    Per-object verdict uses the same base-of-box convention
+    `_warmup_motion_features` uses (`TrackedObject` only carries a bbox, not a
+    full contour, so this is coarser than `outside_pixel_fraction`'s
+    per-point sampling -- consistent with that existing feature's own
+    precision, not a new approximation).
+
+    Known simplification, not yet resolved: while two tracks are merged
+    (`TrackedObject.merged_ids` non-empty), both track ids currently accrue
+    the FULL shared bbox's area independently, rather than splitting it --
+    inflates a merged object's apparent size slightly. Left as-is for this
+    first cut; revisit if `dominant_id` selection near a merge ever looks
+    wrong on real clips.
+
+    NOT wired into classify() -- reporting/measurement only until proven
+    against the labelled corpus, same discipline as `outside_frame_fraction`
+    and `warmup_outside_fraction` before it.
+    """
+    zeros = {
+        "multi_object_outside_fraction_weighted": 0.0,
+        "multi_object_dominant_outside_fraction": 0.0,
+        "multi_object_count": 0.0,
+    }
+    if not detection.multi_tracks:
+        return zeros
+
+    verdicts: dict[int, list[bool]] = {}
+    areas: dict[int, float] = {}
+    for frame_tracks in detection.multi_tracks:
+        for obj in frame_tracks:
+            x, y, w, h = obj.bbox
+            point = ((x + w / 2.0) / frame_width, (y + h) / frame_height)
+            verdict = classify_zone(point, zone)
+            if verdict not in ("outside", "inside"):
+                continue
+            verdicts.setdefault(obj.track_id, []).append(verdict == "outside")
+            areas[obj.track_id] = areas.get(obj.track_id, 0.0) + float(w * h)
+
+    if not verdicts:
+        return zeros
+
+    object_fractions = {tid: sum(vs) / len(vs) for tid, vs in verdicts.items()}
+    total_area = sum(areas[tid] for tid in object_fractions)
+    weighted = (
+        sum(object_fractions[tid] * areas[tid] for tid in object_fractions) / total_area
+        if total_area > 0
+        else 0.0
+    )
+    dominant_id = max(areas, key=lambda tid: areas[tid])
+
+    return {
+        "multi_object_outside_fraction_weighted": weighted,
+        "multi_object_dominant_outside_fraction": object_fractions[dominant_id],
+        "multi_object_count": float(len(object_fractions)),
+    }
+
+
 def _metric_track_features(
     considered: list[FrameDetection],
     zone: CameraZone,
@@ -2191,6 +2286,7 @@ def extract_clip_features(
         **_warmup_motion_features(
             detection, zone, frame_width, frame_height, threshold=threshold
         ),
+        **_multi_object_outside_features(detection, zone, frame_width, frame_height),
         "flashlight_subject_fraction": (
             0.0 if not frames_with_box else flashlight_bbox_frames / frames_with_box
         ),

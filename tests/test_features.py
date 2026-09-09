@@ -26,6 +26,7 @@ from src.features import (
     longest_detection_run,
     minutes_from_daylight_boundary,
     normalised_speed,
+    optical_flow_direction_coherence,
     path_length,
     persistence,
     photometric_match,
@@ -413,6 +414,78 @@ def test_heading_change_ignores_sub_pixel_steps():
     # stationary blob must not read as a turning track.
     jittering = [(0.0, 0.0), (0.1, 0.0), (0.0, 0.1), (0.1, 0.1)]
     assert heading_change(jittering) == 0.0
+
+
+def _textured_patch(size: int = 60, seed: int = 0) -> np.ndarray:
+    """Blurred noise, not a flat patch or raw independent-pixel noise --
+    goodFeaturesToTrack/calcOpticalFlowPyrLK need real LOCAL spatial
+    correlation to find and follow corners reliably (matching detect_clip's
+    own preprocessing, which Gaussian-blurs every frame before diffing --
+    see `scripts.spike.detect_clip`)."""
+    rng = np.random.default_rng(seed)
+    noise = rng.integers(0, 255, size=(size, size), dtype=np.uint8)
+    return cv2.GaussianBlur(noise, (5, 5), 0)
+
+
+def _shifted(patch: np.ndarray, dx: int, dy: int = 0) -> np.ndarray:
+    """`patch` translated by (dx, dy), edge-replicated rather than zero-filled
+    so the shift itself doesn't manufacture a false hard edge for
+    goodFeaturesToTrack to key on."""
+    matrix = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
+    return cv2.warpAffine(
+        patch, matrix, (patch.shape[1], patch.shape[0]), borderMode=cv2.BORDER_REPLICATE
+    )
+
+
+def test_optical_flow_direction_coherence_high_for_uniform_translation():
+    # The whole patch shifts 5px right -- every tracked corner should move the
+    # same way, a textbook rigid-body translation.
+    prev = _textured_patch()
+    curr = _shifted(prev, dx=5)
+    contour = _rect_contour(10, 10, 40, 40)
+
+    result = optical_flow_direction_coherence(prev, curr, contour)
+
+    assert result is not None
+    assert result > 0.9
+
+
+def test_optical_flow_direction_coherence_low_for_opposing_motion():
+    # Top half of the contour shifts right, bottom half shifts left -- two
+    # equal-sized clusters of opposite-direction vectors, the signature this
+    # feature exists to catch (a branch swinging one way while another part
+    # of it swings back).
+    prev = _textured_patch()
+    curr = prev.copy()
+    curr[:30, :] = _shifted(prev, dx=6)[:30, :]
+    curr[30:, :] = _shifted(prev, dx=-6)[30:, :]
+    contour = _rect_contour(5, 5, 50, 50)
+
+    result = optical_flow_direction_coherence(prev, curr, contour)
+
+    assert result is not None
+    assert result < 0.5
+
+
+def test_optical_flow_direction_coherence_none_for_textureless_patch():
+    # No texture at all -- goodFeaturesToTrack finds nothing to track, so
+    # there is no direction to measure, which must not read as a confident 0.0.
+    prev = np.full((60, 60), 128, dtype=np.uint8)
+    curr = np.full((60, 60), 128, dtype=np.uint8)
+    contour = _rect_contour(10, 10, 40, 40)
+
+    assert optical_flow_direction_coherence(prev, curr, contour) is None
+
+
+def test_optical_flow_direction_coherence_none_when_nothing_moves():
+    # Real texture, but the two frames are identical -- every tracked point's
+    # displacement is below min_displacement, so direction is undefined, not
+    # a confident 0.0 (which would misread as "maximally incoherent").
+    prev = _textured_patch()
+    curr = prev.copy()
+    contour = _rect_contour(10, 10, 40, 40)
+
+    assert optical_flow_direction_coherence(prev, curr, contour) is None
 
 
 def test_time_of_day_deep_night_utc_is_night():

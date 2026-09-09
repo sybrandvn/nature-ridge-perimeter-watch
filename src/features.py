@@ -507,6 +507,101 @@ def heading_change(
     return sum(turns) / len(turns)
 
 
+def optical_flow_direction_coherence(
+    prev_gray: np.ndarray,
+    curr_gray: np.ndarray,
+    contour: np.ndarray,
+    *,
+    max_corners: int = 30,
+    min_displacement: float = 1.0,
+) -> float | None:
+    """Mean resultant length of sparse optical-flow vectors tracked from
+    `prev_gray` to `curr_gray`, restricted to points inside `contour` --
+    the standard circular-statistics measure of directional agreement
+    (`R = |sum of unit vectors| / n`; 1.0 = every tracked point moved the
+    same way, 0.0 = directions scattered uniformly).
+
+    Added 2026-09-09 (docs/detection_improvement_review.md section 4.1) --
+    a genuinely new measurement axis: every existing motion feature in this
+    codebase (`path_length`, `jitter`, `heading_change`, `normalised_speed`)
+    tracks a single point (the blob's centroid) ACROSS frames. This measures
+    something different -- whether many points WITHIN the same blob, AT THE
+    SAME TIMESTEP, move the same way as each other. A rigid body's motion is
+    directionally coherent by construction (every part of a walking person
+    moves roughly the same way at any instant); a wind-shaken branch is not
+    (a leaf tip whipping one way while a nearer point on the same branch
+    swings back) -- which a single centroid, however jittery its OWN path
+    looks, cannot see, since it only ever reports one point's motion per
+    frame. This is the concrete mechanism behind the still-unsolved
+    "single waving branch" environment population `blob_count` cannot catch
+    (one branch is one blob) -- see docs/handoff.md's session #6/#7 notes.
+
+    Sparse Lucas-Kanade on corner features, not dense Farneback -- these
+    cameras run 5fps, slow enough that a fast subject can move a long way
+    between frames, which dense flow handles worse than tracked corners
+    (the review's own recommendation, given the frame rate).
+
+    Returns None (deliberately NOT a confident 0.0) when fewer than 3 corners
+    survive tracking with at least `min_displacement` px of real movement --
+    a near-stationary, low-texture, or too-small patch has no measurable
+    direction at all, which is a different fact than measuring one and
+    finding it scattered. A caller must not conflate the two, same
+    "absence vs a real zero" discipline this repo's `uncalibrated`/
+    `has_reference_background` flags already use elsewhere.
+
+    MEASURED AGAINST THE FULL LABELLED CORPUS 2026-09-09, honest result: the
+    per-clip aggregate this feeds (`flow_direction_coherence`, median over
+    every consecutive-genuine-frame pair -- see `scripts.spike.
+    extract_clip_features`) does NOT separate environment from guard/animal/
+    incident the way the hypothesis above predicted. Measured medians (only
+    over clips with `flow_direction_coherence_has_evidence`): environment
+    0.964, neighbour 0.977, resident 0.977, guard 0.937, incident 0.838,
+    animal 0.884 -- environment reads HIGHER than every other class, the
+    opposite of "wind is incoherent." The likely reason, itself informative:
+    at 5fps (200ms between frames), a branch mid-sway and a walking subject
+    both look locally rigid over a SINGLE step -- oscillation only shows up
+    over a LONGER window (does the direction reverse across MANY steps),
+    which this single-pair measurement cannot see by construction. That is a
+    different, unmeasured feature (e.g. the variance or sign-change rate of
+    the per-pair mean flow ANGLE across a whole clip, not the per-pair
+    internal coherence this function computes) -- a credible next step, not
+    attempted here. A second, separate limitation: coverage is uneven and low
+    for the class that matters most -- only 4/37 (10.8%) labelled animal
+    clips have ANY evidence at all, because their blobs are usually too small
+    for 3 corners to survive tracking, vs 68.6% of environment clips and
+    100% of neighbour clips (bigger, more textured subjects). Kept as
+    reporting-only infrastructure -- a genuinely new, correctly-computed
+    measurement axis -- but do not treat it as a validated wind/subject
+    discriminator without a different aggregation, and do not re-attempt the
+    exact hypothesis above (single-pair internal coherence, as-is) expecting
+    a different result on more data; the mechanism, not the sample size, is
+    why it reads backwards.
+    """
+    mask = np.zeros(prev_gray.shape[:2], dtype=np.uint8)
+    cv2.drawContours(mask, [contour], -1, color=255, thickness=-1)
+    corners = cv2.goodFeaturesToTrack(
+        prev_gray, maxCorners=max_corners, qualityLevel=0.01, minDistance=3, mask=mask
+    )
+    if corners is None or len(corners) < 3:
+        return None
+    tracked, status, _err = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, corners, None)
+    if tracked is None or status is None:
+        return None
+    status = status.reshape(-1).astype(bool)
+    prev_pts = corners.reshape(-1, 2)[status]
+    curr_pts = tracked.reshape(-1, 2)[status]
+    if len(prev_pts) < 3:
+        return None
+    vectors = curr_pts - prev_pts
+    magnitudes = np.linalg.norm(vectors, axis=1)
+    moving = magnitudes >= min_displacement
+    if int(np.sum(moving)) < 3:
+        return None
+    unit_vectors = vectors[moving] / magnitudes[moving, None]
+    resultant = np.linalg.norm(unit_vectors.sum(axis=0)) / len(unit_vectors)
+    return float(resultant)
+
+
 def green_light_flicker(whole_frame_green_ratios: Sequence[float]) -> float:
     """Std deviation of the whole-frame green-hue ratio across a clip's frames.
 

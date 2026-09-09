@@ -68,6 +68,7 @@ from src.features import (  # noqa: E402
     jitter,
     longest_detection_run,
     normalised_speed,
+    optical_flow_direction_coherence,
     path_length,
     persistence,
     photometric_match,
@@ -136,6 +137,8 @@ FEATURE_COLUMNS = (
     "area_stability",
     "normalised_speed",
     "heading_change",
+    "flow_direction_coherence",
+    "flow_direction_coherence_has_evidence",
     "fence_crossed",
     "median_fence_distance",
     "recovered_fraction",
@@ -2302,6 +2305,16 @@ def extract_clip_features(
     genuine_detected_indices: list[int] = []
     genuine_frames_detected = 0
     non_genuine_frames = 0
+    # optical_flow_direction_coherence, computed between consecutive GENUINE
+    # frames only (a real bg-diff hit at frame i and again at i+1 -- an
+    # arbitrary gap, or a recovered/filled box, tells nothing about how the
+    # blob's own internal texture actually moved between two real
+    # observations). See src.features.optical_flow_direction_coherence's own
+    # docstring for what this measures and why it's a genuinely new axis.
+    flow_coherence_values: list[float] = []
+    prev_genuine_index: int | None = None
+    prev_genuine_gray: np.ndarray | None = None
+    prev_genuine_contour: np.ndarray | None = None
     whole_frame_green_ratios: list[float] = []
     color_fractions: list[float] = []
     best_contour: np.ndarray | None = None
@@ -2396,6 +2409,16 @@ def extract_clip_features(
                 genuine_detected_indices.append(detected.index)
                 genuine_blob_areas.append(area)
                 genuine_centroids.append(detected.centroid)
+                curr_gray = cv2.cvtColor(detected.frame, cv2.COLOR_BGR2GRAY)
+                if prev_genuine_index == detected.index - 1:
+                    coherence = optical_flow_direction_coherence(
+                        prev_genuine_gray, curr_gray, prev_genuine_contour
+                    )
+                    if coherence is not None:
+                        flow_coherence_values.append(coherence)
+                prev_genuine_index = detected.index
+                prev_genuine_gray = curr_gray
+                prev_genuine_contour = contour
                 # Per-frame side verdict. The single-best-frame
                 # `outside_pixel_fraction` below describes the clearest
                 # silhouette; this instead asks how much of the TRACK was
@@ -2491,6 +2514,17 @@ def extract_clip_features(
         "area_stability": area_stability(genuine_blob_areas),
         "normalised_speed": normalised_speed(genuine_centroids, best_width),
         "heading_change": heading_change(genuine_centroids),
+        # Median, not mean, over the frame-pair coherence values -- a single
+        # bad optical-flow read (a genuine miss, a compression artefact)
+        # shouldn't swing the whole clip's reading the way it would in a
+        # mean. `_has_evidence` disambiguates "measured a genuinely
+        # incoherent 0.0" from "never had two consecutive genuine frames
+        # with enough texture to measure" -- see optical_flow_direction_
+        # coherence's own docstring for why that distinction is real.
+        "flow_direction_coherence": (
+            _median(flow_coherence_values) if flow_coherence_values else 0.0
+        ),
+        "flow_direction_coherence_has_evidence": float(bool(flow_coherence_values)),
         "fence_crossed": float(track_crosses_fence(track, zone)),
         "median_fence_distance": median_fence_distance(track, zone),
         "recovered_fraction": (

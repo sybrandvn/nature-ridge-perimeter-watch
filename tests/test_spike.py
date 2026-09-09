@@ -1763,6 +1763,88 @@ def test_extract_clip_features_wires_multi_object_flashlight_features_into_the_r
         assert key in result
 
 
+def test_extract_clip_features_flow_direction_coherence_no_evidence_with_one_frame(
+    monkeypatch,
+):
+    # A single scored frame has no consecutive genuine pair to measure flow
+    # between at all -- must read as "no evidence", not a confident 0.0.
+    square = _rect_contour(5, 5, 10, 10)
+    frames = [_fake_frame_detection(0, square)]
+    clip_detection = spike.ClipDetection(
+        frames=frames,
+        background=_blank_frame()[:, :, 0],
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=0,
+        total_frames=1,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=[[]],
+    )
+    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+
+    result = spike.extract_clip_features("clip.mp4", _ZONE)
+
+    assert result is not None
+    assert result["flow_direction_coherence"] == 0.0
+    assert result["flow_direction_coherence_has_evidence"] == 0.0
+
+
+def test_extract_clip_features_flow_direction_coherence_measures_real_coherent_motion(
+    monkeypatch,
+):
+    # Two consecutive genuine frames, a textured (blurred-noise) patch
+    # translating rigidly between them -- must read a high coherence with
+    # real evidence, exercising the actual wiring end to end (not a mocked
+    # ClipDetection with blank frames, unlike every other test in this file).
+    rng = np.random.default_rng(0)
+    size = 60
+    patch = cv2.GaussianBlur(
+        rng.integers(0, 255, size=(size, size), dtype=np.uint8), (5, 5), 0
+    )
+    matrix = np.array([[1.0, 0.0, 5.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    shifted = cv2.warpAffine(patch, matrix, (size, size), borderMode=cv2.BORDER_REPLICATE)
+    contour = _rect_contour(10, 10, 40, 40)
+
+    def _frame_detection_with_gray(index: int, gray: np.ndarray) -> spike.FrameDetection:
+        frame_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        return spike.FrameDetection(
+            index=index,
+            frame=frame_bgr,
+            mask=np.zeros((size, size), dtype=np.uint8),
+            all_contours=[contour],
+            blobs=[contour],
+            largest=contour,
+            centroid=spike.contour_centroid(contour),
+            motion_pixel_fraction=0.0,
+            median_grey=0.0,
+            is_flare=False,
+        )
+
+    frames = [
+        _frame_detection_with_gray(0, patch),
+        _frame_detection_with_gray(1, shifted),
+    ]
+    clip_detection = spike.ClipDetection(
+        frames=frames,
+        background=_blank_frame(size=size)[:, :, 0],
+        frame_width=size,
+        frame_height=size,
+        warmup_dropped=0,
+        total_frames=2,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=[[], []],
+    )
+    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+
+    result = spike.extract_clip_features("clip.mp4", _ZONE)
+
+    assert result is not None
+    assert result["flow_direction_coherence_has_evidence"] == 1.0
+    assert result["flow_direction_coherence"] > 0.8
+
+
 def test_extract_clip_features_returns_none_without_motion(monkeypatch, tmp_path):
     frames = [_blank_frame() for _ in range(5)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))

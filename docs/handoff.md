@@ -1675,6 +1675,19 @@ cam07 effort there, not at re-tracing the line.
 Debug renders for anyone who wants to re-check this call: `data/reports/scratch/
 cam07_geometry_2026-09-08/cam07_22393_debug.mp4` and the extracted stills alongside it.
 
+**RETRACTED 2026-09-09, corrected by the user who actually knows the footage: cam07/22393 is not
+a real outside patrol.** It's a recurring failure mode this repo already has a name for elsewhere
+(the "guard walks out of shot BEFORE the IR gain settles" pattern `warmup_flashlight_ratio` was
+built to catch, `src/classify.py`'s module docstring) — the guard exits frame bottom-left *during
+warmup*, so no scored frame ever contains them at all. What the geometry rule is actually reading
+as "outside" in the scored frames is a spider web (visible top-right in the stills), not a person.
+"cam07's guard genuinely patrols on both sides of this fence line" above is wrong; do not cite it.
+This was an AI visual misread of grainy IR stills, same failure class as the stationary-light
+retraction earlier in this file, not a second independent confirmation of it. The redirect to "the
+tracker follows illuminated ground/vegetation, not a fence-tracing error" happens to still be
+directionally right, but for the wrong specific clip and the wrong specific object (a web, not
+ground/vegetation) — treat it as unconfirmed rather than settled.
+
 ## Handoff for a new agent (2026-09-08, session close #11)
 
 **Read this section first — it supersedes #10 for current state.** 573 tests passing

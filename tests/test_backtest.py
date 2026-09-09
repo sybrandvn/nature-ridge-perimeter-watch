@@ -103,6 +103,7 @@ def test_run_backtest_assembles_rows_and_skips_unknown_camera(tmp_path: Path, ca
     assert len(rows) == 1
     assert rows[0]["message_id"] == 1
     assert rows[0]["category"] == "guard_candidate"
+    assert rows[0]["reason"] == "green_light"
     assert seen["daylight_hint"] is False  # 22:00 local, the sun table says night
     assert "camXX" in capsys.readouterr().err
     conn.close()
@@ -116,6 +117,7 @@ def test_write_csv_round_trip(tmp_path: Path):
             "camera_id": "cam01",
             "label": "guard",
             "category": "guard_candidate",
+            "reason": "green_light",
             "aspect_ratio": 1.0,
             "solidity": 0.9,
             "green_light_ratio": 0.2,
@@ -134,3 +136,4 @@ def test_write_csv_round_trip(tmp_path: Path):
         read_rows = list(csv.DictReader(f))
     assert read_rows[0]["message_id"] == "1"
     assert read_rows[0]["category"] == "guard_candidate"
+    assert read_rows[0]["reason"] == "green_light"

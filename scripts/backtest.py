@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
-from src.classify import classify, is_blinding_foreground  # noqa: E402
+from src.classify import classify_detailed, is_blinding_foreground  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
 from src.features import daylight_hint, is_daylight  # noqa: E402
 from src.reference_bg import (  # noqa: E402
@@ -49,6 +49,7 @@ _IDENTITY_COLUMNS = (
     "camera_id",
     "label",
     "category",
+    "reason",
     "blinding_foreground",
 )
 _NON_NUMERIC = ("channel_id", "message_id", "camera_id", "label", "time_of_day", "is_daylight")
@@ -124,15 +125,17 @@ def run_backtest(
             # classify() needs the real exogenous signal, not an image
             # statistic -- see the module docstring's resident_candidate note.
             features["is_daylight"] = is_daylight(clip["timestamp"])
+        result = classify_detailed(features)
         row = {
             "channel_id": clip["channel_id"],
             "message_id": clip["message_id"],
             "camera_id": clip["camera_id"],
             "label": clip["label"],
-            "category": classify(features),
+            "category": result.category,
+            "reason": result.reason,
             "blinding_foreground": is_blinding_foreground(features),
         }
-        for col in REPORT_COLUMNS[6:]:
+        for col in REPORT_COLUMNS[len(_IDENTITY_COLUMNS) :]:
             row[col] = None if features is None else features.get(col)
         yield row
     for camera_id_ in sorted(unknown_cameras):

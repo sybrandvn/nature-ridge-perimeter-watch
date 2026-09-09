@@ -4,7 +4,11 @@ Extracted from scripts/backtest.py 2026-09-09 with no change to what it
 computes (plan.md step 25; see docs/phase2_refactor_execution_plan.md). Every
 threshold below was measured against real labelled footage over the sessions
 recorded in docs/handoff.md, and every rule's derivation is kept here verbatim
-because this docstring is the only record of how each number was chosen.
+because this docstring is the only record of how each number was chosen. The
+numbers themselves live in config/thresholds.yaml (`classification:` section),
+loaded via `src.config.ClassificationThresholds`; `classify()` and
+`is_blinding_foreground()` both default to that file when called with no
+explicit `thresholds` argument, memoised so it is parsed once per process.
 
 `classify()` is the live per-clip path. `classify_event()` is reporting-only.
 `is_blinding_foreground()` is a separate, orthogonal maintenance flag.
@@ -34,6 +38,11 @@ Rules:
     0.0000 (everything vetoed) to 0.4182, while the 21 daylight animal, 58
     daylight environment, 3 resident and 5 neighbour clips all stayed at
     exactly 0.0000.
+    The threshold moved with the feature: `green_light_ratio_min` was 0.05
+    before this sharpening and is 0.02 after. The sharpened mask roughly
+    halves every green_light_ratio, so leaving 0.05 would have silently made
+    the rule ~2x stricter than the operating point anyone actually validated;
+    0.02 restores it, and the zero-leak numbers above are what confirm that.
     (Historical note kept because it is quoted elsewhere in this repo: this
     rule's own recall was 8.7% under the pre-2026-09-06 rule set. That is not
     the system's guard recall -- see the inside-only and warmup-flashlight
@@ -265,74 +274,85 @@ as a triage pointer, never as ground truth.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from functools import lru_cache
+from pathlib import Path
 
-# See classify()'s docstring ("animal_candidate / incident_candidate") for how this was measured.
-MEDIAN_FENCE_DISTANCE_MAX = 0.40
-# See classify()'s docstring for how this was measured -- only bounds the
-# animal_candidate branch, deliberately never incident_candidate.
-ANIMAL_ROW_AREA_MAX = 3000.0
-# See classify()'s "environment_candidate (sustained scattered motion)" note.
-BLOB_COUNT_MEDIAN_MAX = 4.0
-# See classify()'s "sustained whole-frame motion" note.
-MOTION_PIXEL_FRACTION_MEDIAN_MAX = 0.12
-# See classify()'s "blinded lens never alerts" note. Same threshold as
-# is_blinding_foreground()'s own, deliberately -- one obstruction definition.
-BLINDING_BLOB_WHITE_FRACTION = 0.4
-# Was 0.05 until 2026-09-08, when src.features sharpened the flashlight mask
-# (FLASHLIGHT_MIN_SATURATION 60 -> 130 plus a blob-area floor). That roughly
-# halves every green_light_ratio, so leaving 0.05 would have silently made the
-# rule ~2x stricter than the value anyone validated. 0.02 restores the intended
-# operating point and is measured zero-leak on the sharpened feature: across the
-# labelled corpus green_light_ratio's maximum is 0.0000 on all 32 animal, all 10
-# incident, all 8 resident and all 5 neighbour clips, against a guard p90 of
-# 0.222 and max 0.909.
-GREEN_LIGHT_RATIO_MIN = 0.02
+from src.config import ClassificationThresholds, load_thresholds_config
+
+_REPO_THRESHOLDS_PATH = Path(__file__).resolve().parents[1] / "config" / "thresholds.yaml"
 
 
-def classify(features: dict[str, float] | None) -> str:
+@lru_cache(maxsize=1)
+def default_thresholds() -> ClassificationThresholds:
+    """The repo's real config/thresholds.yaml, parsed once per process.
+
+    classify() runs once per clip across a 16,886-clip corpus, so re-parsing
+    YAML on every call would be wasteful; a change to the file on disk is only
+    picked up in a fresh process. Resolved from `__file__`, not the working
+    directory, since scripts/ entry points sys.path-insert the repo root but
+    never chdir into it.
+    """
+    return load_thresholds_config(_REPO_THRESHOLDS_PATH).classification_thresholds()
+
+
+def classify(
+    features: dict[str, float] | None,
+    thresholds: ClassificationThresholds | None = None,
+) -> str:
     """Pure rule lookup -- see the module docstring for what each rule means and
     where its thresholds come from. `guard_candidate` is checked first since
     most rules below assume a real flashlight sighting has already been pulled
     out. `environment_candidate` (both the blob_count and the metric physics
     gate) is checked next, before the shape-based rules, so a stormy/windy
     clip's scattered blobs -- or a geometrically-impossible reading -- don't
-    get read as a shape signal."""
+    get read as a shape signal.
+
+    `thresholds` defaults to the repo's real config/thresholds.yaml
+    (`default_thresholds()`) when not given; pass an explicit
+    `ClassificationThresholds` to vary one value without touching that file
+    (see tests/test_classify.py)."""
+    if thresholds is None:
+        thresholds = default_thresholds()
     if features is None:
         return "no_motion"
     if (
-        features["green_light_ratio"] > GREEN_LIGHT_RATIO_MIN
-        or features["green_light_flicker"] > 0.02
+        features["green_light_ratio"] > thresholds.green_light_ratio_min
+        or features["green_light_flicker"] > thresholds.green_light_flicker_min
     ):
         return "guard_candidate"
-    if features.get("warmup_flashlight_ratio", 0.0) > 0.002:
+    if features.get("warmup_flashlight_ratio", 0.0) > thresholds.warmup_flashlight_ratio_min:
         return "guard_candidate"
-    if features["blob_count"] > 10:
+    if features["blob_count"] > thresholds.blob_count_peak_min:
         return "environment_candidate"
-    if features.get("blob_count_median", 0.0) > BLOB_COUNT_MEDIAN_MAX:
+    if features.get("blob_count_median", 0.0) > thresholds.blob_count_median_min:
         return "environment_candidate"
     if (
         features.get("uncalibrated", 1.0) == 0.0
-        and features.get("implausible_height_fraction", 0.0) > 0.5
+        and features.get("implausible_height_fraction", 0.0)
+        > thresholds.implausible_height_fraction_min
     ):
         return "environment_candidate"
     if (
-        features["outside_pixel_fraction"] > 0.6
-        and features["median_fence_distance"] > 0.1
-        and features["median_fence_distance"] < MEDIAN_FENCE_DISTANCE_MAX
+        features["outside_pixel_fraction"] > thresholds.outside_pixel_fraction_min
+        and features["median_fence_distance"] > thresholds.median_fence_distance_min
+        and features["median_fence_distance"] < thresholds.median_fence_distance_max
     ):
-        if features.get("blob_white_fraction", 0.0) >= BLINDING_BLOB_WHITE_FRACTION:
+        if features.get("blob_white_fraction", 0.0) >= thresholds.blob_white_fraction_min:
             return "environment_candidate"
         if (
             features.get("motion_pixel_fraction_median", 0.0)
-            > MOTION_PIXEL_FRACTION_MEDIAN_MAX
+            > thresholds.motion_pixel_fraction_median_min
         ):
             return "environment_candidate"
-        if features["color_fraction"] > 0.15:
-            if features.get("row_normalised_area", 0.0) > ANIMAL_ROW_AREA_MAX:
+        if features["color_fraction"] > thresholds.color_fraction_min:
+            if features.get("row_normalised_area", 0.0) > thresholds.row_normalised_area_max:
                 return "environment_candidate"
             return "animal_candidate"
         return "incident_candidate"
-    if features["jitter"] > 50 and features["solidity"] < 0.85:
+    if (
+        features["jitter"] > thresholds.jitter_min
+        and features["solidity"] < thresholds.solidity_max
+    ):
         return "insect_candidate"
     if (
         features.get("zone_classifiable_fraction", 0.0) > 0.0
@@ -342,7 +362,10 @@ def classify(features: dict[str, float] | None) -> str:
     return "unclassified"
 
 
-def is_blinding_foreground(features: dict[str, float] | None) -> bool:
+def is_blinding_foreground(
+    features: dict[str, float] | None,
+    thresholds: ClassificationThresholds | None = None,
+) -> bool:
     """True if a bright obstruction (vegetation, a web) right against the lens
     is dominating the tracked blob -- a maintenance signal (clean the camera),
     independent of and orthogonal to `classify()`'s category: a clip can be
@@ -357,11 +380,18 @@ def is_blinding_foreground(features: dict[str, float] | None) -> bool:
     and common everywhere) crossing 18 is similarly rare outside this pattern.
     Combined: 7/10 of a hand-picked blinding debug set caught, ZERO leak into
     animal or incident, 14.5% guard / 29.3% environment / 20% resident false-fire.
+
+    `thresholds` defaults the same way `classify()`'s does -- see there.
+    `blob_white_fraction_min` is the SAME value `classify()`'s outside-geometry
+    branch gates on, deliberately: one obstruction definition, read from one
+    config key.
     """
+    if thresholds is None:
+        thresholds = default_thresholds()
     if features is None:
         return False
-    return features.get("blob_white_fraction", 0.0) >= 0.4 or (
-        features.get("long_flare_frames", 0.0) >= 18
+    return features.get("blob_white_fraction", 0.0) >= thresholds.blob_white_fraction_min or (
+        features.get("long_flare_frames", 0.0) >= thresholds.long_flare_frames_min
     )
 
 

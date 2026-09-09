@@ -9,7 +9,7 @@ re-derivation, not a test fix. See src/classify.py's module docstring.
 
 import pytest
 
-from src.classify import classify, classify_event, is_blinding_foreground
+from src.classify import classify, classify_event, default_thresholds, is_blinding_foreground
 
 
 def _features(**overrides) -> dict[str, float]:
@@ -388,3 +388,197 @@ def test_classify_event_empty_is_no_motion():
 
 def test_classify_event_single_category_passes_through():
     assert classify_event(["resident_candidate"]) == "resident_candidate"
+
+
+# --------------------------------------------------------------------------
+# Explicit ClassificationThresholds -- proves the wiring is live, not a
+# leftover hardcoded literal. Each test moves exactly one field away from the
+# repo's real config/thresholds.yaml and checks the category flips accordingly.
+# --------------------------------------------------------------------------
+
+
+def _thresholds(**overrides):
+    import dataclasses
+
+    return dataclasses.replace(default_thresholds(), **overrides)
+
+
+def test_classify_uses_explicit_thresholds_not_hardcoded_literals():
+    features = _features(green_light_ratio=0.03)
+    # Default green_light_ratio_min is 0.02, so 0.03 fires guard_candidate.
+    assert classify(features) == "guard_candidate"
+    # Raising the threshold above the observed value must suppress the rule --
+    # if classify() still used a hardcoded 0.02 literal, this would be a no-op.
+    assert classify(features, _thresholds(green_light_ratio_min=0.05)) != "guard_candidate"
+
+
+def test_classify_green_light_flicker_threshold_is_wired():
+    features = _features(green_light_flicker=0.03)
+    assert classify(features) == "guard_candidate"
+    assert classify(features, _thresholds(green_light_flicker_min=0.05)) != "guard_candidate"
+
+
+def test_classify_warmup_flashlight_threshold_is_wired():
+    features = _features(warmup_flashlight_ratio=0.003)
+    assert classify(features) == "guard_candidate"
+    assert (
+        classify(features, _thresholds(warmup_flashlight_ratio_min=0.01)) != "guard_candidate"
+    )
+
+
+def test_classify_blob_count_peak_threshold_is_wired():
+    features = _features(blob_count=11)
+    assert classify(features) == "environment_candidate"
+    assert (
+        classify(features, _thresholds(blob_count_peak_min=20)) != "environment_candidate"
+    )
+
+
+def test_classify_blob_count_median_threshold_is_wired():
+    features = _features(blob_count_median=5.0)
+    assert classify(features) == "environment_candidate"
+    assert (
+        classify(features, _thresholds(blob_count_median_min=10.0)) != "environment_candidate"
+    )
+
+
+def test_classify_implausible_height_threshold_is_wired():
+    features = _features(uncalibrated=0.0, implausible_height_fraction=0.6)
+    assert classify(features) == "environment_candidate"
+    assert (
+        classify(features, _thresholds(implausible_height_fraction_min=0.9))
+        != "environment_candidate"
+    )
+
+
+def test_classify_outside_pixel_fraction_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.65, median_fence_distance=0.2, color_fraction=0.0
+    )
+    assert classify(features) == "incident_candidate"
+    assert (
+        classify(features, _thresholds(outside_pixel_fraction_min=0.9)) != "incident_candidate"
+    )
+
+
+def test_classify_median_fence_distance_min_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.65, median_fence_distance=0.15, color_fraction=0.0
+    )
+    assert classify(features) == "incident_candidate"
+    assert (
+        classify(features, _thresholds(median_fence_distance_min=0.3)) != "incident_candidate"
+    )
+
+
+def test_classify_median_fence_distance_max_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.65, median_fence_distance=0.35, color_fraction=0.0
+    )
+    assert classify(features) == "incident_candidate"
+    assert (
+        classify(features, _thresholds(median_fence_distance_max=0.2)) != "incident_candidate"
+    )
+
+
+def test_classify_color_fraction_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        color_fraction=0.2,
+        row_normalised_area=100.0,
+    )
+    assert classify(features) == "animal_candidate"
+    assert classify(features, _thresholds(color_fraction_min=0.5)) != "animal_candidate"
+
+
+def test_classify_motion_pixel_fraction_median_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        color_fraction=0.0,
+        motion_pixel_fraction_median=0.13,
+    )
+    assert classify(features) == "environment_candidate"
+    assert (
+        classify(features, _thresholds(motion_pixel_fraction_median_min=0.5))
+        != "environment_candidate"
+    )
+
+
+def test_classify_row_normalised_area_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        color_fraction=0.2,
+        row_normalised_area=3500.0,
+    )
+    assert classify(features) == "environment_candidate"
+    assert (
+        classify(features, _thresholds(row_normalised_area_max=10000.0)) != "environment_candidate"
+    )
+
+
+def test_classify_jitter_threshold_is_wired():
+    features = _features(jitter=60.0, solidity=0.5)
+    assert classify(features) == "insect_candidate"
+    assert classify(features, _thresholds(jitter_min=100.0)) != "insect_candidate"
+
+
+def test_classify_solidity_threshold_is_wired():
+    features = _features(jitter=60.0, solidity=0.5)
+    assert classify(features) == "insect_candidate"
+    assert classify(features, _thresholds(solidity_max=0.3)) != "insect_candidate"
+
+
+def test_classify_blob_white_fraction_blinding_gate_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        color_fraction=0.0,
+        blob_white_fraction=0.45,
+    )
+    assert classify(features) == "environment_candidate"
+    assert (
+        classify(features, _thresholds(blob_white_fraction_min=0.9)) != "environment_candidate"
+    )
+
+
+def test_is_blinding_foreground_blob_white_fraction_threshold_is_wired():
+    features = _features(blob_white_fraction=0.45)
+    assert is_blinding_foreground(features) is True
+    assert is_blinding_foreground(features, _thresholds(blob_white_fraction_min=0.9)) is False
+
+
+def test_is_blinding_foreground_long_flare_frames_threshold_is_wired():
+    features = _features(long_flare_frames=20)
+    assert is_blinding_foreground(features) is True
+    assert is_blinding_foreground(features, _thresholds(long_flare_frames_min=50)) is False
+
+
+# --------------------------------------------------------------------------
+# classify(features) with no explicit thresholds must agree with passing the
+# default explicitly -- proves the implicit default path and the explicit one
+# are the same code path, not a divergent shortcut.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        _features(),
+        _features(green_light_ratio=0.5),
+        _features(blob_count=15),
+        _features(outside_pixel_fraction=0.7, median_fence_distance=0.2, color_fraction=0.2),
+        _features(jitter=60, solidity=0.5),
+    ],
+)
+def test_classify_default_thresholds_matches_explicit_default(features):
+    assert classify(features) == classify(features, default_thresholds())
+
+
+def test_is_blinding_foreground_default_thresholds_matches_explicit_default():
+    features = _features(blob_white_fraction=0.5)
+    assert is_blinding_foreground(features) == is_blinding_foreground(
+        features, default_thresholds()
+    )

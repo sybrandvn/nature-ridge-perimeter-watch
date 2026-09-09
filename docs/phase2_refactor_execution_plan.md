@@ -197,10 +197,14 @@ class ClassificationThresholds:
 
 Requirements:
 
-- A `from_mapping(cls, classification: Mapping) -> ClassificationThresholds` that reads the nested
-  YAML shape and **raises `ConfigError` naming the missing path** on any absent key. No defaults,
-  no `.get` fallbacks — a typo'd key must fail loudly at load time. This mirrors the `KeyError`
-  contract in DO-NOT #4.
+- A function that reads the nested YAML shape and **raises `ConfigError` naming the missing path**
+  on any absent key. No defaults, no `.get` fallbacks — a typo'd key must fail loudly. This mirrors
+  the `KeyError` contract in DO-NOT #4. Note this check necessarily runs when
+  `classification_thresholds()` is called, not inside `load_thresholds_config()` itself —
+  `load_thresholds_config` has other callers (existing `motion_fingerprint` tests) that load
+  minimal YAML with no `classification` section at all, so it cannot require these 16 keys to be
+  present. The failure is still loud; it just surfaces at first use of the typed accessor rather
+  than at file read.
 - Raise `ConfigError` on unrecognised keys under `classification:` too, so a stale key left behind
   from the old file shape is caught rather than silently ignored.
 - Add `ThresholdsConfig.classification_thresholds()` returning it, and

@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
+from scipy.optimize import linear_sum_assignment  # noqa: E402
 
 from src import db  # noqa: E402
 from src.config import CamerasConfig, CameraZone, load_app_config, load_cameras_config  # noqa: E402
@@ -111,6 +112,10 @@ FEATURE_COLUMNS = (
     "multi_object_max_flashlight_ratio",
     "multi_object_dominant_excl_flashlight_outside_fraction",
     "multi_object_dominant_excl_flashlight_has_evidence",
+    "multi_object_person_track_count",
+    "multi_object_animal_track_count",
+    "multi_object_artifact_track_count",
+    "multi_object_type_has_evidence",
     "aspect_ratio",
     "solidity",
     "saturation_ratio",
@@ -727,6 +732,41 @@ class TrackedObject:
     merged_ids: tuple[int, ...] = ()
 
 
+_UNGATED_COST = 1.0e6  # cost sentinel: candidate outside every gate, never assignable
+
+
+def _bbox_histogram(
+    frame_bgr: np.ndarray, bbox: tuple[float, float, float, float]
+) -> np.ndarray | None:
+    """Small HSV hue/saturation histogram of a bbox crop, normalised to sum to
+    1 -- the appearance model `track_multiple_objects` uses to break ties
+    between two candidates that are otherwise equally plausible geometrically
+    (both within the same size-relative jump radius). None for a degenerate
+    (empty or off-frame) crop, matched the same way `green_light_ratio`
+    already treats an empty crop -- absence, not a confident reading.
+    """
+    x0, y0, x1, y1 = (int(round(v)) for v in bbox)
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(frame_bgr.shape[1], x1), min(frame_bgr.shape[0], y1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    crop = frame_bgr[y0:y1, x0:x1]
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
+    cv2.normalize(hist, hist, alpha=1.0, norm_type=cv2.NORM_L1)
+    return hist
+
+
+def _histogram_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """0 (identical) to ~1 (disjoint) -- Bhattacharyya distance, the same
+    convention `cv2.compareHist` documents and the one metric of the three it
+    offers that is already bounded to a fixed range regardless of histogram
+    content, so it can be added directly to the (also roughly [0, 2]-bounded)
+    geometric cost below without per-clip rescaling.
+    """
+    return float(cv2.compareHist(a, b, cv2.HISTCMP_BHATTACHARYYA))
+
+
 def track_multiple_objects(
     candidates_per_frame: list[list[np.ndarray]],
     *,
@@ -734,62 +774,154 @@ def track_multiple_objects(
     max_track_miss_frames: int,
     size_margin_fraction: float = 0.75,
     min_size_margin: float = 6.0,
+    frames_bgr: list[np.ndarray] | None = None,
+    appearance_weight: float = 0.25,
+    max_merge_streak: int = 30,
+    confirm_frames: int = 1,
 ) -> list[list[TrackedObject]]:
-    """Greedy multi-object tracker: gives every distinct subject its own
-    persistent id across frames, instead of `track_contour`'s single "the"
-    track. Candidates are assigned to existing tracks by bounding-box overlap
-    first, then by nearest centroid within the same size-relative cap as
-    `track_contour` (see `_size_relative_margin`); an unmatched candidate
-    spawns a new id, and a track is dropped after `max_track_miss_frames`
-    consecutive frames with nothing assigned to it.
+    """Multi-object tracker: gives every distinct subject its own persistent
+    id across frames, instead of `track_contour`'s single "the" track.
 
-    When two or more active tracks' last positions both fall inside a single
-    candidate blob (e.g. two people and a backpack walk close enough that
-    background-subtraction can no longer separate them), all of them are kept
-    alive against that same blob (`TrackedObject.merged_ids`) rather than one
-    being silently dropped -- this is what lets a merge be shown (and survived)
-    as "still 2 tracks, temporarily sharing one box" instead of collapsing to
-    a single identity that then has to be re-acquired as if it were new once
-    the subjects separate again. While merged, each track's own internal
-    position estimate is dead-reckoned forward by its last observed velocity
-    rather than snapped to the shared blob, so that when the blob splits back
-    into separate candidates, each id's drifted position is still closest to
-    its own actual half of the split rather than an arbitrary pick between
-    two now-identical candidate scores.
+    Rewritten 2026-09-09 (docs/detection_improvement_review.md section 3,
+    stage 1) to close four gaps the original greedy version had:
+
+    1. **Assignment is now a single global optimum, not per-track-in-dict-
+       -order.** Every active track's next position is first *predicted*
+       forward by its own constant-velocity estimate (a plain linear
+       predictor -- not a full Kalman filter with a modelled uncertainty
+       covariance, which would be the fuller version of this fix but isn't
+       justified yet without evidence a fixed predictor under-performs it).
+       A track-by-candidate cost matrix (IoU where they overlap, gated
+       size-relative distance otherwise, blended with an optional appearance
+       term -- see below) is solved once with `scipy.optimize.
+       linear_sum_assignment` (the Hungarian algorithm), rather than each
+       track greedily grabbing its own best candidate in whatever order
+       Python's dict iteration happened to visit them -- the old version
+       could give track A a mediocre match and leave track B's genuinely
+       better one already taken, purely as a function of id order.
+    2. **An optional appearance model.** When `frames_bgr` is supplied, each
+       independently-matched track keeps a small HSV histogram of its own
+       crop (`_bbox_histogram`); the cost matrix adds `appearance_weight *`
+       the Bhattacharyya distance to that stored histogram as a tie-breaker
+       among candidates that are otherwise within the same gated distance --
+       exactly what the review names as the single missing ingredient a
+       SORT/ByteTrack-style tracker would have. It only ever adds cost inside
+       an already-gated pair, so it can sharpen a choice, never reach outside
+       the geometric gate to make an implausible match.
+    3. **A cap on indefinite merge dead-reckoning** (`max_merge_streak`):
+       previously a merged track (see below) dead-reckoned forward by its
+       last velocity for as long as it stayed merged, with no limit -- a
+       long-lived merge could drift a track arbitrarily far from any real
+       position. After `max_merge_streak` consecutive merged (not
+       independently re-matched) frames, the track is dropped instead of
+       continuing to extrapolate.
+    4. **Optional tentative-track confirmation** (`confirm_frames`): a newly
+       spawned track is only emitted into the result once it has been
+       independently matched `confirm_frames` consecutive times (default 1,
+       which reproduces the original immediate-emit behaviour exactly -- see
+       every pre-existing `track_multiple_objects` test). This is what makes
+       it viable for the real pipeline to track ALL candidates (not just
+       min-area `blobs`) without every single-frame speck of noise minting
+       its own id -- see the call site in `extract_clip_features`, which is
+       the concrete fix for "it sees only blobs, never candidates, so it
+       cannot see small subjects at all" (the animal population).
+
+    Still NOT solved by this pass, and worth naming rather than silently
+    leaving implicit: a genuinely new second subject that enters *within* an
+    already-tracked object's box (no separate blob exists for it yet) cannot
+    be split out of that one shared blob -- that needs real shape
+    segmentation (e.g. watershed on the mask), not an assignment algorithm,
+    and is out of scope here.
+
+    When two or more active tracks' predicted positions both fall inside a
+    single candidate blob (e.g. two people and a backpack walk close enough
+    that background-subtraction can no longer separate them), all of them are
+    kept alive against that same blob (`TrackedObject.merged_ids`) rather than
+    one being silently dropped -- this is what lets a merge be shown (and
+    survived) as "still 2 tracks, temporarily sharing one box" instead of
+    collapsing to a single identity that then has to be re-acquired as if it
+    were new once the subjects separate again. While merged, each track's own
+    internal position estimate is dead-reckoned forward by its last observed
+    velocity rather than snapped to the shared blob, so that when the blob
+    splits back into separate candidates, each id's drifted position is still
+    closest to its own actual half of the split rather than an arbitrary pick
+    between two now-identical candidate scores.
     """
     next_id = 0
     tracks: dict[int, dict] = {}
     results: list[list[TrackedObject]] = []
 
-    for candidates in candidates_per_frame:
+    for frame_index, candidates in enumerate(candidates_per_frame):
         boxes = [_contour_bbox(c) for c in candidates]
-        claims: dict[int, list[int]] = {}
-        for tid, track in tracks.items():
-            if not boxes:
+        frame_bgr = (
+            frames_bgr[frame_index]
+            if frames_bgr is not None and frame_index < len(frames_bgr)
+            else None
+        )
+        track_ids = list(tracks.keys())
+        predicted: dict[int, tuple[float, float, float, float]] = {}
+        for tid in track_ids:
+            track = tracks[tid]
+            vx, vy = track.get("velocity", (0.0, 0.0))
+            x0, y0, x1, y1 = track["bbox"]
+            predicted[tid] = (x0 + vx, y0 + vy, x1 + vx, y1 + vy)
+
+        primary_for_track: dict[int, int] = {}
+        group_for_candidate: dict[int, list[int]] = {}
+        if track_ids and boxes:
+            cost = np.full((len(track_ids), len(boxes)), _UNGATED_COST, dtype=float)
+            for i, tid in enumerate(track_ids):
+                pred_bbox = predicted[tid]
+                allowed = min(
+                    max_jump_distance,
+                    _size_relative_margin(
+                        pred_bbox, margin_fraction=size_margin_fraction, min_margin=min_size_margin
+                    ),
+                )
+                pred_center = _bbox_center(pred_bbox)
+                track_hist = tracks[tid].get("hist")
+                for j, box in enumerate(boxes):
+                    iou = _bbox_iou(pred_bbox, box)
+                    if iou > 0:
+                        geo_cost = 1.0 - iou
+                    else:
+                        cx, cy = _bbox_center(box)
+                        distance = ((cx - pred_center[0]) ** 2 + (cy - pred_center[1]) ** 2) ** 0.5
+                        if distance > allowed:
+                            continue
+                        geo_cost = 1.0 + distance / allowed if allowed > 0 else 1.0
+                    appearance_cost = 0.0
+                    if frame_bgr is not None and track_hist is not None:
+                        cand_hist = _bbox_histogram(frame_bgr, box)
+                        if cand_hist is not None:
+                            appearance_cost = _histogram_distance(track_hist, cand_hist)
+                    cost[i, j] = geo_cost + appearance_weight * appearance_cost
+
+            row_idx, col_idx = linear_sum_assignment(cost)
+            for i, j in zip(row_idx, col_idx, strict=True):
+                if cost[i, j] >= _UNGATED_COST:
+                    continue
+                tid = track_ids[i]
+                primary_for_track[tid] = j
+                group_for_candidate.setdefault(j, []).append(tid)
+
+        # Secondary claims: a track left unassigned by the (one-to-one)
+        # Hungarian solve whose predicted box still overlaps a candidate
+        # someone else was assigned -- this is the merge case, exactly as
+        # the original greedy version detected it (just no longer gating the
+        # primary assignment itself on dict order).
+        for tid in track_ids:
+            if tid in primary_for_track or not boxes:
                 continue
-            ious = [_bbox_iou(track["bbox"], box) for box in boxes]
-            best_iou_idx = max(range(len(boxes)), key=lambda i: ious[i])
-            if ious[best_iou_idx] > 0:
-                claims.setdefault(best_iou_idx, []).append(tid)
-                continue
-            allowed = min(
-                max_jump_distance,
-                _size_relative_margin(
-                    track["bbox"], margin_fraction=size_margin_fraction, min_margin=min_size_margin
-                ),
-            )
-            track_center = _bbox_center(track["bbox"])
-            distances = [
-                ((cx - track_center[0]) ** 2 + (cy - track_center[1]) ** 2) ** 0.5
-                for cx, cy in (_bbox_center(box) for box in boxes)
-            ]
-            nearest_idx = min(range(len(boxes)), key=lambda i: distances[i])
-            if distances[nearest_idx] <= allowed:
-                claims.setdefault(nearest_idx, []).append(tid)
+            pred_bbox = predicted[tid]
+            ious = [_bbox_iou(pred_bbox, box) for box in boxes]
+            best_idx = max(range(len(boxes)), key=lambda i: ious[i])
+            if ious[best_idx] > 0 and best_idx in group_for_candidate:
+                group_for_candidate[best_idx].append(tid)
 
         frame_tracks: list[TrackedObject] = []
         matched_ids: set[int] = set()
-        for cand_idx, tids in claims.items():
+        for cand_idx, tids in group_for_candidate.items():
             bbox = boxes[cand_idx]
             if len(tids) == 1:
                 tid = tids[0]
@@ -800,17 +932,34 @@ def track_multiple_objects(
                 )
                 tracks[tid]["bbox"] = bbox
                 tracks[tid]["miss"] = 0
-                frame_tracks.append(TrackedObject(track_id=tid, bbox=bbox))
+                tracks[tid]["merge_streak"] = 0
+                tracks[tid]["pending"] = tracks[tid].get("pending", 0) + 1
+                if frame_bgr is not None:
+                    hist = _bbox_histogram(frame_bgr, bbox)
+                    if hist is not None:
+                        tracks[tid]["hist"] = hist
                 matched_ids.add(tid)
+                if tracks[tid]["pending"] >= confirm_frames:
+                    frame_tracks.append(TrackedObject(track_id=tid, bbox=bbox))
                 continue
             for tid in tids:
+                tracks[tid]["merge_streak"] = tracks[tid].get("merge_streak", 0) + 1
+                if tracks[tid]["merge_streak"] > max_merge_streak:
+                    del tracks[tid]
+                    matched_ids.add(tid)
+                    continue
                 vx, vy = tracks[tid].get("velocity", (0.0, 0.0))
                 x0, y0, x1, y1 = tracks[tid]["bbox"]
                 tracks[tid]["bbox"] = (x0 + vx, y0 + vy, x1 + vx, y1 + vy)
                 tracks[tid]["miss"] = 0
-                merged_ids = tuple(sorted(set(tids) - {tid}))
-                frame_tracks.append(TrackedObject(track_id=tid, bbox=bbox, merged_ids=merged_ids))
                 matched_ids.add(tid)
+                merged_ids = tuple(sorted(set(tids) - {tid}))
+                if tracks[tid]["pending"] >= confirm_frames:
+                    frame_tracks.append(
+                        TrackedObject(
+                            track_id=tid, bbox=tracks[tid]["bbox"], merged_ids=merged_ids
+                        )
+                    )
 
         for tid in list(tracks.keys()):
             if tid in matched_ids:
@@ -819,14 +968,19 @@ def track_multiple_objects(
             if tracks[tid]["miss"] > max_track_miss_frames:
                 del tracks[tid]
 
-        claimed_candidate_idxs = set(claims.keys())
+        claimed_candidate_idxs = set(group_for_candidate.keys())
         for cand_idx, box in enumerate(boxes):
             if cand_idx in claimed_candidate_idxs:
                 continue
             tid = next_id
             next_id += 1
-            tracks[tid] = {"bbox": box, "miss": 0}
-            frame_tracks.append(TrackedObject(track_id=tid, bbox=box))
+            tracks[tid] = {"bbox": box, "miss": 0, "merge_streak": 0, "pending": 1}
+            if frame_bgr is not None:
+                hist = _bbox_histogram(frame_bgr, box)
+                if hist is not None:
+                    tracks[tid]["hist"] = hist
+            if confirm_frames <= 1:
+                frame_tracks.append(TrackedObject(track_id=tid, bbox=box))
 
         results.append(frame_tracks)
     return results
@@ -1091,6 +1245,7 @@ def detect_clip(
     ignore_polygons: tuple[tuple[tuple[float, float], ...], ...] = (),
     compensate_warmup: bool = False,
     prefer_flashlight_candidate: bool = False,
+    multi_track_confirm_frames: int = 1,
 ) -> ClipDetection | None:
     """Run the background-subtraction detector over one clip, keeping per-frame
     detail. Returns None if the clip has no readable frames.
@@ -1285,6 +1440,37 @@ def detect_clip(
     labelled corpus before trusting it corpus-wide, same discipline as every
     other `detect_clip`-level change in this file's history.
 
+    `multi_track_confirm_frames` (default 1, i.e. off) is `track_multiple_
+    objects`'s `confirm_frames` for the real `multi_tracks` pass below --
+    raising it lets that pass require a new track to be matched several
+    consecutive frames before it is reported at all, so a single-frame
+    speck of noise (a leaf edge, a compression artifact) never mints its
+    own persistent id when tracking EVERY raw `per_frame_candidates`
+    contour (any nonzero area up to `max_area_fraction`) instead of only
+    min-area `per_frame_blobs` -- the concrete fix for "the multi-object
+    tracker cannot see small subjects at all" (docs/detection_improvement_
+    review.md section 3, stage 1), the animal population specifically.
+
+    Measured 2026-09-09 at confirm_frames=3 against the full labelled
+    corpus and REJECTED at that value: it silently suppresses exactly the
+    short-lived flashlight objects `_multi_object_flashlight_features`
+    depends on (a torch beam is often visible for only 1-2 frames before
+    the tracker's own gating drops or re-splits it), regressing 16 guard
+    clips whose `guard_candidate` classification depends on
+    `multi_object_max_flashlight_ratio` -- including cam07/11174, the
+    exact clip that motivated shipping that feature in the first place
+    (its ratio collapsed from 0.429, comfortably over
+    `GREEN_LIGHT_RATIO_MIN`, to 0.0). Defaulting to 1 reproduces the
+    pre-rewrite immediate-report behaviour exactly (every candidate is
+    reported the frame it first appears, same as the old blob-only
+    tracker), so `multi_object_max_flashlight_ratio` is unaffected -- see
+    `docs/detection_improvement_review.md`'s implementation-status section
+    for the full before/after corpus numbers. The candidates-vs-blobs input
+    switch (the actual small-subject fix) still applies regardless of this
+    value; only the noise-suppression half of the stage-1 tracker rewrite
+    is gated behind it, and is left off by default until a real motivating
+    case for it is measured.
+
     Both passes above refresh their appearance template on every real
     detection, which is what lets them follow a genuinely changing subject.
     They can still both come up empty on a frame, so `anchor_refine` adds a
@@ -1455,11 +1641,14 @@ def detect_clip(
         )
     )
     multi_tracks = track_multiple_objects(
-        per_frame_blobs,
+        per_frame_candidates,
         max_jump_distance=max_jump_distance,
         max_track_miss_frames=max_track_miss_frames,
         size_margin_fraction=track_search_margin_fraction,
         min_size_margin=min_track_search_margin,
+        frames_bgr=considered,
+        max_merge_streak=max_recovered_streak,
+        confirm_frames=multi_track_confirm_frames,
     )
 
     detections: list[FrameDetection] = []
@@ -2037,6 +2226,113 @@ def _multi_object_flashlight_features(
     }
 
 
+PERSON_HEIGHT_MIN_M = 0.9
+PERSON_HEIGHT_MAX_M = 2.2
+ARTIFACT_WHITE_FRACTION_MIN = 0.4  # same bar classify()'s blob_white_fraction_min uses
+
+
+def _multi_object_type_features(
+    detection: ClipDetection,
+    zone: CameraZone,
+    frame_width: int,
+    frame_height: int,
+) -> dict[str, float]:
+    """Scores every persistently-tracked object (`detection.multi_tracks`) for
+    a coarse per-track TYPE -- person, animal, or artifact -- rather than the
+    one whole-clip scalar (`subject_height_m`, `blob_white_fraction`, ...)
+    every other feature in this module reports for whichever single contour
+    `track_contour`'s best-contour pipeline happened to follow.
+
+    Added 2026-09-09 (docs/detection_improvement_review.md section 3, stage
+    2 of the object-linking design). Person/animal reuse `GroundCalibration.
+    height_m` exactly the way `_metric_track_features` already does for the
+    single tracked subject -- the review's own note that this is "a
+    mechanically small extension of an existing primitive, not new detection
+    work" applies here just as it did to the per-object flashlight score
+    (`_multi_object_flashlight_features`) shipped earlier the same day.
+    Artifact reuses `blob_white_fraction` (a lens obstruction/overexposure
+    reading) the same way.
+
+    `PERSON_HEIGHT_MIN_M`/`_MAX_M` (0.9-2.2 m) mirror `classify()`'s
+    `neighbour_subject_height_min`/`_max` -- duplicated here deliberately
+    rather than imported, the same separation every other feature in this
+    module keeps: spike.py computes raw signals, classify.py (via
+    `config/thresholds.yaml`) owns the actual decision thresholds. A track's
+    OWN median height across its genuine frames decides its type; a track
+    with no calibrated reading at all (off the ground plane every frame)
+    counts toward neither.
+
+    Vegetation is NOT scored here despite being in the review's own table --
+    the cheapest per-track evidence for it (matching the per-camera
+    reference background at the same coordinates) needs the actual aligned
+    reference image, not just the whole-clip `scenery_motion_fraction`
+    scalar `ClipDetection` already carries; threading that image out of
+    `detect_clip` is a bigger, more invasive change than the two signals
+    below, and the review lists three DIFFERENT candidate vegetation
+    signals (background match, returns-to-place, incoherent optical flow) --
+    picking one deserves its own measurement pass, not a guess bundled into
+    this commit.
+
+    `multi_object_type_has_evidence` disambiguates "this camera has no
+    metric calibration at all, so person/animal both read 0" from a real
+    "no track was person- or animal-height" -- same discipline as every
+    other `_has_evidence` flag in this module. It only qualifies the
+    person/animal counts: `multi_object_artifact_track_count` has no such
+    ambiguity, since `blob_white_fraction` is computable from any frame
+    regardless of calibration.
+
+    Reporting-only: not read by classify() without its own corpus-wide
+    measurement pass first, same discipline as every other detect_clip-level
+    feature in this file's history.
+    """
+    zeros = {
+        "multi_object_person_track_count": 0.0,
+        "multi_object_animal_track_count": 0.0,
+        "multi_object_artifact_track_count": 0.0,
+        "multi_object_type_has_evidence": 0.0,
+    }
+    if not detection.multi_tracks:
+        return zeros
+
+    cal = calibrate(zone, frame_width, frame_height)
+    heights: dict[int, list[float]] = {}
+    white_fractions: dict[int, float] = {}
+    for frame_index, frame_tracks in enumerate(detection.multi_tracks):
+        frame_bgr = (
+            detection.frames[frame_index].frame if frame_index < len(detection.frames) else None
+        )
+        for obj in frame_tracks:
+            x0, y0, x1, y1 = obj.bbox
+            if cal is not None:
+                base = ((x0 + x1) / 2.0, float(y1))
+                height = cal.height_m(base, float(y0), enforce_limits=False)
+                if height is not None and 0 < height <= MAX_SUBJECT_HEIGHT_M:
+                    heights.setdefault(obj.track_id, []).append(height)
+            if frame_bgr is not None:
+                fraction = blob_white_fraction(frame_bgr, _bbox_to_rect_contour(obj.bbox))
+                white_fractions[obj.track_id] = max(
+                    white_fractions.get(obj.track_id, 0.0), fraction
+                )
+
+    person_count = 0
+    animal_count = 0
+    for track_heights in heights.values():
+        median_height = float(np.median(track_heights))
+        if PERSON_HEIGHT_MIN_M <= median_height <= PERSON_HEIGHT_MAX_M:
+            person_count += 1
+        elif median_height < PERSON_HEIGHT_MIN_M:
+            animal_count += 1
+
+    artifact_count = sum(1 for f in white_fractions.values() if f >= ARTIFACT_WHITE_FRACTION_MIN)
+
+    return {
+        "multi_object_person_track_count": float(person_count),
+        "multi_object_animal_track_count": float(animal_count),
+        "multi_object_artifact_track_count": float(artifact_count),
+        "multi_object_type_has_evidence": float(cal is not None),
+    }
+
+
 def _metric_track_features(
     considered: list[FrameDetection],
     zone: CameraZone,
@@ -2487,6 +2783,7 @@ def extract_clip_features(
         **_multi_object_flashlight_features(
             detection, zone, frame_width, frame_height, exclude_mask=ignore_mask
         ),
+        **_multi_object_type_features(detection, zone, frame_width, frame_height),
         "flashlight_subject_fraction": (
             0.0 if not frames_with_box else flashlight_bbox_frames / frames_with_box
         ),

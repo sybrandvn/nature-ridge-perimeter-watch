@@ -391,6 +391,30 @@ def test_track_multiple_objects_spawns_new_id_for_later_unmatched_candidate():
     assert {t.track_id for t in results[1]} == {0, 1}
 
 
+def test_track_multiple_objects_confirm_frames_suppresses_single_frame_noise():
+    # A one-frame speck (never seen again) never gets reported once
+    # `confirm_frames` requires more than one consecutive match -- the real
+    # pipeline's fix for tracking every raw candidate, not just min-area
+    # blobs, without every transient artifact minting its own persistent id.
+    subject0 = _square_contour(10, 10, 4)
+    subject1 = _square_contour(12, 10, 4)
+    subject2 = _square_contour(14, 10, 4)
+    speck = _square_contour(80, 80, 2)  # appears once, never again
+
+    results = spike.track_multiple_objects(
+        [[subject0], [subject1, speck], [subject2]],
+        max_jump_distance=50,
+        max_track_miss_frames=2,
+        confirm_frames=2,
+    )
+
+    # The real subject is confirmed on its 2nd consecutive match (frame 1)
+    # and stays visible; the speck, matched only once, is never emitted.
+    assert {t.track_id for t in results[0]} == set()
+    assert {t.track_id for t in results[1]} == {0}
+    assert {t.track_id for t in results[2]} == {0}
+
+
 def test_track_multiple_objects_drops_track_after_miss_tolerance():
     frame0 = [_square_contour(10, 10, 4)]
     empty: list[np.ndarray] = []
@@ -429,6 +453,110 @@ def test_track_multiple_objects_keeps_both_ids_alive_through_a_merge_and_resplit
     # candidate after the split, not the right one.
     assert split_by_id[0] == left_box
     assert split_by_id[1] == right_box
+
+
+def test_track_multiple_objects_hungarian_beats_independent_greedy_pick():
+    # Two tracks, two next-frame candidates -- constructed so BOTH tracks'
+    # own independently-nearest candidate is the SAME one (candidate 0),
+    # while candidate 1 is only reachable (within the gate) for track 1, not
+    # track 0. A per-track greedy pick (the old implementation) has no way
+    # to express "give candidate 0 to the track that needs it and send the
+    # other one to its only other valid option" -- both tracks claim
+    # candidate 0 (reported as a spurious merge) and candidate 1, which is
+    # genuinely still track 1 continuing, is left unclaimed and spawns a
+    # brand new, wrong, third id. A single global (Hungarian) assignment
+    # gets this right: it is the only valid one-to-one match, since track 0
+    # has no other reachable candidate at all.
+    track0 = _square_contour(0, 20, 10)  # bbox (0, 20, 10, 30), center (5, 25)
+    track1 = _square_contour(10, 20, 10)  # bbox (10, 20, 20, 30), center (15, 25)
+    cand0 = _square_contour(5, 16, 10)  # center (10, 21) -- ~6.4 from BOTH tracks
+    cand1 = _square_contour(10, 27, 10)  # center (15, 32) -- ~7.0 from track1 only
+    # (track0-cand1 distance is ~12.2, well past the gate below.)
+
+    results = spike.track_multiple_objects(
+        [[track0, track1], [cand0, cand1]], max_jump_distance=50, max_track_miss_frames=2
+    )
+
+    frame1 = results[1]
+    assert {t.track_id for t in frame1} == {0, 1}
+    assert all(t.merged_ids == () for t in frame1)
+    by_id = {t.track_id: t.bbox for t in frame1}
+    assert by_id[0] == spike._contour_bbox(cand0)
+    assert by_id[1] == spike._contour_bbox(cand1)
+
+
+def test_track_multiple_objects_appearance_breaks_a_geometric_tie():
+    # A genuinely symmetric "X" crossing -- both tracks are exactly the same
+    # distance (and IoU) from both next-frame candidates, so geometry alone
+    # carries zero information about which track continues as which
+    # candidate. Track A is blue, track B is red; candidate 0 is red,
+    # candidate 1 is blue. Without an appearance model the geometric tie
+    # resolves arbitrarily (by matrix/index order) -- here that lands on the
+    # WRONG (colour-swapped) pairing. Supplying `frames_bgr` (and a nonzero
+    # `appearance_weight`) breaks the tie by colour and recovers the correct
+    # pairing.
+    track_a = _square_contour(0, 10, 20)  # center (10, 20), blue
+    track_b = _square_contour(16, 10, 20)  # center (26, 20), red
+    cand_red = _square_contour(8, 18, 20)  # center (18, 28)
+    cand_blue = _square_contour(8, 2, 20)  # center (18, 12)
+
+    frame0_img = np.zeros((45, 45, 3), dtype=np.uint8)
+    ax0, ay0, ax1, ay1 = spike._contour_bbox(track_a)
+    frame0_img[ay0:ay1, ax0:ax1] = (255, 0, 0)  # BGR blue
+    bx0, by0, bx1, by1 = spike._contour_bbox(track_b)
+    frame0_img[by0:by1, bx0:bx1] = (0, 0, 255)  # BGR red
+
+    frame1_img = np.zeros((45, 45, 3), dtype=np.uint8)
+    rx0, ry0, rx1, ry1 = spike._contour_bbox(cand_red)
+    frame1_img[ry0:ry1, rx0:rx1] = (0, 0, 255)
+    blx0, bly0, blx1, bly1 = spike._contour_bbox(cand_blue)
+    frame1_img[bly0:bly1, blx0:blx1] = (255, 0, 0)
+
+    no_appearance = spike.track_multiple_objects(
+        [[track_a, track_b], [cand_red, cand_blue]],
+        max_jump_distance=50,
+        max_track_miss_frames=2,
+    )
+    with_appearance = spike.track_multiple_objects(
+        [[track_a, track_b], [cand_red, cand_blue]],
+        max_jump_distance=50,
+        max_track_miss_frames=2,
+        frames_bgr=[frame0_img, frame1_img],
+        appearance_weight=0.5,
+    )
+
+    # The tie, left unbroken, does not happen to already land on the
+    # colour-correct pairing -- confirms this scenario actually exercises
+    # the tie-break rather than trivially matching either way.
+    no_appearance_by_id = {t.track_id: t.bbox for t in no_appearance[1]}
+    assert no_appearance_by_id[0] != spike._contour_bbox(cand_blue)
+
+    by_id = {t.track_id: t.bbox for t in with_appearance[1]}
+    assert by_id[0] == spike._contour_bbox(cand_blue)  # track A (blue) -> blue candidate
+    assert by_id[1] == spike._contour_bbox(cand_red)  # track B (red) -> red candidate
+
+
+def test_track_multiple_objects_caps_indefinite_merge_dead_reckoning():
+    # Two subjects merge into one shared blob and never resplit within the
+    # window tested here. Previously they would dead-reckon forward by
+    # velocity forever; now, after `max_merge_streak` consecutive merged
+    # frames, both ids are dropped instead of drifting indefinitely.
+    frame0 = [_square_contour(10, 10, 4), _square_contour(30, 10, 4)]
+    frame1 = [_square_contour(12, 10, 4), _square_contour(28, 10, 4)]
+    merged = _square_contour(12, 10, 20)  # spans both, every frame from here on
+    frames = [frame0, frame1] + [[merged]] * 4
+
+    results = spike.track_multiple_objects(
+        frames, max_jump_distance=50, max_track_miss_frames=2, max_merge_streak=3
+    )
+
+    # Frames 2-4 (merge_streak 1-3) still report both, merged, ids.
+    for frame_tracks in results[2:5]:
+        assert {t.track_id for t in frame_tracks} == {0, 1}
+        assert all(t.merged_ids for t in frame_tracks)
+    # Frame 5 (merge_streak would be 4, past the cap) drops both instead of
+    # continuing to dead-reckon them.
+    assert results[5] == []
 
 
 def _draw_textured_patch(img: np.ndarray, x: int, y: int, outer: int, inner: int) -> None:
@@ -1401,7 +1529,7 @@ def test_detect_clip_leaves_fragments_separate_when_closing_disabled(monkeypatch
 
 
 def test_detect_clip_populates_multi_tracks_for_two_independent_subjects(monkeypatch):
-    positions = (5, 15, 25, 35, 45)
+    positions = (5, 9, 13, 17, 21, 25, 29)
     frames = []
     for pos in positions:
         frame = np.zeros((70, 140, 3), dtype=np.uint8)
@@ -1411,11 +1539,45 @@ def test_detect_clip_populates_multi_tracks_for_two_independent_subjects(monkeyp
         frames.append(frame)
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
+    # multi_track_confirm_frames defaults to 1 (off) -- see its docstring for
+    # why: at 3 it was measured to silently suppress short-lived flashlight
+    # objects the shipped guard_candidate rule depends on. Both subjects are
+    # reported immediately, every frame, same as the pre-rewrite tracker.
     detection = spike.detect_clip("clip.mp4", threshold=18)
 
     assert detection is not None
     assert len(detection.multi_tracks) == len(detection.frames)
     assert all(len(frame_tracks) == 2 for frame_tracks in detection.multi_tracks)
+
+
+def test_detect_clip_multi_track_confirm_frames_suppresses_short_lived_noise(monkeypatch):
+    # Step (4px) stays within the 8px patch's own size-relative jump margin
+    # (max(0.75 * 8, 6) = 6.0) so the real subjects keep matching -- opting
+    # into `multi_track_confirm_frames=3` here (off by default) confirms the
+    # wiring through the real detect_clip pipeline, not just the unit-level
+    # track_multiple_objects tests.
+    positions = (5, 9, 13, 17, 21, 25, 29)
+    frames = []
+    for pos in positions:
+        frame = np.zeros((70, 140, 3), dtype=np.uint8)
+        for c in range(3):
+            _draw_textured_patch(frame[:, :, c], pos, 30, 200, 100)
+            _draw_textured_patch(frame[:, :, c], pos + 80, 30, 200, 100)
+        frames.append(frame)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+
+    detection = spike.detect_clip("clip.mp4", threshold=18, multi_track_confirm_frames=3)
+
+    assert detection is not None
+    assert len(detection.multi_tracks) == len(detection.frames)
+    # The first two frames are still confirming (pending < 3) and report
+    # nothing; both subjects are confirmed by the 3rd frame and stay visible,
+    # under the SAME stable ids, every frame after that.
+    assert detection.multi_tracks[0] == []
+    assert detection.multi_tracks[1] == []
+    assert all(len(frame_tracks) == 2 for frame_tracks in detection.multi_tracks[2:])
+    ids_from_confirmation = [{t.track_id for t in frame} for frame in detection.multi_tracks[2:]]
+    assert all(ids == ids_from_confirmation[0] for ids in ids_from_confirmation)
 
 
 # --------------------------------------------------------------------------
@@ -1759,6 +1921,99 @@ def test_extract_clip_features_wires_multi_object_flashlight_features_into_the_r
         "multi_object_max_flashlight_ratio",
         "multi_object_dominant_excl_flashlight_outside_fraction",
         "multi_object_dominant_excl_flashlight_has_evidence",
+    ):
+        assert key in result
+
+
+# --------------------------------------------------------------------------
+# _multi_object_type_features -- per-object person/animal/artifact typing
+# (docs/detection_improvement_review.md section 3, stage 2). Person/animal
+# reuse _CALIBRATED_ZONE (cam06's real, already-validated geometry -- see
+# its own definition above) so `GroundCalibration.height_m` has something
+# real to work with; bbox rows below were reverse-engineered directly
+# against that calibration (not guessed) to land cleanly on either side of
+# PERSON_HEIGHT_MIN_M.
+# --------------------------------------------------------------------------
+
+
+def test_multi_object_type_features_zero_with_no_tracks():
+    detection = _clip_detection_with_tracks_and_frames([], [])
+    result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
+    assert result == {
+        "multi_object_person_track_count": 0.0,
+        "multi_object_animal_track_count": 0.0,
+        "multi_object_artifact_track_count": 0.0,
+        "multi_object_type_has_evidence": 0.0,
+    }
+
+
+def test_multi_object_type_features_identifies_person_and_animal_by_height():
+    # bbox (25, 10, 35, 20) -> height_m ~1.44 (person range, 0.9-2.2).
+    person = spike.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
+    # bbox (25, 25, 35, 27) -> height_m ~0.26 (well under the person floor).
+    animal = spike.TrackedObject(track_id=1, bbox=(25, 25, 35, 27))
+    frames_bgr = [_blank_frame(size=60, value=90)]
+    detection = _clip_detection_with_tracks_and_frames([[person, animal]], frames_bgr)
+
+    result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
+
+    assert result["multi_object_person_track_count"] == 1.0
+    assert result["multi_object_animal_track_count"] == 1.0
+    assert result["multi_object_type_has_evidence"] == 1.0
+
+
+def test_multi_object_type_features_identifies_artifact_by_white_fraction():
+    obstruction = spike.TrackedObject(track_id=0, bbox=(2, 2, 20, 20))
+    frame = _blank_frame(size=60, value=90)
+    cv2.rectangle(frame, (2, 2), (20, 20), (250, 250, 250), thickness=-1)
+    detection = _clip_detection_with_tracks_and_frames([[obstruction]], [frame])
+
+    result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
+
+    assert result["multi_object_artifact_track_count"] == 1.0
+    assert result["multi_object_person_track_count"] == 0.0
+    assert result["multi_object_animal_track_count"] == 0.0
+
+
+def test_multi_object_type_features_no_evidence_when_uncalibrated():
+    # _VERTICAL_ZONE has no fence_bottom/fence_pickets/metric_calibration --
+    # person/animal must read "no evidence", not a misleadingly confident 0.
+    person_shaped = spike.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
+    frames_bgr = [_blank_frame(size=60, value=90)]
+    detection = _clip_detection_with_tracks_and_frames([[person_shaped]], frames_bgr)
+
+    result = spike._multi_object_type_features(detection, _VERTICAL_ZONE, 60, 60)
+
+    assert result["multi_object_type_has_evidence"] == 0.0
+    assert result["multi_object_person_track_count"] == 0.0
+    assert result["multi_object_animal_track_count"] == 0.0
+
+
+def test_extract_clip_features_wires_multi_object_type_features_into_the_result(monkeypatch):
+    square = _rect_contour(5, 5, 10, 10)
+    frames = [_fake_frame_detection(0, square)]
+    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
+    clip_detection = spike.ClipDetection(
+        frames=frames,
+        background=_blank_frame()[:, :, 0],
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=0,
+        total_frames=1,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+        multi_tracks=tracks,
+    )
+    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+
+    result = spike.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
+
+    assert result is not None
+    for key in (
+        "multi_object_person_track_count",
+        "multi_object_animal_track_count",
+        "multi_object_artifact_track_count",
+        "multi_object_type_has_evidence",
     ):
         assert key in result
 

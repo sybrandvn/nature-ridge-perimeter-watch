@@ -57,6 +57,53 @@ order (each committed and verified separately -- full test suite green throughou
    0.386 -> 0.489, recall unchanged. Every protected class's confusion-matrix row is
    byte-identical before/after.
 
+9. **Debug renderer now marks every flashlight-scoring multi-track object (`acb7bcc`).**
+   `scripts/render_debug.py`'s `_draw_multi_tracks` previously drew every persistent object but
+   never checked any of them for flashlight-ness -- only the single main tracked box was ever
+   checked. A real flashlight sitting in a DIFFERENT persistent track (exactly what item 8's rule
+   detects) never showed up marked in the render, even when `classify()`'s own reason code said it
+   was. Confirmed fixed end to end on cam07/11174: the render now visually agrees with why the
+   clip is `guard_candidate`.
+10. **Object-linking stage 1 -- the multi-object tracker rewritten (`track_multiple_objects`).**
+    Per the user's explicit ask ("do 1 and 2 ... i dont really see a need of seperating the
+    flashlight head with the beam" -- stage 3, beam-vs-torch, deliberately skipped). Three of the
+    four gaps §3 named are fixed: (a) assignment is now a single global optimum per frame
+    (`scipy.optimize.linear_sum_assignment` over a track-by-candidate cost matrix: IoU where
+    boxes overlap, gated size-relative distance otherwise) instead of each track independently
+    grabbing its own best candidate in dict-iteration order -- a real, demonstrated bug (two
+    tracks could both "claim" the one candidate nearest to a mid-point between them while a
+    second, perfectly valid candidate sat unclaimed and spawned a spurious third id; the new
+    version splits them correctly, see
+    `test_track_multiple_objects_hungarian_beats_independent_greedy_pick`); (b) an optional HSV
+    histogram appearance model breaks geometric ties by colour when `frames_bgr` is supplied
+    (`test_track_multiple_objects_appearance_breaks_a_geometric_tie`); (c) `max_merge_streak` caps
+    how long a merged track dead-reckons before being dropped, instead of extrapolating forever.
+    The fourth gap ("it sees only blobs, never candidates") is fixed at the real call site: the
+    tracker now runs over every raw `per_frame_candidates` contour, not just min-area
+    `per_frame_blobs` -- the animal-population fix. A `confirm_frames` tentative-track gate exists
+    to suppress single-frame noise once tracking every candidate, but **defaults to 1 (off)**:
+    measured at 3 against the full labelled corpus and REJECTED -- it silently suppressed
+    short-lived flashlight objects, regressing 16 guard clips' `guard_candidate` classification
+    (including cam07/11174, the exact clip item 8's rule was built for: ratio collapsed
+    0.429 -> 0.0). At the default (1), measured against the full 678-clip labelled corpus:
+    alert-channel FP 23 -> 22, precision 0.489 -> 0.500, recall unchanged at 0.468, guard clips
+    correctly classified 350 -> 354, guard leaking into `incident_candidate` 9 -> 7. Every
+    animal/incident/neighbour/resident confusion-matrix row is BYTE-IDENTICAL before/after --
+    only guard/environment (both non-critical) shifted, and only in the improving direction on
+    net (one new environment->incident_candidate flip is outweighed by two fewer guard->
+    incident_candidate flips). `scripts/check_incident_regression.py` unaffected (same 5/5
+    incidents, same 3 pre-existing documented animal exceptions). `scipy` added as a real
+    dependency for the Hungarian solve.
+11. **Object-linking stage 2 -- per-track person/animal/artifact typing
+    (`_multi_object_type_features`), reporting-only.** Person/animal reuse
+    `GroundCalibration.height_m` per persistently-tracked object (the same primitive
+    `_metric_track_features` already uses for the single tracked subject); artifact reuses
+    `blob_white_fraction`. Not wired into `classify()` -- no measurement pass run yet. Vegetation
+    (the table's 4th row) deliberately NOT scored: its cheapest signal (reference-background
+    match) needs the aligned reference image threaded out of `detect_clip`, a bigger change than
+    the two shipped here, and the review names three different candidate vegetation signals --
+    picking one deserves its own measurement pass, not a guess bundled into this commit.
+
 **Not done, deliberately, per this doc's own "needs a decision first" list:** the fence-distance
 band change (§2.3), the what/where/when classifier restructure (§2.1, §3 stage 4), and
 reference-background-as-primary-model (§4.4) -- all still waiting on the open questions at the
@@ -311,6 +358,11 @@ a decision for the user, not an agent: see the open questions at the end.
 ---
 
 ## 3. The object-linking design, made concrete
+
+> Status (2026-09-09, later session): stages 1 and 2 shipped -- see implementation-status items
+> 10 and 11 above. Stage 3 (beam vs torch) explicitly declined by the user ("i dont really see a
+> need of seperating the flashlight head with the beam") -- not built. Stage 4 (clip verdict as a
+> set) still not built, still on the "needs a decision first" list.
 
 The user's own framing was right and is the correct target architecture:
 

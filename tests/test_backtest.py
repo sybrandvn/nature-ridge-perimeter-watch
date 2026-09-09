@@ -1,4 +1,7 @@
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from scripts import backtest
 from src import db
@@ -105,6 +108,10 @@ def test_run_backtest_assembles_rows_and_skips_unknown_camera(tmp_path: Path, ca
     assert rows[0]["category"] == "guard_candidate"
     assert rows[0]["reason"] == "green_light"
     assert seen["daylight_hint"] is False  # 22:00 local, the sun table says night
+    # is_daylight must survive into the reported row -- a stored backtest_results
+    # row with this dropped could not be replayed through classify_detailed()
+    # faithfully (it would silently default to "night" for every clip).
+    assert rows[0]["is_daylight"] == 0.0
     assert "camXX" in capsys.readouterr().err
     conn.close()
 
@@ -137,3 +144,81 @@ def test_write_csv_round_trip(tmp_path: Path):
     assert read_rows[0]["message_id"] == "1"
     assert read_rows[0]["category"] == "guard_candidate"
     assert read_rows[0]["reason"] == "green_light"
+
+
+def _row(camera_id: str, label: str | None, category: str) -> dict[str, Any]:
+    return {"camera_id": camera_id, "label": label, "category": category}
+
+
+def test_summarize_labelled_ignores_unlabelled_rows():
+    rows = [
+        _row("cam01", None, "guard_candidate"),
+        _row("cam01", "guard", "guard_candidate"),
+    ]
+    summary = backtest.summarize_labelled(rows)
+    assert summary["n_labelled"] == 1
+    assert summary["confusion"] == {"guard": {"guard_candidate": 1}}
+
+
+def test_summarize_labelled_confusion_matrix_counts_every_label_category_pair():
+    rows = [
+        _row("cam01", "guard", "guard_candidate"),
+        _row("cam01", "guard", "guard_candidate"),
+        _row("cam01", "guard", "environment_candidate"),
+        _row("cam02", "animal", "animal_candidate"),
+    ]
+    summary = backtest.summarize_labelled(rows)
+    assert summary["confusion"] == {
+        "guard": {"guard_candidate": 2, "environment_candidate": 1},
+        "animal": {"animal_candidate": 1},
+    }
+
+
+def test_summarize_labelled_alert_channel_precision_recall():
+    rows = [
+        _row("cam01", "incident", "incident_candidate"),  # tp
+        _row("cam01", "animal", "unclassified"),  # fn
+        _row("cam01", "guard", "incident_candidate"),  # fp (leak)
+        _row("cam01", "guard", "guard_candidate"),  # tn
+        _row("cam01", "environment", "environment_candidate"),  # tn
+    ]
+    summary = backtest.summarize_labelled(rows)
+    alert = summary["alert_channel"]
+    assert (alert["tp"], alert["fp"], alert["fn"], alert["tn"]) == (1, 1, 1, 2)
+    assert alert["precision"] == pytest.approx(0.5)
+    assert alert["recall"] == pytest.approx(0.5)
+    assert alert["f1"] == pytest.approx(0.5)
+
+
+def test_summarize_labelled_per_camera_leak_only_covers_guard_and_environment():
+    rows = [
+        _row("cam01", "guard", "guard_candidate"),
+        _row("cam01", "guard", "incident_candidate"),  # leaked
+        _row("cam02", "environment", "environment_candidate"),
+        _row("cam01", "animal", "animal_candidate"),  # not guard/environment
+    ]
+    summary = backtest.summarize_labelled(rows)
+    assert summary["per_camera_leak"]["guard"] == {
+        "cam01": {"n": 2, "leaked": 1, "leak_rate": 0.5},
+    }
+    assert summary["per_camera_leak"]["environment"] == {
+        "cam02": {"n": 1, "leaked": 0, "leak_rate": 0.0},
+    }
+
+
+def test_summarize_labelled_empty_rows_has_zeroed_metrics_not_a_crash():
+    summary = backtest.summarize_labelled([])
+    assert summary["n_labelled"] == 0
+    assert summary["alert_channel"]["precision"] == 0.0
+    assert summary["alert_channel"]["recall"] == 0.0
+
+
+def test_print_summary_does_not_crash_on_a_real_summary(capsys):
+    rows = [
+        _row("cam01", "guard", "guard_candidate"),
+        _row("cam01", "incident", "incident_candidate"),
+    ]
+    backtest.print_summary(backtest.summarize_labelled(rows))
+    out = capsys.readouterr().out
+    assert "confusion matrix" in out
+    assert "alert channel" in out

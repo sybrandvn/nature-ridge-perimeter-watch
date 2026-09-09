@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -53,7 +54,15 @@ _IDENTITY_COLUMNS = (
     "reason",
     "blinding_foreground",
 )
-_NON_NUMERIC = ("channel_id", "message_id", "camera_id", "label", "time_of_day", "is_daylight")
+# `is_daylight` is deliberately NOT in this list (fixed 2026-09-09) -- it is
+# the real exogenous signal classify_detailed() reads to split
+# resident_candidate from guard_candidate (see run_backtest below), and
+# dropping it from REPORT_COLUMNS/features_json meant no recorded backtest
+# row could be replayed faithfully: re-running classify_detailed() on a
+# stored features_json would silently default every clip to features.get(
+# "is_daylight", False) == night. Kept a plain float (0.0/1.0), matching
+# every other REPORT_COLUMNS value's type, rather than a bare bool.
+_NON_NUMERIC = ("channel_id", "message_id", "camera_id", "label", "time_of_day")
 REPORT_COLUMNS = (
     *_IDENTITY_COLUMNS,
     *(c for c in FEATURE_COLUMNS if c not in _NON_NUMERIC),
@@ -125,7 +134,9 @@ def run_backtest(
         if features is not None and clip["timestamp"] is not None:
             # classify() needs the real exogenous signal, not an image
             # statistic -- see the module docstring's resident_candidate note.
-            features["is_daylight"] = is_daylight(clip["timestamp"])
+            # Cast to float so it round-trips through REPORT_COLUMNS/CSV/
+            # features_json the same way every other feature does.
+            features["is_daylight"] = float(is_daylight(clip["timestamp"]))
         result = classify_detailed(features)
         row = {
             "channel_id": clip["channel_id"],
@@ -150,6 +161,124 @@ def write_csv(rows: list[dict[str, Any]], out_path: str) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+# The alert channel: every category the routing plan actually pages someone
+# for. Kept here rather than imported from src.classify.SUPPRESSED-style
+# constant because this is this SCRIPT's own reporting vocabulary -- see
+# docs/plan.md's Ground truth labels / Ship readiness sections for why
+# "incident"/"animal" are positive and everything else labelled is negative.
+ALERT_CATEGORIES = frozenset({"incident_candidate", "animal_candidate"})
+POSITIVE_LABELS = frozenset({"incident", "animal"})
+
+
+def summarize_labelled(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Real metrics against ground truth, added 2026-09-09 because nothing in
+    this repo previously compared `category` to the `label` column every row
+    already carries -- every precision/recall/AUC number quoted anywhere in
+    docs/handoff.md or docs/gate2_separability_finding.md was computed by hand,
+    out of band, in a session that survives only as a doc entry now. This is
+    per-clip (matching what a live system actually sees, one clip at a time --
+    see docs/detection_improvement_review.md's own caution about event-level
+    figures overstating what a live system gets), restricted to rows carrying
+    a real human `label`.
+
+    Returns a JSON-safe dict: `confusion` (label -> category -> count),
+    `alert_channel` (precision/recall/f1 plus raw counts, positive =
+    incident+animal, negative = every other labelled category), and
+    `per_camera_leak` (for guard and environment specifically: how many of
+    that camera's own labelled clips reach the alert channel).
+    """
+    labelled = [r for r in rows if r.get("label")]
+    confusion: dict[str, dict[str, int]] = {}
+    for row in labelled:
+        by_label = confusion.setdefault(row["label"], {})
+        by_label[row["category"]] = by_label.get(row["category"], 0) + 1
+
+    tp = fp = fn = tn = 0
+    for row in labelled:
+        alerted = row["category"] in ALERT_CATEGORIES
+        positive = row["label"] in POSITIVE_LABELS
+        if positive and alerted:
+            tp += 1
+        elif positive and not alerted:
+            fn += 1
+        elif not positive and alerted:
+            fp += 1
+        else:
+            tn += 1
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+    per_camera_leak: dict[str, dict[str, Any]] = {}
+    for label in ("guard", "environment"):
+        by_camera: dict[str, list[int]] = {}
+        for row in labelled:
+            if row["label"] != label:
+                continue
+            counts = by_camera.setdefault(row["camera_id"], [0, 0])
+            counts[0] += 1
+            if row["category"] in ALERT_CATEGORIES:
+                counts[1] += 1
+        per_camera_leak[label] = {
+            camera_id: {
+                "n": n,
+                "leaked": leaked,
+                "leak_rate": round(leaked / n, 4) if n else 0.0,
+            }
+            for camera_id, (n, leaked) in sorted(by_camera.items())
+        }
+
+    return {
+        "n_labelled": len(labelled),
+        "confusion": confusion,
+        "alert_channel": {
+            "positive_labels": sorted(POSITIVE_LABELS),
+            "alert_categories": sorted(ALERT_CATEGORIES),
+            "tp": tp,
+            "fp": fp,
+            "fn": fn,
+            "tn": tn,
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+        },
+        "per_camera_leak": per_camera_leak,
+    }
+
+
+def print_summary(summary: dict[str, Any]) -> None:
+    """Console rendering of summarize_labelled()'s output -- kept separate so
+    a caller (or a test) can get the structured dict without the print noise.
+    """
+    print(f"\n--- confusion matrix ({summary['n_labelled']} labelled clips) ---")
+    for label in sorted(summary["confusion"]):
+        by_category = summary["confusion"][label]
+        n = sum(by_category.values())
+        breakdown = ", ".join(
+            f"{cat}={n_cat}" for cat, n_cat in sorted(by_category.items(), key=lambda kv: -kv[1])
+        )
+        print(f"  {label:12s} n={n:<4d} {breakdown}")
+
+    alert = summary["alert_channel"]
+    print(
+        f"\n--- alert channel (positive={'+'.join(alert['positive_labels'])}, "
+        f"alert={'+'.join(alert['alert_categories'])}) ---"
+    )
+    print(
+        f"  tp={alert['tp']} fp={alert['fp']} fn={alert['fn']} tn={alert['tn']}  "
+        f"precision={alert['precision']:.3f} recall={alert['recall']:.3f} f1={alert['f1']:.3f}"
+    )
+
+    for label, by_camera in summary["per_camera_leak"].items():
+        leaking = {cid: v for cid, v in by_camera.items() if v["leaked"] > 0}
+        if not leaking:
+            print(f"\n--- {label} leak into the alert channel: none ---")
+            continue
+        print(f"\n--- {label} leak into the alert channel, by camera ---")
+        for camera_id, v in sorted(leaking.items(), key=lambda kv: -kv[1]["leak_rate"]):
+            print(f"  {camera_id:8s} {v['leaked']:4d}/{v['n']:<4d} = {v['leak_rate'] * 100:5.1f}%")
 
 
 def main() -> None:  # pragma: no cover - requires real downloaded footage
@@ -208,6 +337,15 @@ def main() -> None:  # pragma: no cover - requires real downloaded footage
     from collections import Counter
 
     print(Counter(r["category"] for r in rows))
+
+    summary = summarize_labelled(rows)
+    if summary["n_labelled"]:
+        print_summary(summary)
+        summary_path = Path(args.out).with_suffix(".summary.json")
+        summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        print(f"Wrote metrics summary to {summary_path}")
+    else:
+        print("\nNo labelled rows in this run -- skipping the confusion matrix/metrics summary.")
 
 
 if __name__ == "__main__":

@@ -518,6 +518,90 @@ def _parse_point(camera_id: str, field_name: str, point: Any) -> Point:
 
 
 @dataclass(frozen=True)
+class ClassificationThresholds:
+    """Every tuned number src.classify compares against.
+
+    Flat on purpose: thresholds.yaml nests for readability, but a flat record
+    keeps classify()'s call sites short. Field names carry `_min`/`_max` to say
+    which side of the bound is acceptable -- they deliberately do NOT encode the
+    comparison operator, since some sites use `>` and some `>=`; src/classify.py
+    is where each operator lives, and moving a value here must never change one.
+    """
+
+    green_light_ratio_min: float
+    green_light_flicker_min: float
+    warmup_flashlight_ratio_min: float
+    blob_count_peak_min: float
+    blob_count_median_min: float
+    implausible_height_fraction_min: float
+    motion_pixel_fraction_median_min: float
+    outside_pixel_fraction_min: float
+    median_fence_distance_min: float
+    median_fence_distance_max: float
+    color_fraction_min: float
+    row_normalised_area_max: float
+    jitter_min: float
+    solidity_max: float
+    blob_white_fraction_min: float
+    long_flare_frames_min: float
+
+
+# field name -> (yaml section, yaml key). The nesting exists for the humans
+# reading thresholds.yaml; this table is the only place the two shapes meet.
+_CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
+    "green_light_ratio_min": ("guard", "green_light_ratio_min"),
+    "green_light_flicker_min": ("guard", "green_light_flicker_min"),
+    "warmup_flashlight_ratio_min": ("guard", "warmup_flashlight_ratio_min"),
+    "blob_count_peak_min": ("environment", "blob_count_peak_min"),
+    "blob_count_median_min": ("environment", "blob_count_median_min"),
+    "implausible_height_fraction_min": ("environment", "implausible_height_fraction_min"),
+    "motion_pixel_fraction_median_min": ("environment", "motion_pixel_fraction_median_min"),
+    "outside_pixel_fraction_min": ("outside", "pixel_fraction_min"),
+    "median_fence_distance_min": ("outside", "median_fence_distance_min"),
+    "median_fence_distance_max": ("outside", "median_fence_distance_max"),
+    "color_fraction_min": ("outside", "color_fraction_min"),
+    "row_normalised_area_max": ("animal", "row_normalised_area_max"),
+    "jitter_min": ("insect", "jitter_min"),
+    "solidity_max": ("insect", "solidity_max"),
+    "blob_white_fraction_min": ("blinding", "blob_white_fraction_min"),
+    "long_flare_frames_min": ("blinding", "long_flare_frames_min"),
+}
+
+
+def _classification_thresholds(classification: Mapping[str, Any]) -> ClassificationThresholds:
+    """Build the typed record, raising on any missing or unrecognised key.
+
+    Strict in both directions on purpose. A missing key must not silently
+    default -- a defaulted threshold is one nobody measured, and it would change
+    what the classifier does without anyone noticing. An unrecognised key must
+    not be silently ignored either, or a stale entry left over from an older
+    file shape (or a typo'd rename) reads as "configured" while the real value
+    quietly falls back to something else.
+    """
+    values: dict[str, Any] = {}
+    for field_name, (section, key) in _CLASSIFICATION_FIELDS.items():
+        subsection = classification.get(section)
+        if not isinstance(subsection, Mapping):
+            raise ConfigError(
+                f"thresholds.yaml:classification.{section} must be a mapping "
+                f"(needed for {field_name})"
+            )
+        if key not in subsection:
+            raise ConfigError(f"thresholds.yaml: missing classification.{section}.{key}")
+        values[field_name] = float(subsection[key])
+
+    expected = {(section, key) for section, key in _CLASSIFICATION_FIELDS.values()}
+    for section, subsection in classification.items():
+        if not isinstance(subsection, Mapping):
+            raise ConfigError(f"thresholds.yaml:classification.{section} must be a mapping")
+        for key in subsection:
+            if (section, key) not in expected:
+                raise ConfigError(f"thresholds.yaml: unrecognised classification.{section}.{key}")
+
+    return ClassificationThresholds(**values)
+
+
+@dataclass(frozen=True)
 class ThresholdsConfig:
     motion: Mapping[str, Any]
     classification: Mapping[str, Any]
@@ -529,6 +613,18 @@ class ThresholdsConfig:
         threshold edits must never change this value.
         """
         return _stable_hash(self.motion)
+
+    def classification_fingerprint(self) -> str:
+        """Stable hash of classification thresholds only.
+
+        Recorded on every backtest run (see src/backtester.py) so two runs that
+        classified identically hash identically -- which is why this excludes
+        `motion`, whose settings do not affect a classification result.
+        """
+        return _stable_hash(self.classification)
+
+    def classification_thresholds(self) -> ClassificationThresholds:
+        return _classification_thresholds(self.classification)
 
 
 def load_thresholds_config(path: str | Path) -> ThresholdsConfig:

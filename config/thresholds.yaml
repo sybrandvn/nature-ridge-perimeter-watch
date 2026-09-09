@@ -1,6 +1,23 @@
-# Global defaults. classify.py never hardcodes a number — everything tunable lives here.
-# backtester.py sweeps/compares alternate copies of this file; never edit thresholds
-# in a way that also changes `motion` unless you intend to invalidate the feature cache.
+# Global defaults, loaded by src.config.load_thresholds_config.
+#
+# `classification` is the single source of truth for every tuned number
+# src.classify.classify() and is_blinding_foreground() compare against; neither
+# hardcodes a threshold. Every value here was measured against real labelled
+# footage -- src/classify.py's module docstring records how, per rule, and each
+# key below points at the section that derived it. Do NOT retune a value from
+# first principles: change one only alongside a re-derivation recorded in
+# docs/handoff.md, and re-run scripts/check_incident_regression.py plus a
+# labelled-corpus backtest diff afterwards.
+#
+# `motion` is NOT yet consumed by the extractor -- detect_clip's parameters are
+# still defaults in its own signature (see docs/plan.md step 22). It exists
+# because src.config.ThresholdsConfig.motion_fingerprint() hashes it as the
+# cache key for future blob-track caching. Editing `motion` therefore
+# invalidates a cache nobody writes yet and changes nothing today; leave it
+# alone until step 22 wires it up.
+#
+# The two sections are deliberately separate so a classification-only edit
+# never invalidates cached motion features.
 
 motion:
   mog2:
@@ -15,19 +32,68 @@ motion:
     row_scale_reference_row: 1.0
   learning_rate: -1
 
+# Ordered to mirror src.classify.classify()'s rule chain, which is itself
+# load-bearing: guard is tested before environment, and environment before the
+# shape rules, so a flashlight or a storm is never read as a shape signal.
 classification:
-  saturation:
-    max_ratio: 0.35
-  aspect_ratio:
-    upright_min: 1.6
-    crawl_max: 0.8
-  solidity:
-    min_coherent: 0.3
-  outside_pixel_fraction:
-    alert_min: 0.5
-  dwell:
-    min_seconds: 1.5
-  jitter:
-    max_centroid_jitter: 0.15
-  priority:
-    escalate_score_min: 2
+  # classify() docstring, "guard_candidate". Zero-leak across the labelled
+  # corpus on the sharpened flashlight mask: green_light_ratio's max is 0.0000
+  # on all 32 animal, 10 incident, 8 resident and 5 neighbour clips, against
+  # guard p90 0.222. `green_light_ratio_min` is duplicated deliberately as
+  # src.features.FLASHLIGHT_CANDIDATE_MIN_RATIO -- one "is this a real
+  # flashlight, not noise" bar; tests/test_config.py asserts they stay equal.
+  guard:
+    green_light_ratio_min: 0.02
+    green_light_flicker_min: 0.02
+    # classify() docstring, "guard_candidate (warmup flashlight)". Scores the
+    # frames DROPPED as IR flare, which no other feature looks at. Sits 4.3x
+    # above the highest positive; flags 118/283 guards with 0/21 animal+incident leak.
+    warmup_flashlight_ratio_min: 0.002
+
+  environment:
+    # classify() docstring, "environment_candidate". A PEAK over frames.
+    # 59% environment recall, 4.5% guard false-fire, 0/15 animal+incident leak,
+    # AUC 0.933. Highest threshold with zero leak -- cam15/15454's porcupine
+    # sits at exactly blob_count=10.
+    blob_count_peak_min: 10
+    # classify() docstring, "environment_candidate (sustained scattered motion)".
+    # The median counterpart to the peak rule above: only rises when scattered
+    # motion PERSISTS, which is what wind does and a flare-settle transient does
+    # not. Tightest threshold with zero per-clip protected-class cost.
+    blob_count_median_min: 4.0
+    # classify() docstring, "environment_candidate (metric physics gate)".
+    # Only fires for calibrated cameras. Incident's own worst clip sits at
+    # 0.333, so 0.5 has real margin; 0/10 incident and 0/8 calibrated-animal leak.
+    implausible_height_fraction_min: 0.5
+    # classify() docstring, "sustained whole-frame motion".
+    motion_pixel_fraction_median_min: 0.12
+
+  # classify() docstring, "animal_candidate / incident_candidate".
+  # median_fence_distance is upper-bounded as well as lower-bounded (added
+  # 2026-09-07): a blob far BEYOND the fence is scenery, not a subject.
+  outside:
+    pixel_fraction_min: 0.6
+    median_fence_distance_min: 0.1
+    median_fence_distance_max: 0.40
+    color_fraction_min: 0.15
+
+  # classify() docstring, "animal_candidate / incident_candidate". Bounds the
+  # animal branch ONLY, deliberately never incident_candidate.
+  animal:
+    row_normalised_area_max: 3000.0
+
+  # classify() docstring, "insect_candidate".
+  insect:
+    jitter_min: 50
+    solidity_max: 0.85
+
+  # is_blinding_foreground()'s docstring. A bright obstruction against the lens
+  # is a maintenance signal, orthogonal to classify()'s category -- but a
+  # blinded lens must also never alert, so classify()'s outside-geometry branch
+  # gates on the SAME blob_white_fraction bar. One obstruction definition, one
+  # key, referenced from both sites: splitting it would let the two drift.
+  # blob_white_fraction's max ever seen is 0.182 for animal and 0.310 for
+  # incident, both well under 0.4. long_flare_frames is an ABSOLUTE frame count.
+  blinding:
+    blob_white_fraction_min: 0.4
+    long_flare_frames_min: 18

@@ -472,7 +472,7 @@ def test_missing_cameras_file_raises(tmp_path):
 def test_load_thresholds_config_from_repo_default():
     cfg = load_thresholds_config(Path(__file__).parents[1] / "config" / "thresholds.yaml")
     assert "mog2" in cfg.motion
-    assert "saturation" in cfg.classification
+    assert "guard" in cfg.classification
 
 
 def test_thresholds_missing_section_raises(tmp_path):
@@ -511,3 +511,114 @@ def test_motion_fingerprint_stable_and_sensitive(tmp_path):
     assert cfg_a.motion_fingerprint() == cfg_b.motion_fingerprint()
     # motion-setting change must alter it (cache invalidation).
     assert cfg_a.motion_fingerprint() != cfg_c.motion_fingerprint()
+
+
+# --------------------------------------------------------------------------
+# ClassificationThresholds
+# --------------------------------------------------------------------------
+
+_REPO_THRESHOLDS = Path(__file__).parents[1] / "config" / "thresholds.yaml"
+
+# The validated operating point of every rule in src.classify, as measured
+# against real labelled footage. See src/classify.py's module docstring for the
+# derivation of each one and docs/handoff.md for the sessions that produced them.
+#
+# This is a GOLDEN test, not a restatement of the config file: it exists so that
+# editing config/thresholds.yaml cannot quietly move a threshold nobody
+# re-measured. If a value here has to change, that means a real re-derivation
+# happened -- record it in docs/handoff.md, re-run
+# scripts/check_incident_regression.py and a labelled-corpus backtest diff, and
+# update this table in the same commit.
+_GOLDEN_THRESHOLDS = {
+    "green_light_ratio_min": 0.02,
+    "green_light_flicker_min": 0.02,
+    "warmup_flashlight_ratio_min": 0.002,
+    "blob_count_peak_min": 10.0,
+    "blob_count_median_min": 4.0,
+    "implausible_height_fraction_min": 0.5,
+    "motion_pixel_fraction_median_min": 0.12,
+    "outside_pixel_fraction_min": 0.6,
+    "median_fence_distance_min": 0.1,
+    "median_fence_distance_max": 0.40,
+    "color_fraction_min": 0.15,
+    "row_normalised_area_max": 3000.0,
+    "jitter_min": 50.0,
+    "solidity_max": 0.85,
+    "blob_white_fraction_min": 0.4,
+    "long_flare_frames_min": 18.0,
+}
+
+
+def test_classification_thresholds_match_validated_values():
+    thresholds = load_thresholds_config(_REPO_THRESHOLDS).classification_thresholds()
+    actual = {name: getattr(thresholds, name) for name in _GOLDEN_THRESHOLDS}
+    assert actual == _GOLDEN_THRESHOLDS
+
+
+def test_classification_thresholds_covers_every_field():
+    # Guards against a field being added to the dataclass but never mapped to a
+    # yaml key, which would otherwise surface as a confusing TypeError.
+    import dataclasses
+
+    from src.config import ClassificationThresholds
+
+    fields = {f.name for f in dataclasses.fields(ClassificationThresholds)}
+    assert fields == set(_GOLDEN_THRESHOLDS)
+
+
+def test_flashlight_candidate_ratio_stays_coupled_to_classify_threshold():
+    """src.features.FLASHLIGHT_CANDIDATE_MIN_RATIO is deliberately the same bar
+    as the classifier's green_light_ratio_min -- one "is this a real flashlight,
+    not noise" standard, so a candidate is never held to a different standard
+    than a finished clip's own best_contour (see src/features.py's comment).
+
+    That coupling used to be visible as two adjacent constants; now that the
+    classify side lives in config/thresholds.yaml it is invisible, so this test
+    is what makes a desync fail loudly instead of silently changing which
+    flashlight candidates the tracker prefers.
+    """
+    from src.features import FLASHLIGHT_CANDIDATE_MIN_RATIO
+
+    thresholds = load_thresholds_config(_REPO_THRESHOLDS).classification_thresholds()
+    assert FLASHLIGHT_CANDIDATE_MIN_RATIO == thresholds.green_light_ratio_min
+
+
+def test_classification_thresholds_missing_key_raises(tmp_path):
+    raw = _REPO_THRESHOLDS.read_text().replace("    color_fraction_min: 0.15\n", "")
+    path = _write(tmp_path / "thresholds.yaml", raw)
+    with pytest.raises(ConfigError, match=r"missing classification\.outside\.color_fraction_min"):
+        load_thresholds_config(path).classification_thresholds()
+
+
+def test_classification_thresholds_unrecognised_key_raises(tmp_path):
+    raw = _REPO_THRESHOLDS.read_text().replace(
+        "  animal:\n", "  animal:\n    aspect_ratio_upright_min: 1.6\n"
+    )
+    path = _write(tmp_path / "thresholds.yaml", raw)
+    with pytest.raises(ConfigError, match=r"unrecognised classification\.animal\."):
+        load_thresholds_config(path).classification_thresholds()
+
+
+def test_classification_thresholds_missing_section_raises(tmp_path):
+    raw = _REPO_THRESHOLDS.read_text().replace("  insect:\n", "  unused_section:\n")
+    path = _write(tmp_path / "thresholds.yaml", raw)
+    with pytest.raises(ConfigError, match=r"classification\.insect"):
+        load_thresholds_config(path).classification_thresholds()
+
+
+def test_classification_fingerprint_ignores_motion(tmp_path):
+    raw = _REPO_THRESHOLDS.read_text()
+    baseline = load_thresholds_config(_write(tmp_path / "a.yaml", raw))
+    motion_changed = load_thresholds_config(
+        _write(tmp_path / "b.yaml", raw.replace("history: 500", "history: 999"))
+    )
+    classification_changed = load_thresholds_config(
+        _write(tmp_path / "c.yaml", raw.replace("jitter_min: 50", "jitter_min: 55"))
+    )
+
+    # A motion edit must not change what a backtest run records as its
+    # thresholds hash -- it did not change any classification result.
+    assert baseline.classification_fingerprint() == motion_changed.classification_fingerprint()
+    assert (
+        baseline.classification_fingerprint() != classification_changed.classification_fingerprint()
+    )

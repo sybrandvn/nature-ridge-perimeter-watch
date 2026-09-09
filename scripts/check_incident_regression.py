@@ -1,6 +1,7 @@
-"""Regression check: every INCIDENT EVENT in
-tests/fixtures/incident_regression.jsonl must have at least one clip that
-src.classify.classify does not route to a suppressed category.
+"""Regression check: every INCIDENT EVENT (hard) and ANIMAL EVENT (hard, with a
+small, explicit, documented exception list) in tests/fixtures/incident_regression.jsonl
+must have at least one clip that src.classify.classify does not route to a
+suppressed category.
 
 Checked per EVENT, not per clip: the label schema shares one label across every
 clip from the same physical trigger (see docs/plan.md "Ground truth labels"),
@@ -24,6 +25,46 @@ that avoids all of them; this script is the automated guardrail for that, so a
 threshold change that quietly drops one is caught immediately rather than
 discovered against live footage later.
 
+Animal events get the SAME hard check, per docs/plan.md's Ship readiness
+criterion #2 ("no labelled animal event is silently dropped ... requires an
+explicit, documented exception, not a silent regression"). Until 2026-09-09
+this script only asserted on incident events -- the fixture's 11 animal and
+10 resident rows were loaded, classified and printed, but never checked, so an
+animal regression could pass silently. Wiring the assertion up surfaced THREE
+previously-invisible failures beyond the one (cam10/7632) that was already a
+documented, deliberate tradeoff:
+
+  - cam10/7632 (event cam10-2024-09-14T16:24): median_fence_distance=0.504,
+    just above MEDIAN_FENCE_DISTANCE_MAX=0.40. Already a deliberate, signed-off
+    exception -- see docs/plan.md's 2026-09-07 checkpoint and src/classify.py's
+    docstring. Listed in KNOWN_ANIMAL_EXCEPTIONS below.
+  - cam10/9405 (event cam10-2024-12-01T16:12): median_fence_distance=0.097,
+    just BELOW MEDIAN_FENCE_DISTANCE_MIN=0.10 -- an animal standing at the
+    fence, not past it. NOT previously documented. Directly relevant to the
+    open "should the lower bound be relaxed" question in
+    docs/detection_improvement_review.md section 2.3.
+  - cam15-2025-07-15T00:29 (15453+15454, the porcupine): both clips read
+    outside_pixel_fraction=0.5, exactly the fence line, never a clean
+    majority -- fails the >0.6 geometry gate outright. Unrelated to the
+    fence-distance band. NOT previously documented.
+  - cam10/17146 (bird on the fence rail): implausible_height_fraction=0.8
+    routes it to environment_candidate via the metric physics gate. The
+    ground-plane assumption that gate depends on breaks when the subject's
+    feet are on the fence rail rather than the ground -- the exact "bird sat
+    on the fence" confound docs/plan.md's fence-base-line section names as an
+    open risk. NOT previously documented.
+
+These three are NOT added to KNOWN_ANIMAL_EXCEPTIONS -- doing so would be
+exactly the silent burial Ship readiness criterion #2 exists to prevent. This
+script currently fails on them by design, so they stay visible until either
+fixed or explicitly, individually signed off (see the docstring above each
+entry in KNOWN_ANIMAL_EXCEPTIONS for the discipline that requires).
+
+Also fixed 2026-09-09: this check now passes a reference_background, matching
+scripts/backtest.py and scripts/rank_candidates.py -- previously it was the
+only one of the three real callers scoring clips through a fresh-median-only
+detector, so it validated a configuration nobody actually ran.
+
 Run:
     uv run python scripts/check_incident_regression.py
 """
@@ -42,8 +83,15 @@ from src import db  # noqa: E402
 from src.classify import classify  # noqa: E402
 from src.config import load_app_config, load_cameras_config  # noqa: E402
 from src.features import daylight_hint, is_daylight  # noqa: E402
+from src.reference_bg import (  # noqa: E402
+    era_of,
+    load_manifest,
+    load_reference_image,
+    reference_for,
+)
 
 FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "incident_regression.jsonl"
+REFERENCE_BG_ROOT = Path(__file__).resolve().parents[1] / "data" / "reference_bg"
 SUPPRESSED = {
     "guard_candidate",
     "resident_candidate",
@@ -52,12 +100,49 @@ SUPPRESSED = {
     "unclassified",
 }
 
+# Deliberate, individually-signed-off exceptions to the animal-event hard
+# check -- an event key added here must carry its own dated rationale, same
+# discipline docs/plan.md already applies to cam10/7632 (MEDIAN_FENCE_DISTANCE_MAX,
+# 2026-09-07). Never add an entry here just to make this script pass; every
+# entry is a documented, deliberate acceptance of one specific known miss, not
+# a way to silence a new one.
+KNOWN_ANIMAL_EXCEPTIONS: dict[str, str] = {
+    "cam10-2024-09-14T16:24": (
+        "cam10/7632: median_fence_distance 0.504 sits just above "
+        "MEDIAN_FENCE_DISTANCE_MAX=0.40. Accepted 2026-09-07 (docs/plan.md's "
+        "checkpoint of that date) -- confirmed the animal genuinely was that "
+        "far from the fence (recomputed from genuine, non-recovered centroids "
+        "only: 0.498, barely moves), and no persistence/path_length "
+        "combination recovers it without re-admitting 6-15 guard/environment "
+        "clips per animal clip saved."
+    ),
+}
+
+
+def _reference_background(entries, camera, timestamp):
+    """Same resolution scripts/backtest.py uses -- see its own helper of the
+    same name. Duplicated rather than imported because scripts/backtest.py's
+    version is a module-private helper tied to its own CLI args; this script
+    has no CLI, so the defaults (data/reference_bg, era_of/reference_for's own
+    fallback-to-None-across-era-or-sparsity behaviour) are hardcoded instead."""
+    if not entries or timestamp is None:
+        return None
+    entry = reference_for(
+        entries,
+        camera.id,
+        timestamp,
+        era=era_of(camera, timestamp),
+        daylight=is_daylight(timestamp),
+    )
+    return None if entry is None else load_reference_image(REFERENCE_BG_ROOT, entry)
+
 
 def main() -> None:
     fixture_rows = [json.loads(line) for line in FIXTURE.read_text().splitlines() if line.strip()]
     cameras_cfg = load_cameras_config("config/cameras.yaml")
     app_cfg = load_app_config(require_telegram=False)
     conn = db.connect(app_cfg.db_path)
+    reference_entries = load_manifest(str(REFERENCE_BG_ROOT))
 
     checked = 0
     event_results: dict[str, list[bool]] = defaultdict(list)  # event -> [suppressed, ...]
@@ -75,8 +160,12 @@ def main() -> None:
             print(f"SKIP  {entry['camera_id']}/{entry['message_id']}: unknown camera")
             continue
         zone = camera.zone_at(entry["timestamp"])
+        reference = _reference_background(reference_entries, camera, entry["timestamp"])
         features = extract_clip_features(
-            row["file_path"], zone, daylight_hint=daylight_hint(entry.get("timestamp"))
+            row["file_path"],
+            zone,
+            daylight_hint=daylight_hint(entry.get("timestamp")),
+            reference_background=reference,
         )
         if features is not None and entry.get("timestamp"):
             features["is_daylight"] = is_daylight(entry["timestamp"])
@@ -93,18 +182,59 @@ def main() -> None:
     print(f"\nchecked {checked}/{len(fixture_rows)} fixture clips, "
           f"{len(event_results)} events")
 
-    failures = [
+    incident_failures = [
         event
         for event, suppressed_flags in event_results.items()
         if event_label[event] == "incident" and all(suppressed_flags)
     ]
-    if failures:
-        print(f"\nFAILED: {len(failures)} incident EVENT(s) with every clip suppressed:")
-        for f in failures:
-            print(f"  {f}")
+    animal_failures = [
+        event
+        for event, suppressed_flags in event_results.items()
+        if event_label[event] == "animal"
+        and all(suppressed_flags)
+        and event not in KNOWN_ANIMAL_EXCEPTIONS
+    ]
+    known_animal_exceptions_hit = [
+        event
+        for event, suppressed_flags in event_results.items()
+        if event_label[event] == "animal"
+        and all(suppressed_flags)
+        and event in KNOWN_ANIMAL_EXCEPTIONS
+    ]
+
+    if incident_failures or animal_failures:
+        if incident_failures:
+            print(
+                f"\nFAILED: {len(incident_failures)} incident EVENT(s) with every clip suppressed:"
+            )
+            for f in incident_failures:
+                print(f"  {f}")
+        if animal_failures:
+            print(
+                f"\nFAILED: {len(animal_failures)} animal EVENT(s) with every clip suppressed "
+                "and no documented exception:"
+            )
+            for f in animal_failures:
+                print(f"  {f}")
+            print(
+                "  -- either fix the underlying detection gap, or add a dated, individually"
+                "\n     justified entry to KNOWN_ANIMAL_EXCEPTIONS in this script (see its"
+                "\n     docstring) -- never add one just to silence this failure."
+            )
         sys.exit(1)
+
     n_incident_events = sum(1 for lbl in event_label.values() if lbl == "incident")
+    n_animal_events = sum(1 for lbl in event_label.values() if lbl == "animal")
     print(f"PASS: all {n_incident_events} incident events have >=1 non-suppressed clip")
+    print(
+        f"PASS: all {n_animal_events} animal events have >=1 non-suppressed clip "
+        f"or a documented exception"
+    )
+    if known_animal_exceptions_hit:
+        print(f"  ({len(known_animal_exceptions_hit)} covered by a documented exception:")
+        for event in known_animal_exceptions_hit:
+            print(f"     {event}: {KNOWN_ANIMAL_EXCEPTIONS[event]}")
+        print("  )")
 
 
 if __name__ == "__main__":

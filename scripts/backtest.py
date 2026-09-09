@@ -26,21 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
-
-# Temporary re-export shim so existing callers keep working unchanged; the F401
-# suppression is what stops `ruff check --fix` deleting names this module does
-# not itself call. Removed once every caller imports from src.classify direct.
-from src.classify import (  # noqa: E402, F401
-    ANIMAL_ROW_AREA_MAX,
-    BLINDING_BLOB_WHITE_FRACTION,
-    BLOB_COUNT_MEDIAN_MAX,
-    GREEN_LIGHT_RATIO_MIN,
-    MEDIAN_FENCE_DISTANCE_MAX,
-    MOTION_PIXEL_FRACTION_MEDIAN_MAX,
-    classify,
-    classify_event,
-    is_blinding_foreground,
-)
+from src.classify import classify, is_blinding_foreground  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
 from src.features import daylight_hint, is_daylight  # noqa: E402
 from src.reference_bg import (  # noqa: E402

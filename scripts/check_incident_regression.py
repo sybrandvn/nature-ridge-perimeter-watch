@@ -1,6 +1,6 @@
 """Regression check: every INCIDENT EVENT in
 tests/fixtures/incident_regression.jsonl must have at least one clip that
-scripts.backtest.classify does not route to a suppressed category.
+src.classify.classify does not route to a suppressed category.
 
 Checked per EVENT, not per clip: the label schema shares one label across every
 clip from the same physical trigger (see docs/plan.md "Ground truth labels"),
@@ -37,9 +37,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.backtest import classify  # noqa: E402
 from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
+from src.classify import classify  # noqa: E402
 from src.config import load_app_config, load_cameras_config  # noqa: E402
 from src.features import daylight_hint, is_daylight  # noqa: E402
 

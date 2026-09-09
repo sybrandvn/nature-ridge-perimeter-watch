@@ -484,7 +484,7 @@ def estimated_speed_mps(
 
 # --------------------------------------------------------------------------
 # Fence "band" (the structure itself, between the two lines) -- discovery
-# stage only. NOT wired into scripts/backtest.py::classify; docs/plan.md
+# stage only. NOT wired into src.classify.classify; docs/plan.md
 # requires reporting how often this even occurs in the labelled incident+
 # animal set before any rule is built on it.
 # --------------------------------------------------------------------------

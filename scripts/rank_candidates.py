@@ -45,10 +45,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from scripts.backtest import is_blinding_foreground  # noqa: E402
 from scripts.label import _event_key  # noqa: E402
 from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
+from src.classify import is_blinding_foreground  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
 from src.features import daylight_hint, is_daylight, sane_fps  # noqa: E402
 from src.reference_bg import (  # noqa: E402
@@ -404,7 +404,7 @@ def rank_and_write(
 
     # A blinding-foreground clip (bright obstruction dominating the tracked
     # blob, or an IR ramp that never settled -- see
-    # scripts.backtest.is_blinding_foreground) is a maintenance issue, not an
+    # src.classify.is_blinding_foreground) is a maintenance issue, not an
     # incident/animal lead: measured zero leak into either class, so excluding
     # it here never costs a real sighting. It still gets its own review queue
     # via write_maintenance_candidates below.
@@ -455,7 +455,7 @@ def write_maintenance_candidates(
     rows: list[dict[str, Any]], *, top_per_camera: int, out_path: str
 ) -> list[dict[str, Any]]:
     """Every detected clip flagged `is_blinding_foreground` (see
-    scripts.backtest), any label state -- this is a "camera needs cleaning"
+    src.classify), any label state -- this is a "camera needs cleaning"
     report, not an incident lead, so an already-labelled guard/environment
     clip still belongs here. Ranked by whichever of the two triggering
     features reads more extreme, per-camera stratified same as the main
@@ -551,7 +551,7 @@ def obstruction_windows(
     post_flash_red_shift at or below 0.027 on every one of them, so it is not
     the guard's flashlight. Several of those same clips were also leaking into
     the alert channel as incident_candidate before the 2026-09-07 blinded-lens
-    gate in scripts.backtest.classify, which is corroboration rather than
+    gate in src.classify.classify, which is corroboration rather than
     coincidence: one physical obstruction, showing up in both channels.
 
     Overlapping qualifying windows are merged, so a month-long obstruction

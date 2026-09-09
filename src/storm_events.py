@@ -1,6 +1,6 @@
 """Cross-camera corroboration for environment/storm candidate discovery.
 
-A single clip's `blob_count > 10` (`scripts.backtest.classify`'s
+A single clip's `blob_count > 10` (`src.classify.classify`'s
 `environment_candidate` rule) already identifies scattered/storm-like motion
 reasonably well in isolation (AUC ~0.86-0.93 environment-vs-guard, depending on
 label volume -- see repo memory). This module adds a second, independent axis:

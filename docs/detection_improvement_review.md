@@ -49,6 +49,13 @@ order (each committed and verified separately -- full test suite green throughou
    any class) -- likely because 5fps is too coarse to see an oscillation within one frame pair.
    See section 4.1's own update and the feature's docstring for the honest writeup and the
    credible next variant (unmeasured). Kept as infrastructure, not a validated discriminator.
+8. **Per-object flashlight rule -- SHIPPED as a third `guard_candidate` rule**, found while
+   investigating the animal-event misses above: `multi_object_max_flashlight_ratio` (section 3
+   stage 2's feature, previously reporting-only) sees a real flashlight regardless of which object the
+   single-track pipeline follows -- fixes cam07/11174's exact failure mode. Measured on the full
+   labelled corpus: alert-channel false positives 35 -> 23 (guard leak 23 -> 11 clips), precision
+   0.386 -> 0.489, recall unchanged. Every protected class's confusion-matrix row is
+   byte-identical before/after.
 
 **Not done, deliberately, per this doc's own "needs a decision first" list:** the fence-distance
 band change (§2.3), the what/where/when classifier restructure (§2.1, §3 stage 4), and

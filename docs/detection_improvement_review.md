@@ -42,6 +42,13 @@ order (each committed and verified separately -- full test suite green throughou
    affordable this session (labelled-subset-only per-camera stats; see the flag's own docstring
    for exactly what was and wasn't measured, and why that doesn't contradict the original
    full-corpus finding).
+7. **Optical-flow direction coherence (4.1) -- BUILT AND MEASURED, hypothesis NOT confirmed.**
+   `src.features.optical_flow_direction_coherence` + `flow_direction_coherence` in
+   `extract_clip_features`, reporting-only. The specific mechanism proposed (single-pair internal
+   coherence) reads BACKWARDS on the full labelled corpus (environment median 0.964, highest of
+   any class) -- likely because 5fps is too coarse to see an oscillation within one frame pair.
+   See section 4.1's own update and the feature's docstring for the honest writeup and the
+   credible next variant (unmeasured). Kept as infrastructure, not a validated discriminator.
 
 **Not done, deliberately, per this doc's own "needs a decision first" list:** the fence-distance
 band change (§2.3), the what/where/when classifier restructure (§2.1, §3 stage 4), and
@@ -373,23 +380,37 @@ threshold margin. Stage 4 removes the risk rather than bounding it.
 Filtered against everything `docs/handoff.md` records as already tried and rejected (see §6). These
 are the ones that are genuinely new *and* target a documented open failure.
 
-### 4.1 Optical flow — the strongest single recommendation
+### 4.1 Optical flow — built and measured; the single-pair version does NOT work as hypothesised
 
-**Nothing in this codebase computes optical flow.** Every motion feature is frame-differencing
-against a whole-clip median. That leaves an entire, standard axis unused:
+**Update, same day, later session:** implemented and measured against the full labelled corpus.
+The specific mechanism proposed below (single-pair directional coherence within a blob) does
+**not** separate environment from a real subject — it reads backwards (environment median 0.964,
+higher than every other class). Full measurement and the likely mechanism (5 fps is too coarse to
+see an oscillation within one step; it only shows up over many steps) are in
+`src/features.py::optical_flow_direction_coherence`'s docstring. Kept as reporting-only
+infrastructure, a genuinely new axis, but **do not re-attempt this exact hypothesis expecting a
+different result on more data** — the credible next variant (tracking the per-pair mean flow
+ANGLE's sign-change rate across a whole clip, not single-pair internal coherence) is unmeasured
+and is where anyone picking this back up should start. Original proposal kept below for context.
+
+**Nothing in this codebase computed optical flow before this session.** Every motion feature is
+frame-differencing against a whole-clip median. That leaves an entire, standard axis unused:
 
 - **Directional coherence within a blob.** A rigid body's flow vectors all point the same way. Wind-
   shaken foliage has vectors pointing in many directions at once. This is the textbook discriminator
   for exactly the "single waving branch" population that sessions #6 and #7 both flag as unsolved
-  and that `blob_count > 10` cannot catch by design (one branch is one blob).
-- **Curl and divergence.** Oscillation has high curl; translation has none.
-- It is per-object, so it drops straight into §3 stage 2.
+  and that `blob_count > 10` cannot catch by design (one branch is one blob). **Measured: does not
+  hold at single-pair granularity on this corpus, see the update above.**
+- **Curl and divergence.** Oscillation has high curl; translation has none. Not attempted.
+- It is per-object, so it drops straight into §3 stage 2. Not attempted per-object either — only
+  the single-track version was built.
 - Farneback dense flow on 320×240 at 5 fps is cheap. `cv2.calcOpticalFlowFarneback` needs no new
-  dependency.
+  dependency. **Sparse Lucas-Kanade was used instead** (see below), matching the caution already
+  in this section.
 
 The one caution: 5 fps is slow for flow, and these subjects can move a long way between frames.
 Sparse Lucas-Kanade on corner features inside each blob is the more robust variant at this frame
-rate and is worth trying first.
+rate and is worth trying first. **This is what was built and measured.**
 
 ### 4.2 Temporal recurrence, not net displacement
 

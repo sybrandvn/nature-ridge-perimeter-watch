@@ -95,14 +95,31 @@ order (each committed and verified separately -- full test suite green throughou
     incidents, same 3 pre-existing documented animal exceptions). `scipy` added as a real
     dependency for the Hungarian solve.
 11. **Object-linking stage 2 -- per-track person/animal/artifact typing
-    (`_multi_object_type_features`), reporting-only.** Person/animal reuse
-    `GroundCalibration.height_m` per persistently-tracked object (the same primitive
-    `_metric_track_features` already uses for the single tracked subject); artifact reuses
-    `blob_white_fraction`. Not wired into `classify()` -- no measurement pass run yet. Vegetation
-    (the table's 4th row) deliberately NOT scored: its cheapest signal (reference-background
-    match) needs the aligned reference image threaded out of `detect_clip`, a bigger change than
-    the two shipped here, and the review names three different candidate vegetation signals --
-    picking one deserves its own measurement pass, not a guess bundled into this commit.
+    (`_multi_object_type_features`), reporting-only. Measured and person/animal REJECTED as
+    coded -- do not retry.** Person/animal reuse `GroundCalibration.height_m` per persistently-
+    tracked object (the same primitive `_metric_track_features` already uses for the single
+    tracked subject); artifact reuses `blob_white_fraction`. First cut (no minimum evidence per
+    track) was unusable: since stage 1's tracker mints a new id for every raw candidate with no
+    continuity requirement, `multi_object_animal_track_count > 0` fired on 138/158 environment
+    clips (median count 53.5) vs 26/32 real animal clips (median 2.5) -- wind/insects mint dozens
+    of one-frame "animal-height" tracks per clip. Added `MIN_TRACK_FRAMES_FOR_TYPE=3` (a track
+    must persist this many frames to count) -- helps (environment's rate drops to 132/158, median
+    26) but does not fix separability, and a follow-up check found raising the bar further makes
+    it WORSE: at 12 frames, restricted to cam10 (its best-populated camera for both labels), real
+    animal clips dropped to 0/6 with any qualifying track at all while environment stayed at
+    39/83. A real animal's own track apparently does NOT sustain 12 frames as reliably as
+    wind-shaken vegetation does (it moves out of frame or is occluded; a swaying branch just
+    oscillates in place). **Do not build a classify() rule on
+    `multi_object_person_track_count`/`multi_object_animal_track_count` as coded, and do not try
+    raising the frame-count bar again as the fix -- measured backwards twice.**
+    `multi_object_artifact_track_count` looks more promising in the same pass (environment
+    103/158=65% vs guard 75/425=18% vs animal 2/32=6%) but is likely correlated with the
+    pre-existing single-track `blob_white_fraction` (already `classify()`-wired) -- unchecked, not
+    a validated new signal yet. Not wired into `classify()`. Vegetation (the table's 4th row)
+    deliberately NOT scored: its cheapest signal (reference-background match) needs the aligned
+    reference image threaded out of `detect_clip`, a bigger change than the two shipped here, and
+    the review names three different candidate vegetation signals -- picking one deserves its own
+    measurement pass, not a guess bundled into this commit.
 
 **Not done, deliberately, per this doc's own "needs a decision first" list:** the fence-distance
 band change (§2.3), the what/where/when classifier restructure (§2.1, §3 stage 4), and
@@ -641,6 +658,7 @@ send someone back around a loop.
 | peak `motion_pixel_fraction` as a gate | worst real incident 0.123 vs guard/environment median 0.172 |
 | `long_flare_frames >= 18` as a gate | the crawl incident sits at 15 |
 | `post_flash_red_shift` as a guard rule | zero-leak corpus-wide but redundant at its position in the chain |
+| raising `MIN_TRACK_FRAMES_FOR_TYPE` to fix `multi_object_animal_track_count`/`_person_track_count` separability | measured backwards TWICE — at 3 frames environment median is still 26 (animal median 0); at 12 frames (cam10 only) real animal clips drop to 0/6 with any qualifying track while environment stays at 39/83. A real animal's track does not reliably outlast wind-shaken vegetation's |
 | `multi_object_dominant_outside_fraction` as an OR-alternative geometry gate | measured 2026-09-09 after the bbox fix (§1.1) — swept evidence floors from `count>=5, mdof>0.6` to `count>=15, mdof>0.8`; environment leak never drops below ~7-10 clips while recovering at most 1 real animal clip (cam15/15454). The bbox fix did NOT resolve this — a storm/wind clip's scattered motion often reads as "one dominant object, mostly outside" just as convincingly as a real intruder does, for the same reason `blob_count` exists as a separate gate. Confirms the capability map's own prior caution ("not usable as a classify() gate until the guard leak's actual cause is understood") independent of the bug. |
 
 **New structural finding from this measurement, not previously documented: an animal seen entirely INSIDE the fence has no path to `animal_candidate` at all.** `classify()`'s inside-only fallback only ever produces `guard_candidate`/`resident_candidate` (split by daylight) — there is no inside-only animal category. Checked against the full labelled corpus: of 6 labelled animal/incident clips reading "inside" by both `outside_pixel_fraction` and the (bug-fixed) multi-object reading, 4 already have an alerting sibling in the same event (cam06/21519, cam09/21521, cam15/17949, cam05/18788) — real ground truth, but not a live gap, matching this repo's own "check per event" discipline. The remaining 2 are genuinely uncovered: cam15/15453 (the porcupine's own event IS recovered by its sibling 15454's real, if fragile, outside-geometry reading — see the table above) and cam10/17146 (bird on the fence rail — no sibling, no calibrated-height signal available since the ground-plane assumption is exactly what's violated here). **Population is currently 1 clip** (cam10/17146) once event-level coverage is accounted for — too thin to engineer a threshold on, same call this repo already made for the `resident` rule at a similarly small sample. Worth tracking as a real, named gap and revisiting once more labelled examples of an animal seen inside the fence exist; not worth guessing a rule against n=1.

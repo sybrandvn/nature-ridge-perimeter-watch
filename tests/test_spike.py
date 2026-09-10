@@ -1952,8 +1952,10 @@ def test_multi_object_type_features_identifies_person_and_animal_by_height():
     person = spike.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
     # bbox (25, 25, 35, 27) -> height_m ~0.26 (well under the person floor).
     animal = spike.TrackedObject(track_id=1, bbox=(25, 25, 35, 27))
-    frames_bgr = [_blank_frame(size=60, value=90)]
-    detection = _clip_detection_with_tracks_and_frames([[person, animal]], frames_bgr)
+    # Both tracks persist for MIN_TRACK_FRAMES_FOR_TYPE frames -- a single
+    # frame of evidence is deliberately not enough (see the next test).
+    frames_bgr = [_blank_frame(size=60, value=90)] * 3
+    detection = _clip_detection_with_tracks_and_frames([[person, animal]] * 3, frames_bgr)
 
     result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
 
@@ -1962,11 +1964,32 @@ def test_multi_object_type_features_identifies_person_and_animal_by_height():
     assert result["multi_object_type_has_evidence"] == 1.0
 
 
+def test_multi_object_type_features_ignores_single_frame_tracks():
+    # Same shapes as the test above, but each track appears only ONCE --
+    # exactly the environment-clip noise pattern that motivated
+    # MIN_TRACK_FRAMES_FOR_TYPE (measured: without this filter,
+    # multi_object_animal_track_count > 0 fired on 138/158 environment
+    # clips, more often than on real animal clips). A single frame of
+    # evidence must not count toward any type.
+    person = spike.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
+    animal = spike.TrackedObject(track_id=1, bbox=(25, 25, 35, 27))
+    frames_bgr = [_blank_frame(size=60, value=90)]
+    detection = _clip_detection_with_tracks_and_frames([[person, animal]], frames_bgr)
+
+    result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
+
+    assert result["multi_object_person_track_count"] == 0.0
+    assert result["multi_object_animal_track_count"] == 0.0
+    # has_evidence still reflects "this camera is calibrated", independent
+    # of whether any track cleared the frame-count bar.
+    assert result["multi_object_type_has_evidence"] == 1.0
+
+
 def test_multi_object_type_features_identifies_artifact_by_white_fraction():
     obstruction = spike.TrackedObject(track_id=0, bbox=(2, 2, 20, 20))
     frame = _blank_frame(size=60, value=90)
     cv2.rectangle(frame, (2, 2), (20, 20), (250, 250, 250), thickness=-1)
-    detection = _clip_detection_with_tracks_and_frames([[obstruction]], [frame])
+    detection = _clip_detection_with_tracks_and_frames([[obstruction]] * 3, [frame] * 3)
 
     result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
 
@@ -1979,8 +2002,8 @@ def test_multi_object_type_features_no_evidence_when_uncalibrated():
     # _VERTICAL_ZONE has no fence_bottom/fence_pickets/metric_calibration --
     # person/animal must read "no evidence", not a misleadingly confident 0.
     person_shaped = spike.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
-    frames_bgr = [_blank_frame(size=60, value=90)]
-    detection = _clip_detection_with_tracks_and_frames([[person_shaped]], frames_bgr)
+    frames_bgr = [_blank_frame(size=60, value=90)] * 3
+    detection = _clip_detection_with_tracks_and_frames([[person_shaped]] * 3, frames_bgr)
 
     result = spike._multi_object_type_features(detection, _VERTICAL_ZONE, 60, 60)
 

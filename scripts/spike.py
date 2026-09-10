@@ -2229,6 +2229,9 @@ def _multi_object_flashlight_features(
 PERSON_HEIGHT_MIN_M = 0.9
 PERSON_HEIGHT_MAX_M = 2.2
 ARTIFACT_WHITE_FRACTION_MIN = 0.4  # same bar classify()'s blob_white_fraction_min uses
+# A track must be seen this many frames before it counts toward any type below --
+# see this function's own docstring for why (measured, not assumed).
+MIN_TRACK_FRAMES_FOR_TYPE = 3
 
 
 def _multi_object_type_features(
@@ -2281,6 +2284,48 @@ def _multi_object_type_features(
     ambiguity, since `blob_white_fraction` is computable from any frame
     regardless of calibration.
 
+    `MIN_TRACK_FRAMES_FOR_TYPE` (3): a track must be seen at least this many
+    frames before it counts toward any type. Measured 2026-09-09, WITHOUT
+    this filter, against the full labelled corpus (after switching
+    `track_multiple_objects`'s real call site to `per_frame_candidates` with
+    `confirm_frames=1` -- see `detect_clip`'s own docstring): every raw
+    candidate mints its own track id with no continuity requirement at all,
+    so a single frame of wind-shaken foliage or an insect counts exactly the
+    same as a real, sustained subject. The result was not a mild false-
+    positive rate but a near-universal one -- `multi_object_animal_track_
+    count > 0` fired on 138/158 environment clips and 342/425 guard clips
+    (vs 26/32 real animal clips), and its median COUNT was actually HIGHER
+    for environment (53.5) than for animal (2.5) or incident (13.0) clips,
+    because a single windy/insect-heavy clip mints dozens of one-frame
+    tracks. Requiring 3 consecutive frames of evidence is the same
+    discipline `track_multiple_objects`'s own (off-by-default)
+    `confirm_frames` parameter uses, applied locally to this consumer
+    instead of globally to the tracker -- global confirm_frames was tried
+    and rejected (see `detect_clip`'s docstring) because it suppresses
+    short-lived flashlight objects the `guard_candidate` rule depends on;
+    a real animal or person track, unlike a torch beam, is expected to
+    persist for several frames, so the same fix does not cost anything here.
+
+    3 frames helps (environment's `animal_track_count > 0` rate dropped from
+    138/158 to 132/158, median count 53.5 -> 26) but does NOT make
+    `multi_object_person_track_count`/`multi_object_animal_track_count`
+    separable, and a follow-up check found raising the bar further makes it
+    WORSE, not better: at `MIN_TRACK_FRAMES_FOR_TYPE=12`, restricted to
+    cam10 (6 animal / 83 environment labelled clips, its best-populated
+    camera for both), real animal clips dropped to 0/6 with any qualifying
+    track at all, while environment clips still hit 39/83 (mean count 7.86,
+    max 68). A real animal's own track is apparently LESS likely to sustain
+    12 consecutive frames than wind-shaken vegetation is -- an animal
+    crosses the frame or is occluded, while a swaying branch oscillates
+    around one fixed area indefinitely. **Do not retry raising this
+    threshold as a fix for animal/person separability -- measured backwards
+    twice now.** `multi_object_artifact_track_count` looks more promising in
+    the same corpus pass (environment 103/158=65% vs guard 75/425=18% vs
+    animal 2/32=6%) but is likely highly correlated with the pre-existing
+    single-track `blob_white_fraction` (already `classify()`-wired via the
+    blinding-foreground gate) -- that overlap needs checking before treating
+    it as new information, not assumed.
+
     Reporting-only: not read by classify() without its own corpus-wide
     measurement pass first, same discipline as every other detect_clip-level
     feature in this file's history.
@@ -2297,11 +2342,13 @@ def _multi_object_type_features(
     cal = calibrate(zone, frame_width, frame_height)
     heights: dict[int, list[float]] = {}
     white_fractions: dict[int, float] = {}
+    frame_counts: dict[int, int] = {}
     for frame_index, frame_tracks in enumerate(detection.multi_tracks):
         frame_bgr = (
             detection.frames[frame_index].frame if frame_index < len(detection.frames) else None
         )
         for obj in frame_tracks:
+            frame_counts[obj.track_id] = frame_counts.get(obj.track_id, 0) + 1
             x0, y0, x1, y1 = obj.bbox
             if cal is not None:
                 base = ((x0 + x1) / 2.0, float(y1))
@@ -2316,14 +2363,21 @@ def _multi_object_type_features(
 
     person_count = 0
     animal_count = 0
-    for track_heights in heights.values():
+    for tid, track_heights in heights.items():
+        if frame_counts.get(tid, 0) < MIN_TRACK_FRAMES_FOR_TYPE:
+            continue
         median_height = float(np.median(track_heights))
         if PERSON_HEIGHT_MIN_M <= median_height <= PERSON_HEIGHT_MAX_M:
             person_count += 1
         elif median_height < PERSON_HEIGHT_MIN_M:
             animal_count += 1
 
-    artifact_count = sum(1 for f in white_fractions.values() if f >= ARTIFACT_WHITE_FRACTION_MIN)
+    artifact_count = sum(
+        1
+        for tid, fraction in white_fractions.items()
+        if fraction >= ARTIFACT_WHITE_FRACTION_MIN
+        and frame_counts.get(tid, 0) >= MIN_TRACK_FRAMES_FOR_TYPE
+    )
 
     return {
         "multi_object_person_track_count": float(person_count),

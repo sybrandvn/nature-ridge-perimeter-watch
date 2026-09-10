@@ -1,19 +1,24 @@
-# Handoff: Phase 2 refactor's classify()/backtester steps landed; motion.py caching is next
+# Handoff: object-linking stages 1 & 2 landed; motion.py caching still next
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-09. **If you are a new agent
-picking this up, start at "Handoff for a new agent (2026-09-09, session close #15)" at the very
-bottom, just above "Conventions"** — on branch `feat/phase2-refactor` (cut from `main`, which now
-has all of Phase 1 and Phase 2's empirical detection/classification work merged). The detection
-work itself is in a good, validated state (`prefer_flashlight_candidate` checked clean at full
-16,886-clip corpus scale; the one thing left before it can default on is a business call, not a
-correctness question — see "Ship readiness" in `docs/plan.md`). Session #15 finished the two
-lowest-risk items from the Phase 2 refactor brief (`classify.py` and `backtester.py`); the next
-focus is `motion.py` caching, the one item in that brief that can actually make results silently
-wrong if done carelessly — see that file's "Phase 2 refactor brief" and
-`docs/phase2_refactor_execution_plan.md` for the full step-by-step record of what session #15 did.
-`docs/plan.md` is the full plan
-and stays authoritative; this file is the short version of where things actually stand and what to do
-next.
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-10. **If you are a new agent
+picking this up, search this file for "Handoff for a new agent (2026-09-10, session close #16)"
+and start there.** (This file's session sections are not in one consistent order: #1-#5 are the
+oldest, kept in their original forward-chronological spot further up; starting from #6, each new
+session's entry is instead inserted directly above its predecessor, so the chain from #6 to the
+latest reads newest-first. #16 is the current latest.) On branch
+`feat/phase2-refactor` (cut from `main`, which has all of Phase 1 and Phase 2's empirical
+detection/classification work merged). The detection work itself is in a good, validated,
+actively-improving state — see session #16's entry for what landed most recently (a full detection
+review, a rewritten multi-object tracker, several new/measured classifier rules) and its "Open
+decisions still pending" list for what's blocked on the user, not on more engineering. `motion.py`
+caching (session #15's "next" item) is STILL not started — nothing this session touched it; it
+remains the one item in the Phase 2 refactor brief that can make results silently *wrong* rather
+than just slow, so give it a session of its own — see `docs/plan.md`'s "Phase 2 refactor brief" and
+`docs/phase2_refactor_execution_plan.md` for the full record of what session #15 did and what's
+left. `docs/plan.md` is the full plan and stays authoritative; this file is the short version of
+where things actually stand and what to do next. `docs/detection_improvement_review.md` is the
+authoritative record of everything session #16 measured and shipped, with its own itemised
+"Implementation status" section at the top.
 
 ## Where the project is
 
@@ -1201,6 +1206,137 @@ wrong*, not because they were bad. `post_flash_red_shift` was dismissed on a cli
 R/G (which gave a backwards result) until the user clarified the signal was temporal — flash,
 *then* red. Measured as a transition it has a 0.58-vs-0.014 class separation. **When a user
 describes a signal in temporal terms, measure the transition, not an aggregate.**
+
+## Handoff for a new agent (2026-09-10, session close #16)
+
+**Read this section first — it supersedes #15 for current state.** Same branch
+(`feat/phase2-refactor`), 688 tests passing, working tree clean at `cf8ebbb`. This session (spans
+2026-09-09 into 2026-09-10) wrote `docs/detection_improvement_review.md` from a full read of the
+codebase and the labelled corpus, then implemented most of its prioritised recommendations,
+in order, each measured against the full 678-clip labelled corpus before being trusted and
+committed separately. **That review document's own "Implementation status" section at the top is
+the authoritative, itemised record (11 items) — this entry is the short version and the things a
+fresh agent needs to know that aren't obvious from reading the code.**
+
+### What landed, in order
+
+1. **A real bug, fixed**: `_multi_object_outside_features` was reading `TrackedObject.bbox`
+   (corner form `(x0,y0,x1,y1)`) as `(x,y,w,h)`. Confirmed byte-identical `classify()` output
+   before/after on the full corpus (not yet wired into any rule at the time).
+2. **`check_incident_regression.py` now asserts on animal events too**, not just incidents —
+   surfaced 3 previously-invisible animal-event misses. Each was root-caused, not just logged (see
+   the script's own docstring and `KNOWN_ANIMAL_EXCEPTIONS`): `cam10-2024-12-01T16:12` (a
+   fence-distance lower-bound miss), `cam15-2025-07-15T00:29` (a porcupine recovered only via its
+   sibling clip's own fragile reading), `cam10-2025-10-28T03:51` (a bird on the fence rail —
+   ground-plane assumption violated). **These 3 are still open, unfixed, exception-listed by
+   design** — not a regression this session caused, real information that was always there.
+3. **`scripts/backtest.py` gained real metrics**: confusion matrix, alert-channel precision/
+   recall/F1, per-camera leak, written to a `.summary.json` alongside every CSV.
+4. **`neighbour_candidate` rule shipped** — a person outside the fence in daylight, at plausible
+   human height. Measured on its actual position in the rule chain: 4/5 labelled neighbour clips
+   (3/3 events), zero cost to incident/animal/resident/guard, 3/159 environment clips added to
+   this low-priority channel. **Needed schema v6→v7** (`predicted_class` CHECK constraint widened)
+   — see "Schema is now v7" below if you have another copy of the DB.
+5. **Per-object flashlight scoring, then a rule on it, then the debug render fix** — the
+   `cam07/11174` story, worth knowing end to end since it's the throughline of most of this
+   session: the single-track pipeline was following a bush 40% of the frame away from a real,
+   plainly-visible flashlight, so `green_light_ratio` read 0.0. `_multi_object_flashlight_features`
+   (reporting-only at first) scores EVERY persistently-tracked object independently, so it sees
+   the beam regardless of which object the single-track pipeline follows. Measured clean (zero
+   leakage into any protected class), then wired as a third, independent `guard_candidate` rule
+   (`multi_object_max_flashlight_ratio`): alert-channel FP 35→23, precision 0.386→0.489, recall
+   unchanged, every protected class byte-identical. Then found (via the user's own question — "does
+   any flashlight object get traced as flashlight in the debug clip?") that `scripts/render_debug.py`
+   never visually marked this: only the single main tracked box was ever checked for
+   flashlight-ness. Fixed — every persistent object is now checked and marked.
+6. **The multi-object tracker itself rewritten** (`track_multiple_objects` — object-linking stage
+   1), per explicit user instruction ("do 1 and 2 ... i dont really see a need of seperating the
+   flashlight head with the beam" — stage 3 explicitly declined). Global-optimal assignment
+   (`scipy.optimize.linear_sum_assignment`, a real new dependency) replaces per-track greedy
+   picking in dict-iteration order — a demonstrated real bug, not a theoretical one (two tracks
+   could both claim the one candidate nearest their shared midpoint while a second, valid one sat
+   unclaimed and spawned a spurious third id). Added an optional colour-histogram appearance
+   tie-breaker, a cap on indefinite merge dead-reckoning, and switched the real pipeline to track
+   every raw candidate rather than only min-area blobs (the fix for "cannot see small subjects at
+   all" — the animal population). **This surfaced a real regression before it shipped**: the
+   tentative-track `confirm_frames` gate needed to make that candidate-widening safe, at the value
+   first tried (3), silently suppressed short-lived flashlight objects — regressing 16 guard clips
+   including `cam07/11174` itself (ratio collapsed back to 0.0). Caught by re-measuring, not
+   assumed; **`confirm_frames` now defaults to 1 (effectively off)** and is deliberately NOT the
+   same value that would be needed to fully suppress tracker noise — see its docstring before ever
+   changing it. At the shipped default, re-measured clean: alert-channel FP 23→22, precision
+   0.489→0.500, recall unchanged, guard correctly classified 350→354, every protected class
+   byte-identical, `cam07/11174` exactly restored.
+7. **Per-track person/animal/artifact typing** (object-linking stage 2), reporting-only —
+   `_multi_object_type_features`. Person/animal reuse the existing ground-plane calibration per
+   object instead of only the single tracked subject; artifact reuses `blob_white_fraction`.
+   **Measured and found NOT separable as first coded** — once the tracker was widened to track
+   every candidate, `multi_object_animal_track_count > 0` fired on 138/158 environment clips
+   (median count 53.5) vs 26/32 real animal clips (median 2.5): wind/insects mint dozens of
+   one-frame "animal-height" tracks. Added a minimum-evidence filter
+   (`MIN_TRACK_FRAMES_FOR_TYPE=3`) — helps, does not fix it. **Tried raising that bar further and
+   it got WORSE, not better** (measured on cam10 specifically, its best-populated camera for both
+   labels: at 12 frames, real animal clips drop to 0/6 with any qualifying track at all while
+   environment stays at 39/83 — a real animal's track apparently does not outlast wind-shaken
+   vegetation's). **Do not retry raising this threshold** — see the review doc's "do not retry"
+   table and the feature's own docstring. `multi_object_artifact_track_count` looks more promising
+   in the same pass but is flagged, not claimed, since it's likely correlated with the pre-existing
+   `blob_white_fraction`. None of stage 2's features are wired into `classify()`.
+8. **Also shipped along the way, lower-stakes**: `scripts/rank_candidates.py`'s LOO-CV
+   sibling-leakage fixed (was fitting on both clips of one physical event); `has_reference_
+   background` restored as a ranker input; per-camera feature standardisation added as an
+   **opt-in, off-by-default** flag after a real measurement came back negative (LOO AUC 0.884→0.755
+   on the only affordable test this session could run — see the flag's own docstring for exactly
+   what was and wasn't measured). `optical_flow_direction_coherence` built and measured as a new
+   reporting-only feature — the specific hypothesis (single-pair internal coherence) reads
+   BACKWARDS on the full corpus (environment highest, not lowest) and is kept as infrastructure,
+   not a validated discriminator — do not re-attempt that exact framing.
+
+### Schema is now v7
+
+`scripts/migrate_schema_v7.py` (already run against the live `data/perimeter_watch.db`, backed up
+first). `predicted_class`'s CHECK constraint gained `neighbour_candidate`. **If you have another
+copy of this database, run that migration against it too** — same hard-error-on-mismatch behaviour
+noted in session #15's entry for v6.
+
+### New dependency: `scipy`
+
+Added for `scipy.optimize.linear_sum_assignment` (the tracker rewrite, item 6 above). Already in
+`pyproject.toml`/`uv.lock`; nothing extra to do beyond the usual `uv run`.
+
+### Verification discipline this session actually followed
+
+Every item above was measured against the full 678-clip labelled corpus before being trusted —
+`scripts/backtest.py --labelled-only --no-record`, comparing `.summary.json` confusion matrices
+and per-clip category diffs against a captured baseline, not just "does it still pass the test
+suite." Two regressions were caught this way BEFORE shipping (the `confirm_frames=3` flashlight
+suppression in item 6, and the animal/person count near-universality in item 7) rather than being
+discovered later or not at all. `uv run ruff check . --fix && uv run pytest -q` and
+`scripts/check_incident_regression.py` stayed green (or at the same 3 documented exceptions)
+throughout, checked after every single commit, not just at session end.
+
+### Open decisions still pending — none of these were implemented without sign-off, on purpose
+
+`docs/detection_improvement_review.md`'s "Open questions for the user" section (near the bottom)
+has the full detail. Short version, in priority order:
+
+1. **The fence-distance band** (`MEDIAN_FENCE_DISTANCE_MIN`/`_MAX` in `config/thresholds.yaml`).
+   Removing it recovers 11/22 missed animal clips at a cost of 17 guard + 16 environment false
+   alerts. Trade-off depends on the user's actual tolerance, not measurable from the data alone.
+2. **Ship readiness criterion #3** (`docs/plan.md`) — a concrete guard/environment leak-per-night
+   budget — is still unset and now blocks more decisions than it did in session #15.
+3. **The what/where/when classifier restructure** (object-linking stage 4 — a clip carrying a SET
+   of findings, not one winning category). The right long-term model per the user's own framing,
+   but changes what an alert *is* and downstream notification isn't designed for it yet.
+4. **Whether a supervised person/animal detector is in scope**, or the classical-CV commitment in
+   `docs/plan.md` stands. Determines whether the metric-height approach (§2.2/§4.5) is the ceiling
+   or a stepping stone.
+5. **Using the reference background as the primary detection model**, not just a veto (§4.4) —
+   repeatedly deferred, twice-evidenced as worth doing, still not attempted.
+
+Stage 3 of object linking (beam vs torch, distinguishing a real flashlight head from
+flashlight-lit vegetation) was explicitly declined by the user this session, not merely deferred —
+do not build it without being asked again.
 
 ## Handoff for a new agent (2026-09-09, session close #15)
 

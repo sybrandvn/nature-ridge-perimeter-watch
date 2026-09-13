@@ -116,6 +116,40 @@ def test_run_backtest_assembles_rows_and_skips_unknown_camera(tmp_path: Path, ca
     conn.close()
 
 
+def test_run_backtest_reuses_cached_features(monkeypatch, tmp_path: Path):
+    conn = db.connect(tmp_path / "t.db")
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"stable-video-content")
+    db.upsert_clip(
+        conn,
+        channel_id="chan1",
+        message_id=1,
+        camera_id="cam01",
+        timestamp="2026-01-01T20:00:00Z",
+        caption=None,
+        file_path=str(clip_path),
+        source="backfill",
+    )
+    camera = Camera(id="cam01", aliases=(), order=0, zone=_ZONE, threshold_overrides={})
+    cameras = CamerasConfig(cameras=(camera,), unknown_camera_id="unknown")
+    calls = 0
+
+    def fake_extract(file_path, zone, **kwargs):
+        nonlocal calls
+        calls += 1
+        return _features(green_light_ratio=0.2)
+
+    monkeypatch.setattr(backtest, "extract_clip_features", fake_extract)
+    first = list(backtest.run_backtest(conn, cameras, extract_fn=fake_extract))
+    second = list(backtest.run_backtest(conn, cameras, extract_fn=fake_extract))
+
+    assert calls == 1
+    assert first == second
+    assert first[0]["category"] == "guard_candidate"
+    assert conn.execute("SELECT count(*) FROM blob_tracks").fetchone()[0] == 1
+    conn.close()
+
+
 def test_write_csv_round_trip(tmp_path: Path):
     rows = [
         {

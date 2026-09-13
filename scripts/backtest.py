@@ -29,8 +29,18 @@ from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.backtester import record_run  # noqa: E402
 from src.classify import classify_detailed, is_blinding_foreground  # noqa: E402
-from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
+from src.config import (  # noqa: E402
+    CamerasConfig,
+    load_app_config,
+    load_cameras_config,
+    load_thresholds_config,
+)
 from src.features import daylight_hint, is_daylight  # noqa: E402
+from src.motion import (  # noqa: E402
+    extraction_fingerprint,
+    get_cached_features,
+    put_cached_features,
+)
 from src.reference_bg import (  # noqa: E402
     era_of,
     load_manifest,
@@ -39,6 +49,7 @@ from src.reference_bg import (  # noqa: E402
 )
 
 ExtractFn = Callable[..., "dict[str, float] | None"]
+_THRESHOLDS_PATH = Path(__file__).resolve().parents[1] / "config" / "thresholds.yaml"
 
 # Identity/verdict columns, then EVERY numeric feature. Deliberately derived
 # from FEATURE_COLUMNS rather than hand-listed: a hand-picked subset silently
@@ -114,7 +125,11 @@ def run_backtest(
     reference_entries: Any = None,
     reference_root: str = "data/reference_bg",
     extract_fn: ExtractFn = extract_clip_features,
+    use_cache: bool = True,
 ) -> Iterator[dict[str, Any]]:
+    thresholds_config = load_thresholds_config(_THRESHOLDS_PATH)
+    thresholds_config.motion_thresholds()  # strict validation before any cache lookup
+    cache_standard_path = use_cache and extract_fn is extract_clip_features
     unknown_cameras: set[str] = set()
     for clip in iter_clips_with_files(conn, camera_id=camera_id, labelled_only=labelled_only):
         camera = cameras.by_id(clip["camera_id"])
@@ -130,7 +145,36 @@ def run_backtest(
         hint = daylight_hint(clip["timestamp"])
         if hint is not None:
             extra["daylight_hint"] = hint
-        features = extract_fn(clip["file_path"], camera.zone_at(clip["timestamp"]), **extra)
+        zone = camera.zone_at(clip["timestamp"])
+        features: dict[str, float] | None
+        cache_fingerprint = None
+        cache_hit = False
+        if cache_standard_path:
+            cache_fingerprint = extraction_fingerprint(
+                video_path=clip["file_path"],
+                motion_fingerprint=thresholds_config.motion_fingerprint(),
+                zone=zone,
+                reference_background=reference,
+                daylight_hint=hint,
+            )
+            cache_hit, features = get_cached_features(
+                conn,
+                channel_id=clip["channel_id"],
+                message_id=clip["message_id"],
+                fingerprint=cache_fingerprint,
+            )
+        else:
+            features = None
+        if not cache_hit:
+            features = extract_fn(clip["file_path"], zone, **extra)
+            if cache_standard_path and cache_fingerprint is not None:
+                put_cached_features(
+                    conn,
+                    channel_id=clip["channel_id"],
+                    message_id=clip["message_id"],
+                    fingerprint=cache_fingerprint,
+                    features=features,
+                )
         if features is not None and clip["timestamp"] is not None:
             # classify() needs the real exogenous signal, not an image
             # statistic -- see the module docstring's resident_candidate note.
@@ -307,6 +351,11 @@ def main() -> None:  # pragma: no cover - requires real downloaded footage
         help="skip recording this pass as an immutable backtest_runs/backtest_results row "
         "(src.backtester) -- for a scratch/exploratory run nobody needs to find again",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="bypass blob_tracks reads and writes for a cold extraction/regression comparison",
+    )
     args = parser.parse_args()
 
     app_cfg = load_app_config(require_telegram=False)
@@ -322,6 +371,7 @@ def main() -> None:  # pragma: no cover - requires real downloaded footage
             labelled_only=args.labelled_only,
             reference_entries=reference_entries,
             reference_root=args.reference_bg,
+            use_cache=not args.no_cache,
         )
     )
 

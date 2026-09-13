@@ -471,8 +471,78 @@ def test_missing_cameras_file_raises(tmp_path):
 
 def test_load_thresholds_config_from_repo_default():
     cfg = load_thresholds_config(Path(__file__).parents[1] / "config" / "thresholds.yaml")
-    assert "mog2" in cfg.motion
+    assert "tracking" in cfg.motion
     assert "guard" in cfg.classification
+
+
+def test_repo_motion_thresholds_match_validated_detector_defaults():
+    thresholds = load_thresholds_config(_REPO_THRESHOLDS).motion_thresholds()
+    assert thresholds.__dict__ == {
+        "max_area_fraction": 0.25,
+        "min_blob_area_fraction": 0.0005,
+        "threshold": 18,
+        "flare_tolerance": 3.0,
+        "max_flare_fraction": 0.4,
+        "max_track_jump_fraction": 0.2,
+        "max_track_miss_frames": 5,
+        "template_match_threshold": 0.55,
+        "flare_match_relax": 0.1,
+        "track_search_margin_fraction": 0.75,
+        "min_track_search_margin": 6.0,
+        "fragment_close_kernel_size": 9,
+        "max_recovered_streak": 12,
+        "max_size_change_ratio": 4.0,
+        "anchor_refine": True,
+        "max_anchor_streak": 4,
+        "min_reacquire_area": 20.0,
+        "max_scenery_streak": 2,
+        "scenery_correlation": 0.94,
+        "compensate_warmup": False,
+        "prefer_flashlight_candidate": False,
+        "multi_track_confirm_frames": 1,
+    }
+
+
+def test_motion_config_matches_both_operational_extractor_signatures():
+    """Every configured value must reach the real extraction path unchanged."""
+    import dataclasses
+    import inspect
+
+    from scripts.spike import detect_clip, extract_clip_features
+
+    thresholds = load_thresholds_config(_REPO_THRESHOLDS).motion_thresholds()
+    detect_params = inspect.signature(detect_clip).parameters
+    feature_params = inspect.signature(extract_clip_features).parameters
+    for field in dataclasses.fields(thresholds):
+        expected = getattr(thresholds, field.name)
+        assert detect_params[field.name].default == expected
+        assert feature_params[field.name].default == expected
+
+
+def test_motion_thresholds_reject_missing_and_unknown_keys():
+    cfg = load_thresholds_config(_REPO_THRESHOLDS)
+    missing = {section: dict(values) for section, values in cfg.motion.items()}
+    del missing["tracking"]["max_miss_frames"]
+    with pytest.raises(ConfigError, match=r"missing motion\.tracking\.max_miss_frames"):
+        type(cfg)(motion=missing, classification=cfg.classification).motion_thresholds()
+
+    unknown = {section: dict(values) for section, values in cfg.motion.items()}
+    unknown["tracking"]["stale_setting"] = 1
+    with pytest.raises(ConfigError, match=r"unrecognised motion\.tracking\.stale_setting"):
+        type(cfg)(motion=unknown, classification=cfg.classification).motion_thresholds()
+
+
+def test_motion_thresholds_reject_wrong_scalar_types():
+    cfg = load_thresholds_config(_REPO_THRESHOLDS)
+    wrong_int = {section: dict(values) for section, values in cfg.motion.items()}
+    wrong_int["tracking"]["max_miss_frames"] = 5.5
+    with pytest.raises(ConfigError, match=r"max_miss_frames: expected an integer"):
+        type(cfg)(motion=wrong_int, classification=cfg.classification).motion_thresholds()
+
+    wrong_bool = {section: dict(values) for section, values in cfg.motion.items()}
+    wrong_bool["anchor"]["enabled"] = 1
+    with pytest.raises(ConfigError, match=r"anchor\.enabled: expected a boolean"):
+        type(cfg)(motion=wrong_bool, classification=cfg.classification).motion_thresholds()
 
 
 def test_thresholds_missing_section_raises(tmp_path):

@@ -1,24 +1,47 @@
-# Handoff: object-linking stages 1 & 2 landed; motion.py caching still next
+# Handoff: motion.py cache prerequisites started; detector wiring still next
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-10. **If you are a new agent
-picking this up, search this file for "Handoff for a new agent (2026-09-10, session close #16)"
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-13. **If you are a new agent
+picking this up, search this file for "Handoff for a new agent (2026-09-13, session #17)"
 and start there.** (This file's session sections are not in one consistent order: #1-#5 are the
 oldest, kept in their original forward-chronological spot further up; starting from #6, each new
 session's entry is instead inserted directly above its predecessor, so the chain from #6 to the
-latest reads newest-first. #16 is the current latest.) On branch
+latest reads newest-first. #17 is the current latest.) On branch
 `feat/phase2-refactor` (cut from `main`, which has all of Phase 1 and Phase 2's empirical
 detection/classification work merged). The detection work itself is in a good, validated,
-actively-improving state — see session #16's entry for what landed most recently (a full detection
-review, a rewritten multi-object tracker, several new/measured classifier rules) and its "Open
-decisions still pending" list for what's blocked on the user, not on more engineering. `motion.py`
-caching (session #15's "next" item) is STILL not started — nothing this session touched it; it
-remains the one item in the Phase 2 refactor brief that can make results silently *wrong* rather
-than just slow, so give it a session of its own — see `docs/plan.md`'s "Phase 2 refactor brief" and
-`docs/phase2_refactor_execution_plan.md` for the full record of what session #15 did and what's
-left. `docs/plan.md` is the full plan and stays authoritative; this file is the short version of
+actively-improving state — see session #16's entry for the latest detection review and object
+linking work, and session #17 below for the new persistent extraction cache. The cache's complete
+identity prevents stale reuse; the remaining plan-step-22 refinement is extracting the detector
+itself and replacing the zone-aware feature payload with genuinely zone-independent raw tracks.
+See `docs/plan.md`'s "Phase 2 refactor brief" for that distinction. `docs/plan.md` is the full plan;
+this file is the short version of
 where things actually stand and what to do next. `docs/detection_improvement_review.md` is the
 authoritative record of everything session #16 measured and shipped, with its own itemised
 "Implementation status" section at the top.
+
+## Handoff for a new agent (2026-09-13, session #17)
+
+Picked up plan step 22, `motion.py` caching. Clean baseline: ruff green and 688 tests passing.
+The operational feature cache is now complete. The stale MOG2-shaped `motion:` YAML was replaced
+by all 22 real detector settings; `MotionThresholds` loads it strictly, and both detector/extractor
+signatures are coupled to those values by a test. `src/motion.py` defines
+`EXTRACTOR_VERSION=motion-features-v1`, builds a cache identity from video bytes, motion config,
+resolved camera geometry, daylight hint, and reference-background pixels, and persists both real
+feature mappings and explicit no-motion results through the existing `blob_tracks` table.
+`scripts/backtest.py` uses it by default; `--no-cache` bypasses reads and writes.
+
+Corpus verification on all 678 labelled clips: uncached, cold-cache and warm-cache CSVs had the
+same SHA-256 (`899354925d35676f...`) and identical metrics (precision 0.500, recall 0.468). The
+cold pass populated 678 `motion-features-v1` rows. Warm runtime was 3.7 seconds versus roughly
+6 minutes uncached. Full tests: 695 passing. Incident/
+animal regression output was unchanged: all 5 incident events alert; the same 3 already-known
+animal event exceptions remain.
+
+Honest remaining architectural refinement: this caches final JSON-safe feature mappings and
+therefore includes zone/reference identity. It is correct and fast, but not the plan's ultimate
+zone-independent raw-track payload—editing geometry invalidates and recomputes rather than cheaply
+reapplying `zones.py`. Do not serialize `ClipDetection` wholesale (NumPy frames/masks/contours).
+A later extraction of the detector from `scripts/spike.py` into `src/motion.py` should define a
+smaller raw-track DTO; bump `EXTRACTOR_VERSION` when that payload or extraction semantics change.
 
 ## Where the project is
 

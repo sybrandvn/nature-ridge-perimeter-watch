@@ -2,8 +2,8 @@
 
 Motion-extraction settings and classification thresholds are kept in separate
 top-level sections of thresholds.yaml so a threshold-only change never
-invalidates cached motion features (see ThresholdsConfig.motion_fingerprint,
-used later by src/motion.py's feature cache).
+invalidates cached motion features (see ThresholdsConfig.motion_fingerprint
+and src.motion's feature cache).
 """
 
 from __future__ import annotations
@@ -518,6 +518,97 @@ def _parse_point(camera_id: str, field_name: str, point: Any) -> Point:
 
 
 @dataclass(frozen=True)
+class MotionThresholds:
+    """Every global setting that can change ``detect_clip`` output.
+
+    Per-clip inputs (the reference background and camera ignore polygons) do
+    not belong here; their identities must be represented separately when the
+    cache key is assembled.
+    """
+
+    max_area_fraction: float
+    min_blob_area_fraction: float
+    threshold: int
+    flare_tolerance: float
+    max_flare_fraction: float
+    max_track_jump_fraction: float
+    max_track_miss_frames: int
+    template_match_threshold: float
+    flare_match_relax: float
+    track_search_margin_fraction: float
+    min_track_search_margin: float
+    fragment_close_kernel_size: int
+    max_recovered_streak: int
+    max_size_change_ratio: float
+    anchor_refine: bool
+    max_anchor_streak: int
+    min_reacquire_area: float
+    max_scenery_streak: int
+    scenery_correlation: float
+    compensate_warmup: bool
+    prefer_flashlight_candidate: bool
+    multi_track_confirm_frames: int
+
+
+_MOTION_FIELDS: Mapping[str, tuple[str, str, type]] = {
+    "max_area_fraction": ("blob", "max_area_fraction", float),
+    "min_blob_area_fraction": ("blob", "min_area_fraction", float),
+    "threshold": ("difference", "threshold", int),
+    "flare_tolerance": ("flare", "tolerance", float),
+    "max_flare_fraction": ("flare", "max_fraction", float),
+    "max_track_jump_fraction": ("tracking", "max_jump_fraction", float),
+    "max_track_miss_frames": ("tracking", "max_miss_frames", int),
+    "template_match_threshold": ("tracking", "template_match_threshold", float),
+    "flare_match_relax": ("tracking", "flare_match_relax", float),
+    "track_search_margin_fraction": ("tracking", "search_margin_fraction", float),
+    "min_track_search_margin": ("tracking", "min_search_margin", float),
+    "fragment_close_kernel_size": ("morphology", "fragment_close_kernel_size", int),
+    "max_recovered_streak": ("tracking", "max_recovered_streak", int),
+    "max_size_change_ratio": ("tracking", "max_size_change_ratio", float),
+    "anchor_refine": ("anchor", "enabled", bool),
+    "max_anchor_streak": ("anchor", "max_streak", int),
+    "min_reacquire_area": ("tracking", "min_reacquire_area", float),
+    "max_scenery_streak": ("reference_background", "max_scenery_streak", int),
+    "scenery_correlation": ("reference_background", "correlation", float),
+    "compensate_warmup": ("warmup", "compensate", bool),
+    "prefer_flashlight_candidate": ("tracking", "prefer_flashlight_candidate", bool),
+    "multi_track_confirm_frames": ("multi_tracking", "confirm_frames", int),
+}
+
+
+def _motion_thresholds(motion: Mapping[str, Any]) -> MotionThresholds:
+    values: dict[str, Any] = {}
+    for field_name, (section, key, value_type) in _MOTION_FIELDS.items():
+        subsection = motion.get(section)
+        if not isinstance(subsection, Mapping):
+            raise ConfigError(
+                f"thresholds.yaml:motion.{section} must be a mapping (needed for {field_name})"
+            )
+        if key not in subsection:
+            raise ConfigError(f"thresholds.yaml: missing motion.{section}.{key}")
+        raw = subsection[key]
+        path = f"thresholds.yaml:motion.{section}.{key}"
+        if value_type is bool:
+            if not isinstance(raw, bool):
+                raise ConfigError(f"{path}: expected a boolean")
+        elif value_type is int:
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                raise ConfigError(f"{path}: expected an integer")
+        elif isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ConfigError(f"{path}: expected a number")
+        values[field_name] = value_type(raw)
+
+    expected = {(section, key) for section, key, _type in _MOTION_FIELDS.values()}
+    for section, subsection in motion.items():
+        if not isinstance(subsection, Mapping):
+            raise ConfigError(f"thresholds.yaml:motion.{section} must be a mapping")
+        for key in subsection:
+            if (section, key) not in expected:
+                raise ConfigError(f"thresholds.yaml: unrecognised motion.{section}.{key}")
+    return MotionThresholds(**values)
+
+
+@dataclass(frozen=True)
 class ClassificationThresholds:
     """Every tuned number src.classify compares against.
 
@@ -617,6 +708,9 @@ class ThresholdsConfig:
         threshold edits must never change this value.
         """
         return _stable_hash(self.motion)
+
+    def motion_thresholds(self) -> MotionThresholds:
+        return _motion_thresholds(self.motion)
 
     def classification_fingerprint(self) -> str:
         """Stable hash of classification thresholds only.

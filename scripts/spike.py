@@ -36,6 +36,7 @@ import csv
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +47,14 @@ import numpy as np  # noqa: E402
 from scipy.optimize import linear_sum_assignment  # noqa: E402
 
 from src import db  # noqa: E402
-from src.config import CamerasConfig, CameraZone, load_app_config, load_cameras_config  # noqa: E402
+from src.config import (  # noqa: E402
+    CamerasConfig,
+    CameraZone,
+    MotionThresholds,
+    load_app_config,
+    load_cameras_config,
+    load_thresholds_config,
+)
 from src.features import (  # noqa: E402
     FLASHLIGHT_CANDIDATE_MIN_RATIO,
     FLASHLIGHT_SUBJECT_THRESHOLD,
@@ -162,6 +170,15 @@ FEATURE_COLUMNS = (
     "speed_mps",
     "uncalibrated",
 )
+
+
+@lru_cache(maxsize=1)
+def _default_motion_thresholds() -> MotionThresholds:
+    path = Path(__file__).resolve().parents[1] / "config" / "thresholds.yaml"
+    return load_thresholds_config(path).motion_thresholds()
+
+
+_DEFAULT_MOTION_THRESHOLDS = _default_motion_thresholds()
 
 
 def largest_contour(mask: np.ndarray, *, max_area: float | None = None) -> np.ndarray | None:
@@ -2539,17 +2556,31 @@ def extract_clip_features(
     zone: CameraZone,
     *,
     reference_row: float | None = None,
-    max_area_fraction: float = 0.25,
-    min_blob_area_fraction: float = 0.0005,
-    threshold: int = 18,
-    flare_tolerance: float = 3.0,
-    max_flare_fraction: float = 0.4,
+    max_area_fraction: float = _DEFAULT_MOTION_THRESHOLDS.max_area_fraction,
+    min_blob_area_fraction: float = _DEFAULT_MOTION_THRESHOLDS.min_blob_area_fraction,
+    threshold: int = _DEFAULT_MOTION_THRESHOLDS.threshold,
+    flare_tolerance: float = _DEFAULT_MOTION_THRESHOLDS.flare_tolerance,
+    max_flare_fraction: float = _DEFAULT_MOTION_THRESHOLDS.max_flare_fraction,
     daylight_color_fraction: float = 0.15,
-    template_match_threshold: float = 0.55,
+    max_track_jump_fraction: float = _DEFAULT_MOTION_THRESHOLDS.max_track_jump_fraction,
+    max_track_miss_frames: int = _DEFAULT_MOTION_THRESHOLDS.max_track_miss_frames,
+    template_match_threshold: float = _DEFAULT_MOTION_THRESHOLDS.template_match_threshold,
+    flare_match_relax: float = _DEFAULT_MOTION_THRESHOLDS.flare_match_relax,
+    track_search_margin_fraction: float = _DEFAULT_MOTION_THRESHOLDS.track_search_margin_fraction,
+    min_track_search_margin: float = _DEFAULT_MOTION_THRESHOLDS.min_track_search_margin,
+    fragment_close_kernel_size: int = _DEFAULT_MOTION_THRESHOLDS.fragment_close_kernel_size,
+    max_recovered_streak: int = _DEFAULT_MOTION_THRESHOLDS.max_recovered_streak,
+    max_size_change_ratio: float = _DEFAULT_MOTION_THRESHOLDS.max_size_change_ratio,
+    anchor_refine: bool = _DEFAULT_MOTION_THRESHOLDS.anchor_refine,
+    max_anchor_streak: int = _DEFAULT_MOTION_THRESHOLDS.max_anchor_streak,
+    min_reacquire_area: float = _DEFAULT_MOTION_THRESHOLDS.min_reacquire_area,
     reference_background: np.ndarray | None = None,
-    scenery_correlation: float = 0.94,
+    max_scenery_streak: int = _DEFAULT_MOTION_THRESHOLDS.max_scenery_streak,
+    scenery_correlation: float = _DEFAULT_MOTION_THRESHOLDS.scenery_correlation,
     daylight_hint: bool | None = None,
-    prefer_flashlight_candidate: bool = False,
+    compensate_warmup: bool = _DEFAULT_MOTION_THRESHOLDS.compensate_warmup,
+    prefer_flashlight_candidate: bool = _DEFAULT_MOTION_THRESHOLDS.prefer_flashlight_candidate,
+    multi_track_confirm_frames: int = _DEFAULT_MOTION_THRESHOLDS.multi_track_confirm_frames,
 ) -> dict[str, float] | None:
     """Run the detector over one clip and compute features for its largest
     track. Returns None if no motion was detected.
@@ -2604,11 +2635,25 @@ def extract_clip_features(
         threshold=threshold,
         flare_tolerance=flare_tolerance,
         max_flare_fraction=max_flare_fraction,
+        max_track_jump_fraction=max_track_jump_fraction,
+        max_track_miss_frames=max_track_miss_frames,
         template_match_threshold=template_match_threshold,
+        flare_match_relax=flare_match_relax,
+        track_search_margin_fraction=track_search_margin_fraction,
+        min_track_search_margin=min_track_search_margin,
+        fragment_close_kernel_size=fragment_close_kernel_size,
+        max_recovered_streak=max_recovered_streak,
+        max_size_change_ratio=max_size_change_ratio,
+        anchor_refine=anchor_refine,
+        max_anchor_streak=max_anchor_streak,
+        min_reacquire_area=min_reacquire_area,
         ignore_polygons=zone.ignore,
         reference_background=reference_background,
+        max_scenery_streak=max_scenery_streak,
         scenery_correlation=scenery_correlation,
+        compensate_warmup=compensate_warmup,
         prefer_flashlight_candidate=prefer_flashlight_candidate,
+        multi_track_confirm_frames=multi_track_confirm_frames,
     )
     if detection is None:
         return None
@@ -2825,7 +2870,11 @@ def extract_clip_features(
         ),
         "warmup_flashlight_ratio": warmup_flashlight_ratio,
         **_warmup_motion_features(
-            detection, zone, frame_width, frame_height, threshold=threshold
+            detection,
+            zone,
+            frame_width,
+            frame_height,
+            threshold=threshold,
         ),
         **_multi_object_outside_features(
             detection,

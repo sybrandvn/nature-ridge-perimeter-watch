@@ -9,28 +9,46 @@
 # docs/handoff.md, and re-run scripts/check_incident_regression.py plus a
 # labelled-corpus backtest diff afterwards.
 #
-# `motion` is NOT yet consumed by the extractor -- detect_clip's parameters are
-# still defaults in its own signature (see docs/plan.md step 22). It exists
-# because src.config.ThresholdsConfig.motion_fingerprint() hashes it as the
-# cache key for future blob-track caching. Editing `motion` therefore
-# invalidates a cache nobody writes yet and changes nothing today; leave it
-# alone until step 22 wires it up.
+# `motion` is the source of every global setting used by the operational
+# extract_clip_features path. Its fingerprint is part of src.motion's cache
+# identity. The values below were copied verbatim from detect_clip's validated
+# defaults; change them only with a corpus backtest and extractor-version review.
 #
 # The two sections are deliberately separate so a classification-only edit
 # never invalidates cached motion features.
 
 motion:
-  mog2:
-    history: 500
-    var_threshold: 16
-    detect_shadows: true
-  morphology:
-    open_kernel: 3
-    close_kernel: 5
   blob:
+    max_area_fraction: 0.25
     min_area_fraction: 0.0005
-    row_scale_reference_row: 1.0
-  learning_rate: -1
+  difference:
+    threshold: 18
+  flare:
+    tolerance: 3.0
+    max_fraction: 0.4
+  morphology:
+    fragment_close_kernel_size: 9
+  tracking:
+    max_jump_fraction: 0.2
+    max_miss_frames: 5
+    template_match_threshold: 0.55
+    flare_match_relax: 0.1
+    search_margin_fraction: 0.75
+    min_search_margin: 6.0
+    max_recovered_streak: 12
+    max_size_change_ratio: 4.0
+    min_reacquire_area: 20.0
+    prefer_flashlight_candidate: false
+  anchor:
+    enabled: true
+    max_streak: 4
+  reference_background:
+    max_scenery_streak: 2
+    correlation: 0.94
+  warmup:
+    compensate: false
+  multi_tracking:
+    confirm_frames: 1
 
 # Ordered to mirror src.classify.classify()'s rule chain, which is itself
 # load-bearing: guard is tested before environment, and environment before the

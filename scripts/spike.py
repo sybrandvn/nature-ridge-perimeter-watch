@@ -6,12 +6,11 @@ combination separates guard/environment from animal/incident before the rest
 of the pipeline (motion.py, classify.py, backtester.py) gets built on top of a
 false premise.
 
-This deliberately does NOT do motion detection/background subtraction itself
--- that is Phase 1's src/motion.py, built only after this gate passes. Instead
-it takes an already-detected blob per sampled frame (bounding contour + centroid)
-so the feature math (src/features.py, src/zones.py) can be validated against
-real footage using a throwaway per-clip detector, without committing to a
-production motion pipeline before knowing it's worth building.
+This began as a throwaway per-clip detector for feasibility work. It is now the
+operational detector/feature implementation, retained here while the detector
+is extracted in behaviour-preserving slices. Detector-owned DTOs already live
+in src.motion; zone-specific scoring remains below. Do not treat this history
+as a reason to duplicate the detector in another caller.
 
 Workflow (see docs/plan.md Phase 0c):
   1. Pick 2-3 cameras with the richest incident history (needs user input --
@@ -35,7 +34,7 @@ import argparse
 import csv
 import sys
 from collections.abc import Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -95,6 +94,7 @@ from src.ground_calibration import (  # noqa: E402
     MAX_SUBJECT_WIDTH_M,
     calibrate,
 )
+from src.motion import ClipDetection, FrameDetection, TrackedObject  # noqa: E402
 from src.zones import (  # noqa: E402
     classify_zone,
     median_fence_distance,
@@ -736,19 +736,6 @@ def _run_track_pass(
     return results
 
 
-@dataclass(frozen=True)
-class TrackedObject:
-    """One persistently-identified subject in one frame, from the multi-object
-    tracker (see `track_multiple_objects`). Kept separate from `FrameDetection`
-    so it's purely additive diagnostic detail, not fed into feature scoring."""
-
-    track_id: int
-    bbox: tuple[int, int, int, int]
-    # other track ids currently sharing this same bbox (background-subtraction
-    # can no longer tell them apart), empty when this id has its own blob.
-    merged_ids: tuple[int, ...] = ()
-
-
 _UNGATED_COST = 1.0e6  # cost sentinel: candidate outside every gate, never assignable
 
 
@@ -1174,66 +1161,6 @@ def _frame_is_merged(detection: ClipDetection, frame_index: int) -> bool:
     if frame_index >= len(detection.multi_tracks):
         return False
     return any(t.merged_ids for t in detection.multi_tracks[frame_index])
-
-
-@dataclass(frozen=True)
-class FrameDetection:
-    """Everything the detector saw in one frame, before it is reduced to features."""
-
-    index: int
-    frame: np.ndarray
-    mask: np.ndarray
-    all_contours: list[np.ndarray]  # every contour found, before either area gate
-    blobs: list[np.ndarray]  # contours passing both the min and max area gates
-    largest: np.ndarray | None  # largest contour under max_area, no min gate
-    centroid: tuple[float, float] | None
-    motion_pixel_fraction: float
-    median_grey: float
-    is_flare: bool
-    recovered: bool = False  # track continued via appearance match, not a real bg-diff blob
-    filled_by_reverse: bool = False  # forward pass found nothing here; a backward scan did
-    filled_by_anchor: bool = False  # box came from the fixed best-frame exemplar sweep
-    # Motion this frame that would have formed a contour if not for `ignore_polygons` --
-    # None if there was none, or no ignore region at all. Never fed into tracking or
-    # feature scoring, purely so a render can show something (e.g. a swaying branch in
-    # front of a known stationary light) was suppressed there rather than nothing.
-    suppressed_light_box: tuple[int, int, int, int] | None = None
-
-
-@dataclass(frozen=True)
-class ClipDetection:
-    """Per-frame detector output for a whole clip."""
-
-    frames: list[FrameDetection]
-    background: np.ndarray
-    frame_width: int
-    frame_height: int
-    warmup_dropped: int
-    total_frames: int
-    dropped_frames: list[np.ndarray]  # raw frames before the flare-settle cutoff, undetected
-    # bbox per dropped_frames entry, from tracing the first scored frame's appearance
-    # backward into the flare/warmup region -- None where the trace didn't reach/match.
-    dropped_frame_boxes: list[tuple[int, int, int, int] | None]
-    # True where the matching dropped_frame_boxes entry came from a real per-pixel
-    # background diff against a photometrically-compensated warmup frame (see
-    # `detect_clip`'s `compensate_warmup`), rather than pure appearance matching --
-    # the renderer uses this to label which mechanism found the box. Empty unless
-    # `compensate_warmup=True`.
-    dropped_frame_box_is_photometric: list[bool] = field(default_factory=list)
-    # dropped_frames, colour-corrected (brightness + per-channel colour cast) to match
-    # the settled background -- display/diagnostic only, never fed into detection.
-    # Empty unless `compensate_warmup=True`.
-    dropped_frame_compensated: list[np.ndarray] = field(default_factory=list)
-    # every persistently-identified subject per frame, from track_multiple_objects --
-    # additive diagnostic detail, parallel to `frames`, not used in feature scoring.
-    multi_tracks: list[list[TrackedObject]] = field(default_factory=list)
-    # fraction of this clip's total blob area that sits on reference-matching
-    # ground (see the scenery-motion computation in `detect_clip`) -- 0.0 with
-    # no motion or no reference background at all. `has_reference_background`
-    # tells the two apart, since "no reference" must never silently read the
-    # same as "no scenery motion found".
-    scenery_motion_fraction: float = 0.0
-    has_reference_background: bool = False
 
 
 def detect_clip(

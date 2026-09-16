@@ -6,12 +6,51 @@ from src import db
 from src.config import CameraZone
 from src.motion import (
     EXTRACTOR_VERSION,
+    ClipDetection,
+    FrameDetection,
+    TrackedObject,
     extraction_fingerprint,
     get_cached_features,
     put_cached_features,
 )
 
 _ZONE = CameraZone(fence=((0.0, 0.5), (1.0, 0.5)), outside="left", depth_cutoff=0.1, ignore=())
+
+
+def test_detector_dtos_live_in_motion_and_spike_reexports_them():
+    # This is the first detector/feature split seam. Existing callers remain
+    # source-compatible through scripts.spike while detector-owned data now
+    # has one neutral home for a later serialisable raw-track payload.
+    from scripts import spike
+
+    assert spike.TrackedObject is TrackedObject
+    assert spike.FrameDetection is FrameDetection
+    assert spike.ClipDetection is ClipDetection
+
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    observed = FrameDetection(
+        index=0,
+        frame=frame,
+        mask=np.zeros((2, 2), dtype=np.uint8),
+        all_contours=[],
+        blobs=[],
+        largest=None,
+        centroid=None,
+        motion_pixel_fraction=0.0,
+        median_grey=0.0,
+        is_flare=False,
+    )
+    clip = ClipDetection(
+        frames=[observed],
+        background=frame,
+        frame_width=2,
+        frame_height=2,
+        warmup_dropped=0,
+        total_frames=1,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+    )
+    assert clip.frames[0].frame is frame
 
 
 def test_extraction_fingerprint_covers_video_zone_reference_and_daylight(tmp_path):

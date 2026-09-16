@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,66 @@ from src.config import CameraZone
 
 EXTRACTOR_VERSION = "motion-features-v1"
 _NO_MOTION_KEY = "__perimeter_watch_no_motion__"
+
+
+@dataclass(frozen=True)
+class TrackedObject:
+    """One persistently identified object in one frame.
+
+    ``bbox`` is corner-form ``(x0, y0, x1, y1)``. It is intentionally a
+    detector-owned, zone-independent DTO: consumers such as feature scoring
+    and the debug renderer can share the same observed object without pulling
+    tracking implementation back into their module.
+    """
+
+    track_id: int
+    bbox: tuple[int, int, int, int]
+    # Other ids sharing this detector box; empty when this id has its own blob.
+    merged_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class FrameDetection:
+    """Everything the motion detector observed in one video frame."""
+
+    index: int
+    frame: np.ndarray
+    mask: np.ndarray
+    all_contours: list[np.ndarray]
+    blobs: list[np.ndarray]
+    largest: np.ndarray | None
+    centroid: tuple[float, float] | None
+    motion_pixel_fraction: float
+    median_grey: float
+    is_flare: bool
+    recovered: bool = False
+    filled_by_reverse: bool = False
+    filled_by_anchor: bool = False
+    suppressed_light_box: tuple[int, int, int, int] | None = None
+
+
+@dataclass(frozen=True)
+class ClipDetection:
+    """Detector output for one clip, before any zone-specific scoring.
+
+    This is deliberately an in-memory hand-off type, not the cache payload:
+    it contains NumPy imagery and contours. Keeping it here establishes the
+    detector/feature boundary needed for a later compact raw-track cache.
+    """
+
+    frames: list[FrameDetection]
+    background: np.ndarray
+    frame_width: int
+    frame_height: int
+    warmup_dropped: int
+    total_frames: int
+    dropped_frames: list[np.ndarray]
+    dropped_frame_boxes: list[tuple[int, int, int, int] | None]
+    dropped_frame_box_is_photometric: list[bool] = field(default_factory=list)
+    dropped_frame_compensated: list[np.ndarray] = field(default_factory=list)
+    multi_tracks: list[list[TrackedObject]] = field(default_factory=list)
+    scenery_motion_fraction: float = 0.0
+    has_reference_background: bool = False
 
 
 def _hash_file(path: str | Path) -> str:

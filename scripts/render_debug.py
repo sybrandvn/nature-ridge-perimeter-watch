@@ -56,12 +56,7 @@ from scripts.label import (
     _EVENT_TS_RE,  # noqa: E402
     _event_key,  # noqa: E402
 )
-from scripts.spike import (  # noqa: E402
-    ClipDetection,
-    TrackedObject,
-    detect_clip,
-    extract_clip_features,
-)
+from scripts.spike import detect_clip, extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
@@ -76,6 +71,7 @@ from src.features import (  # noqa: E402
     sane_fps,
 )
 from src.ground_calibration import GroundCalibration, calibrate  # noqa: E402
+from src.motion import ClipDetection, TrackedObject  # noqa: E402
 from src.reference_bg import (  # noqa: E402
     era_of,
     load_manifest,

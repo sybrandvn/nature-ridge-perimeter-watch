@@ -39,6 +39,13 @@ The next architectural work remains session #17's raw-track detector extraction.
 feature cache is correct and fast; changing geometry still invalidates/recomputes instead of cheaply
 reapplying zones to a zone-independent raw-track payload.
 
+**Progress 2026-09-16:** the detector-owned in-memory DTOs (`TrackedObject`, `FrameDetection`,
+`ClipDetection`) now live in `src.motion` and are re-exported by `scripts.spike` for compatibility.
+`render_debug.py` consumes them from their new home. This is deliberately only the first seam:
+`ClipDetection` still contains NumPy frames/masks/contours and is not a cache payload; detector
+implementation and zone-specific feature reduction remain in `scripts.spike` pending a compact
+serialisable raw-track design.
+
 ## Handoff for a new agent (2026-09-13, session #17)
 
 Picked up plan step 22, `motion.py` caching. Clean baseline: ruff green and 688 tests passing.

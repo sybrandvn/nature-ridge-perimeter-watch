@@ -43,8 +43,8 @@ rules in src.classify (2026-09-16):
     just BELOW MEDIAN_FENCE_DISTANCE_MIN=0.10 -- an animal standing at the
     fence, not past it. Fixed by the narrow daylight/colour/compact
     near_fence_animal branch rather than globally lowering the standard floor.
-    It recovers four labelled animal clips at a cost of one labelled
-    environment clip entering the alert channel.
+    Its compact-blob ceiling excludes the labelled wind clip cam15/9644, so it
+    recovers four labelled animal clips with no labelled environment alert.
   - cam15-2025-07-15T00:29 (15453+15454, the porcupine): both clips read
     outside_pixel_fraction=0.5 (single-track geometry), exactly the fence
     line, never a clean majority. The rejected multi-object OR gate remains

@@ -145,7 +145,9 @@ Rules:
     blanket reduction of the standard 0.10 floor was unsafe. This branch
     recovers four labelled animal clips (cam10/9405, cam05/9691 and
     cam06/18273+18274); its only labelled-corpus cost through the current rule
-    order is cam15/9644, one environment clip entering the alert channel.
+    order recovers those four clips with no labelled environment alert; the
+    compact blob_count <= 2 ceiling specifically excludes cam15/9644's
+    daylight wind-blown bushes (six blobs).
   - incident_candidate (night fence-straddle recovery): the best silhouette
     is 50-60% outside and 0.02-0.10 frame-widths from the fence, while temporal
     evidence says most classifiable frames were outside and the track crossed
@@ -515,6 +517,7 @@ def classify_detailed(
         and features["median_fence_distance"] <= thresholds.median_fence_distance_min
         and features["color_fraction"] > thresholds.color_fraction_min
         and features.get("row_normalised_area", 0.0) <= thresholds.row_normalised_area_max
+        and features["blob_count"] <= thresholds.near_fence_blob_count_max
         and features.get("blob_white_fraction", 0.0) < thresholds.blob_white_fraction_min
         and features.get("motion_pixel_fraction_median", 0.0)
         <= thresholds.motion_pixel_fraction_median_min
@@ -528,6 +531,7 @@ def classify_detailed(
                 "median_fence_distance": features["median_fence_distance"],
                 "color_fraction": features["color_fraction"],
                 "row_normalised_area": features.get("row_normalised_area", 0.0),
+                "blob_count": features["blob_count"],
                 "blob_white_fraction": features.get("blob_white_fraction", 0.0),
                 "motion_pixel_fraction_median": features.get(
                     "motion_pixel_fraction_median", 0.0

@@ -20,8 +20,8 @@ order (each committed and verified separately -- full test suite green throughou
    outside-fraction majority), and cam10/17146 (a bird on the fence rail confuses the metric
    height gate). **Resolved 2026-09-16:** three narrow measured rules now recover all three events
    (`near_fence_animal`, `fence_straddle_no_colour`, `inside_elevated_animal`). On the current 678
-   labelled clips, 7 animal clips become alerts and only one environment clip is added; alert
-   precision improves 0.500 -> 0.558 and recall 0.468 -> 0.617. The regression check now passes
+   labelled clips, 7 animal clips become alerts and no environment clip is added; alert precision
+   improves 0.500 -> 0.569 and recall 0.468 -> 0.617. The regression check now passes
    all 8 animal events, with only the pre-existing, signed-off cam10/7632 exception.
 3. **Real metrics in `scripts/backtest.py` (section 0) -- SHIPPED.** Confusion matrix,
    alert-channel precision/recall/F1, per-camera leak, written as a `.summary.json` alongside

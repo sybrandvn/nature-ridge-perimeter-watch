@@ -613,6 +613,7 @@ _GOLDEN_THRESHOLDS = {
     "color_fraction_min": 0.15,
     "row_normalised_area_max": 3000.0,
     "near_fence_distance_min": 0.05,
+    "near_fence_blob_count_max": 2.0,
     "straddle_pixel_fraction_min": 0.5,
     "straddle_distance_min": 0.02,
     "inside_blob_count_max": 2.0,

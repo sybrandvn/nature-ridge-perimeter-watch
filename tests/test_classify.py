@@ -297,6 +297,19 @@ def test_classify_near_fence_animal_does_not_relax_night_geometry():
     assert classify(features) == "unclassified"
 
 
+def test_classify_near_fence_animal_requires_compact_blob_count():
+    # cam15/9644 is daylight wind shaking bushes on both sides of the fence.
+    features = _features(
+        outside_pixel_fraction=1.0,
+        median_fence_distance=0.053,
+        color_fraction=0.83,
+        row_normalised_area=365.0,
+        blob_count=6,
+        is_daylight=True,
+    )
+    assert classify(features) == "unclassified"
+
+
 def test_classify_night_fence_straddle_subject():
     # cam15/15454: the clearest porcupine contour is exactly 50/50, while its
     # temporal track is outside and crosses the fence.
@@ -658,6 +671,22 @@ def test_classify_near_fence_distance_threshold_is_wired():
     assert classify(features, _thresholds(near_fence_distance_min=0.099)) == "unclassified"
 
 
+def test_classify_near_fence_blob_count_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=1.0,
+        median_fence_distance=0.053,
+        color_fraction=0.83,
+        row_normalised_area=365.0,
+        blob_count=6,
+        is_daylight=True,
+    )
+    assert classify(features) == "unclassified"
+    assert (
+        classify(features, _thresholds(near_fence_blob_count_max=6.0))
+        == "animal_candidate"
+    )
+
+
 def test_classify_straddle_pixel_fraction_threshold_is_wired():
     features = _features(
         outside_pixel_fraction=0.5,
@@ -919,6 +948,7 @@ def test_reason_near_fence_animal():
         "median_fence_distance": 0.097,
         "color_fraction": 0.23,
         "row_normalised_area": 101.0,
+        "blob_count": 1,
         "blob_white_fraction": 0.0,
         "motion_pixel_fraction_median": 0.0,
         "is_daylight": True,

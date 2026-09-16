@@ -632,6 +632,7 @@ class ClassificationThresholds:
     color_fraction_min: float
     row_normalised_area_max: float
     near_fence_distance_min: float
+    near_fence_blob_count_max: float
     straddle_pixel_fraction_min: float
     straddle_distance_min: float
     inside_blob_count_max: float
@@ -659,6 +660,7 @@ _CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
     "color_fraction_min": ("outside", "color_fraction_min"),
     "row_normalised_area_max": ("animal", "row_normalised_area_max"),
     "near_fence_distance_min": ("animal", "near_fence_distance_min"),
+    "near_fence_blob_count_max": ("animal", "near_fence_blob_count_max"),
     "straddle_pixel_fraction_min": ("animal", "straddle_pixel_fraction_min"),
     "straddle_distance_min": ("animal", "straddle_distance_min"),
     "inside_blob_count_max": ("animal", "inside_blob_count_max"),

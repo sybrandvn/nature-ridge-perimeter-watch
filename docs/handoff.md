@@ -22,16 +22,15 @@ authoritative record of everything session #16 measured and shipped, with its ow
 
 Closed the three unaccepted animal-event regression failures surfaced in session #16. The
 classifier now has three narrow recovery branches, all measured through the existing rule order:
-`near_fence_animal` recovers cam10/9405 plus three other labelled animal clips at a cost of one
-labelled environment alert; `fence_straddle_no_colour` uses temporal outside/crossing evidence to
+`near_fence_animal` recovers cam10/9405 plus three other labelled animal clips; its compact-blob
+ceiling excludes the daylight wind in cam15/9644. `fence_straddle_no_colour` uses temporal outside/crossing evidence to
 recover cam15/15454's 50/50 fence-line porcupine and is the only newly alerting full-corpus clip in
 that branch; `inside_elevated_animal` handles perched daylight animals before the generic
 ground-plane implausible-height gate and reaches only the cam10 bird event plus cam05/18788 in the
 16,886-clip report.
 
-Labelled-corpus delta: exactly 8 category changes—7 animal clips move into the alert channel and
-cam15/9644 (environment) moves from unclassified to animal_candidate. Alert precision/recall/F1
-move from 0.500/0.468 to 0.558/0.617/0.586. `scripts/check_incident_regression.py` passes all 5
+Labelled-corpus delta: exactly 7 category changes, all animal clips moving into the alert channel.
+Alert precision/recall/F1 move from 0.500/0.468 to 0.569/0.617/0.592. `scripts/check_incident_regression.py` passes all 5
 incident events and all 8 animal events, with only the already signed-off cam10/7632 exception.
 The debug renderer also now rounds fractional dead-reckoned multi-track boxes before OpenCV drawing
 and mask slicing; this is renderer-only and does not change cached feature semantics.

@@ -439,8 +439,11 @@ def _draw_multi_tracks(
     entirely and draws exactly as before -- purely additive.
     """
     for track in tracks:
-        x0, y0, x1, y1 = track.bbox  # corner form, unscaled -- see the bug-fix
-        # note in _multi_object_outside_features for why this matters.
+        x0, y0, x1, y1 = (int(round(c)) for c in track.bbox)
+        # Corner form, unscaled -- see the bug-fix note in
+        # _multi_object_outside_features for why this matters. Merged tracks
+        # can be dead-reckoned at fractional-pixel positions; OpenCV drawing
+        # and NumPy mask slicing both require integer pixel coordinates.
         is_flashlight = (
             frame_bgr is not None
             and not daylight_gated
@@ -450,7 +453,7 @@ def _draw_multi_tracks(
             > FLASHLIGHT_SUBJECT_THRESHOLD
         )
         color = COLOR_LIGHT if is_flashlight else _track_color(track.track_id)
-        x0, y0, x1, y1 = (c * scale for c in track.bbox)
+        x0, y0, x1, y1 = (c * scale for c in (x0, y0, x1, y1))
         centroid = (int((x0 + x1) / 2), int((y0 + y1) / 2))
         history = multi_track_history.setdefault(track.track_id, [])
         history.append(centroid)

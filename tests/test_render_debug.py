@@ -178,6 +178,15 @@ def test_draw_multi_tracks_skips_the_flashlight_check_without_a_frame():
     assert tuple(int(c) for c in canvas[2, 7]) == render_debug._track_color(0)
 
 
+def test_draw_multi_tracks_accepts_fractional_dead_reckoned_bbox():
+    canvas = np.zeros((80, 80, 3), dtype=np.uint8)
+    track = TrackedObject(track_id=0, bbox=(2.5, 3.5, 12.5, 13.5))
+
+    _draw_multi_tracks(canvas, [track], scale=2, multi_track_history={})
+
+    assert tuple(int(c) for c in canvas[8, 14]) == render_debug._track_color(0)
+
+
 def test_draw_multi_tracks_daylight_gated_suppresses_the_flashlight_check():
     # Same real flashlight-hue patch as the first test, but daylight_gated --
     # must not mark it, same "a flashlight in daylight footage isn't

@@ -119,6 +119,13 @@ Rules:
     backup, intruder, outside fence") is gated, and while its sibling 4055
     still carries the event, a live system sees one clip at a time -- so the
     per-clip margin is what the threshold is chosen on, not the event one.
+  - animal_candidate (inside elevated animal): checked before the generic
+    implausible-height gate. A perched animal violates the ground-plane model
+    by construction, so calibrated + fully inside + daylight + colour-bearing
+    + blob_count <= 2 rescues that narrow population. Measured through the
+    real rule order on 16,886 clips: exactly cam10/17145+17146 (one bird event,
+    with 17146 labelled animal) and cam05/18788 (labelled animal) fire. No
+    labelled negative changes category.
   - environment_candidate (metric physics gate): implausible_height_fraction > 0.5
     (added 2026-09-06, checked right after blob_count, same reasoning -- a
     physically-impossible reading should route to "not a real subject" before
@@ -132,6 +139,21 @@ Rules:
     Only fires for calibrated cameras (`uncalibrated == 0.0`); the 3 without a
     usable picket trace (cam01b, cam15, cam16) are untouched by this rule and
     fall through to the pixel-space rules exactly as before.
+  - animal_candidate (near-fence daylight recovery): the same compact,
+    colour-bearing outside subject as the animal branch below, but with
+    median_fence_distance in (0.05, 0.10] and real daylight required. A
+    blanket reduction of the standard 0.10 floor was unsafe. This branch
+    recovers four labelled animal clips (cam10/9405, cam05/9691 and
+    cam06/18273+18274); its only labelled-corpus cost through the current rule
+    order is cam15/9644, one environment clip entering the alert channel.
+  - incident_candidate (night fence-straddle recovery): the best silhouette
+    is 50-60% outside and 0.02-0.10 frame-widths from the fence, while temporal
+    evidence says most classifiable frames were outside and the track crossed
+    the fence. Compact size, dark IR, a non-blinding lens and low sustained/
+    scenery motion are all required. This recovers cam15/15454's porcupine;
+    after all earlier rules it is the only newly alerting full-corpus clip.
+    Night IR cannot support the colour-based species split, so it intentionally
+    enters the incident channel rather than guessing animal_candidate.
   - animal_candidate / incident_candidate: outside_pixel_fraction > 0.6 and
     median_fence_distance > 0.1, split further by color_fraction > 0.15
     (re-derived 2026-09-04, replacing the old aspect_ratio<0.95 rule -- its
@@ -378,10 +400,11 @@ def classify_detailed(
     """The rule chain itself -- see the module docstring for what each rule
     means and where its thresholds come from. `guard_candidate` is checked
     first since most rules below assume a real flashlight sighting has already
-    been pulled out. `environment_candidate` (both the blob_count and the
-    metric physics gate) is checked next, before the shape-based rules, so a
-    stormy/windy clip's scattered blobs -- or a geometrically-impossible
-    reading -- don't get read as a shape signal.
+    been pulled out. The blob-count environment gates are next, followed by
+    the narrow elevated-animal exception and then the generic metric physics
+    gate. This keeps stormy/windy scattered blobs out of shape rules while
+    allowing perched animals to bypass a ground-plane model that cannot apply
+    to them.
 
     `thresholds` defaults to the repo's real config/thresholds.yaml
     (`default_thresholds()`) when not given; pass an explicit
@@ -390,7 +413,8 @@ def classify_detailed(
 
     `reason` is one fixed code per rule (`no_features`, `green_light`,
     `warmup_flashlight`, `multi_object_flashlight`, `blob_count_peak`,
-    `blob_count_sustained`, `implausible_height`, `blinding_blob_white`,
+    `blob_count_sustained`, `inside_elevated_animal`, `implausible_height`,
+    `near_fence_animal`, `fence_straddle_no_colour`, `blinding_blob_white`,
     `motion_pixel_sustained`, `animal_row_area`, `outside_colour`,
     `outside_no_colour`, `outside_person_daylight`, `jitter_solidity`,
     `inside_only_daylight`, `inside_only_night`, `no_rule_matched`), never
@@ -441,6 +465,34 @@ def classify_detailed(
             "blob_count_sustained",
             {"blob_count_median": features.get("blob_count_median", 0.0)},
         )
+    # A perched animal violates the ground-plane height model by construction.
+    # This deliberately precedes the generic implausible-height environment
+    # gate, but only for the tiny, measured daylight/colour/inside population.
+    if (
+        features.get("uncalibrated", 1.0) == 0.0
+        and features.get("implausible_height_fraction", 0.0)
+        > thresholds.implausible_height_fraction_min
+        and features.get("zone_classifiable_fraction", 0.0) > 0.0
+        and features["outside_pixel_fraction"] == 0.0
+        and features["blob_count"] <= thresholds.inside_blob_count_max
+        and features["color_fraction"] > thresholds.color_fraction_min
+        and features.get("is_daylight", False)
+    ):
+        return ClassificationResult(
+            "animal_candidate",
+            "inside_elevated_animal",
+            {
+                "uncalibrated": features.get("uncalibrated", 1.0),
+                "implausible_height_fraction": features.get(
+                    "implausible_height_fraction", 0.0
+                ),
+                "zone_classifiable_fraction": features.get("zone_classifiable_fraction", 0.0),
+                "outside_pixel_fraction": features["outside_pixel_fraction"],
+                "blob_count": features["blob_count"],
+                "color_fraction": features["color_fraction"],
+                "is_daylight": features.get("is_daylight", False),
+            },
+        )
     if (
         features.get("uncalibrated", 1.0) == 0.0
         and features.get("implausible_height_fraction", 0.0)
@@ -452,6 +504,75 @@ def classify_detailed(
             {
                 "uncalibrated": features.get("uncalibrated", 1.0),
                 "implausible_height_fraction": features.get("implausible_height_fraction", 0.0),
+            },
+        )
+    # Daylight animals close to the fence need a narrower recovery than
+    # globally lowering the standard distance floor, which also promoted
+    # guard/resident motion in the labelled sweep.
+    if (
+        features["outside_pixel_fraction"] > thresholds.outside_pixel_fraction_min
+        and features["median_fence_distance"] > thresholds.near_fence_distance_min
+        and features["median_fence_distance"] <= thresholds.median_fence_distance_min
+        and features["color_fraction"] > thresholds.color_fraction_min
+        and features.get("row_normalised_area", 0.0) <= thresholds.row_normalised_area_max
+        and features.get("blob_white_fraction", 0.0) < thresholds.blob_white_fraction_min
+        and features.get("motion_pixel_fraction_median", 0.0)
+        <= thresholds.motion_pixel_fraction_median_min
+        and features.get("is_daylight", False)
+    ):
+        return ClassificationResult(
+            "animal_candidate",
+            "near_fence_animal",
+            {
+                "outside_pixel_fraction": features["outside_pixel_fraction"],
+                "median_fence_distance": features["median_fence_distance"],
+                "color_fraction": features["color_fraction"],
+                "row_normalised_area": features.get("row_normalised_area", 0.0),
+                "blob_white_fraction": features.get("blob_white_fraction", 0.0),
+                "motion_pixel_fraction_median": features.get(
+                    "motion_pixel_fraction_median", 0.0
+                ),
+                "is_daylight": features.get("is_daylight", False),
+            },
+        )
+    # The clearest contour can be split by the fence while the temporal track
+    # still supplies strong outside/crossing evidence. The shared 0.12 ceiling
+    # is intentional: both fields are whole-frame motion fractions, and the
+    # same sustained-motion bar rejects wind in this rescue branch.
+    if (
+        thresholds.straddle_pixel_fraction_min
+        <= features["outside_pixel_fraction"]
+        <= thresholds.outside_pixel_fraction_min
+        and features["median_fence_distance"] > thresholds.straddle_distance_min
+        and features["median_fence_distance"] <= thresholds.median_fence_distance_min
+        and features.get("outside_frame_fraction", 0.0)
+        > thresholds.outside_pixel_fraction_min
+        and features.get("fence_crossed", 0.0) > 0.0
+        and not features.get("is_daylight", False)
+        and features["color_fraction"] <= thresholds.color_fraction_min
+        and features.get("row_normalised_area", 0.0) <= thresholds.row_normalised_area_max
+        and features.get("blob_white_fraction", 0.0) < thresholds.blob_white_fraction_min
+        and features.get("motion_pixel_fraction_median", 0.0)
+        <= thresholds.motion_pixel_fraction_median_min
+        and features.get("scenery_motion_fraction", 0.0)
+        < thresholds.motion_pixel_fraction_median_min
+    ):
+        return ClassificationResult(
+            "incident_candidate",
+            "fence_straddle_no_colour",
+            {
+                "outside_pixel_fraction": features["outside_pixel_fraction"],
+                "median_fence_distance": features["median_fence_distance"],
+                "outside_frame_fraction": features.get("outside_frame_fraction", 0.0),
+                "fence_crossed": features.get("fence_crossed", 0.0),
+                "is_daylight": features.get("is_daylight", False),
+                "color_fraction": features["color_fraction"],
+                "row_normalised_area": features.get("row_normalised_area", 0.0),
+                "blob_white_fraction": features.get("blob_white_fraction", 0.0),
+                "motion_pixel_fraction_median": features.get(
+                    "motion_pixel_fraction_median", 0.0
+                ),
+                "scenery_motion_fraction": features.get("scenery_motion_fraction", 0.0),
             },
         )
     if (

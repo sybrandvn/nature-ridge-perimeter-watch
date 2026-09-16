@@ -30,9 +30,10 @@ criterion #2 ("no labelled animal event is silently dropped ... requires an
 explicit, documented exception, not a silent regression"). Until 2026-09-09
 this script only asserted on incident events -- the fixture's 11 animal and
 10 resident rows were loaded, classified and printed, but never checked, so an
-animal regression could pass silently. Wiring the assertion up surfaced THREE
+animal regression could pass silently. Wiring the assertion up surfaced three
 previously-invisible failures beyond the one (cam10/7632) that was already a
-documented, deliberate tradeoff:
+documented, deliberate tradeoff. All three are now fixed by measured recovery
+rules in src.classify (2026-09-16):
 
   - cam10/7632 (event cam10-2024-09-14T16:24): median_fence_distance=0.504,
     just above MEDIAN_FENCE_DISTANCE_MAX=0.40. Already a deliberate, signed-off
@@ -40,50 +41,26 @@ documented, deliberate tradeoff:
     docstring. Listed in KNOWN_ANIMAL_EXCEPTIONS below.
   - cam10/9405 (event cam10-2024-12-01T16:12): median_fence_distance=0.097,
     just BELOW MEDIAN_FENCE_DISTANCE_MIN=0.10 -- an animal standing at the
-    fence, not past it. NOT previously documented. Directly relevant to the
-    open "should the lower bound be relaxed" question in
-    docs/detection_improvement_review.md section 2.3.
+    fence, not past it. Fixed by the narrow daylight/colour/compact
+    near_fence_animal branch rather than globally lowering the standard floor.
+    It recovers four labelled animal clips at a cost of one labelled
+    environment clip entering the alert channel.
   - cam15-2025-07-15T00:29 (15453+15454, the porcupine): both clips read
     outside_pixel_fraction=0.5 (single-track geometry), exactly the fence
-    line, never a clean majority. 15454's (bug-fixed, see docs/detection_
-    improvement_review.md section 1.1) multi-object reading DOES show a real
-    outside majority (multi_object_dominant_outside_fraction=0.87,
-    multi_object_count=12) -- checked directly whether using that as an
-    OR-alternative geometry gate would safely recover it: NO. Swept every
-    evidence floor from count>=5,mdof>0.6 to count>=15,mdof>0.8 against the
-    full labelled corpus (2026-09-09) -- environment leak never drops below
-    ~7-10 clips for this one recovery, because a storm/wind clip's scattered
-    motion reads as "one dominant object, mostly outside" almost as often as
-    a real intruder does. Not a threshold-tuning problem; do not re-attempt
-    this exact idea (see docs/detection_improvement_review.md section 6's
-    "do not retry" table).
+    line, never a clean majority. The rejected multi-object OR gate remains
+    rejected. Fixed instead by fence_straddle_no_colour: track-level outside
+    frames + an actual fence crossing corroborate the 50/50 best silhouette,
+    with compact/low-scene-motion night gates. It is the only newly alerting
+    clip in the 16,886-clip corpus after earlier rules.
   - cam10/17146 (bird on the fence rail): outside_pixel_fraction=0.0 AND the
-    multi-object reading agrees (0.0) -- this clip reads fully INSIDE the
-    fence by every geometry signal available, which is the real root cause,
-    not the implausible_height_fraction=0.8 metric-gate routing to
-    environment_candidate first (checked directly: even without that gate,
-    the outside-geometry rule would never fire on an inside reading anyway).
-    This surfaces a genuine, previously-undocumented structural gap:
-    classify() has NO path from "animal, seen entirely inside the fence" to
-    animal_candidate at all -- the inside-only fallback only ever produces
-    guard_candidate/resident_candidate. Checked how big this population
-    really is: of 6 labelled animal/incident clips reading inside by every
-    geometry signal, 4 already have an alerting sibling in the same event
-    (not a live gap). The remaining 2 are cam15/15453 (covered by its own
-    sibling 15454's fragile-but-real outside reading -- see above) and THIS
-    clip, which has no sibling and no usable calibrated-height signal either
-    (the ground-plane assumption implausible_height_fraction flags as broken
-    is exactly why height can't substitute). Population after event-level
-    dedup: 1 clip. Too thin to engineer a rule against -- same call this
-    repo already made for the `resident` rule at a similarly small sample
-    (docs/handoff.md session #12). Revisit once more labelled examples of an
-    animal seen inside the fence exist.
+    multi-object reading agrees (0.0), while implausible_height_fraction=0.8.
+    Fixed by inside_elevated_animal before the generic metric environment gate:
+    a calibrated, compact, colour-bearing daylight subject can violate the
+    ground plane because it is perched. Across the full corpus this reaches
+    only the bird's two clips and one other labelled animal clip.
 
-These three are NOT added to KNOWN_ANIMAL_EXCEPTIONS -- doing so would be
-exactly the silent burial Ship readiness criterion #2 exists to prevent. This
-script currently fails on them by design, so they stay visible until either
-fixed or explicitly, individually signed off (see the docstring above each
-entry in KNOWN_ANIMAL_EXCEPTIONS for the discipline that requires).
+None of those three needed an exception. cam10/7632 remains the one explicit,
+previously signed-off animal-event exception below.
 
 Also fixed 2026-09-09: this check now passes a reference_background, matching
 scripts/backtest.py and scripts/rank_candidates.py -- previously it was the

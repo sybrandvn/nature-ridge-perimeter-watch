@@ -99,6 +99,22 @@ classification:
   # animal branch ONLY, deliberately never incident_candidate.
   animal:
     row_normalised_area_max: 3000.0
+    # Daylight animal recovery just short of the standard 0.10 fence-distance
+    # floor. Through the real rule order this recovers four labelled animal
+    # clips and adds one labelled environment clip to the alert channel.
+    near_fence_distance_min: 0.05
+    # A best-frame silhouette can straddle the fence even while the real track
+    # spends its classifiable frames outside. The lower fraction includes an
+    # exact 50/50 silhouette; the distance floor rejects motion locked directly
+    # onto the fence. With the track/scene corroboration in classify(), this
+    # recovers cam15/15454 and no other full-corpus clip after earlier rules.
+    straddle_pixel_fraction_min: 0.5
+    straddle_distance_min: 0.02
+    # Compact, daylight, fully-inside motion whose calibrated ground-plane
+    # height is impossible can be a perched/elevated animal. This ceiling gives
+    # exactly the cam10 bird event and one other labelled animal event in the
+    # 16,886-clip corpus (plus the bird event's unlabeled sibling).
+    inside_blob_count_max: 2
 
   # classify() docstring, "neighbour_candidate" (added 2026-09-09). Person-sized
   # outside a fence, in real daylight, on a calibrated camera -- 4/5 labelled

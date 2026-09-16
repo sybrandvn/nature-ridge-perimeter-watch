@@ -631,6 +631,10 @@ class ClassificationThresholds:
     median_fence_distance_max: float
     color_fraction_min: float
     row_normalised_area_max: float
+    near_fence_distance_min: float
+    straddle_pixel_fraction_min: float
+    straddle_distance_min: float
+    inside_blob_count_max: float
     jitter_min: float
     solidity_max: float
     blob_white_fraction_min: float
@@ -654,6 +658,10 @@ _CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
     "median_fence_distance_max": ("outside", "median_fence_distance_max"),
     "color_fraction_min": ("outside", "color_fraction_min"),
     "row_normalised_area_max": ("animal", "row_normalised_area_max"),
+    "near_fence_distance_min": ("animal", "near_fence_distance_min"),
+    "straddle_pixel_fraction_min": ("animal", "straddle_pixel_fraction_min"),
+    "straddle_distance_min": ("animal", "straddle_distance_min"),
+    "inside_blob_count_max": ("animal", "inside_blob_count_max"),
     "jitter_min": ("insect", "jitter_min"),
     "solidity_max": ("insect", "solidity_max"),
     "blob_white_fraction_min": ("blinding", "blob_white_fraction_min"),

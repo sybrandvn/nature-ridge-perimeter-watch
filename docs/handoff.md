@@ -1,7 +1,7 @@
-# Handoff: motion.py cache prerequisites started; detector wiring still next
+# Handoff: animal-event regressions fixed; detector extraction still next
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-13. **If you are a new agent
-picking this up, search this file for "Handoff for a new agent (2026-09-13, session #17)"
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-16. **If you are a new agent
+picking this up, search this file for "Handoff for a new agent (2026-09-16, session #18)"
 and start there.** (This file's session sections are not in one consistent order: #1-#5 are the
 oldest, kept in their original forward-chronological spot further up; starting from #6, each new
 session's entry is instead inserted directly above its predecessor, so the chain from #6 to the
@@ -17,6 +17,28 @@ this file is the short version of
 where things actually stand and what to do next. `docs/detection_improvement_review.md` is the
 authoritative record of everything session #16 measured and shipped, with its own itemised
 "Implementation status" section at the top.
+
+## Handoff for a new agent (2026-09-16, session #18)
+
+Closed the three unaccepted animal-event regression failures surfaced in session #16. The
+classifier now has three narrow recovery branches, all measured through the existing rule order:
+`near_fence_animal` recovers cam10/9405 plus three other labelled animal clips at a cost of one
+labelled environment alert; `fence_straddle_no_colour` uses temporal outside/crossing evidence to
+recover cam15/15454's 50/50 fence-line porcupine and is the only newly alerting full-corpus clip in
+that branch; `inside_elevated_animal` handles perched daylight animals before the generic
+ground-plane implausible-height gate and reaches only the cam10 bird event plus cam05/18788 in the
+16,886-clip report.
+
+Labelled-corpus delta: exactly 8 category changes—7 animal clips move into the alert channel and
+cam15/9644 (environment) moves from unclassified to animal_candidate. Alert precision/recall/F1
+move from 0.500/0.468 to 0.558/0.617/0.586. `scripts/check_incident_regression.py` passes all 5
+incident events and all 8 animal events, with only the already signed-off cam10/7632 exception.
+The debug renderer also now rounds fractional dead-reckoned multi-track boxes before OpenCV drawing
+and mask slicing; this is renderer-only and does not change cached feature semantics.
+
+The next architectural work remains session #17's raw-track detector extraction. The operational
+feature cache is correct and fast; changing geometry still invalidates/recomputes instead of cheaply
+reapplying zones to a zone-independent raw-track payload.
 
 ## Handoff for a new agent (2026-09-13, session #17)
 

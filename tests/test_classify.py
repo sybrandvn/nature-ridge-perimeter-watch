@@ -146,6 +146,47 @@ def test_classify_environment_candidate_on_implausible_height():
     assert classify(features) == "environment_candidate"
 
 
+def test_classify_inside_elevated_daylight_animal_before_height_gate():
+    # cam10/17146: a bird perched on the fence is fully "inside", but its
+    # ground-plane height is impossible precisely because it is elevated.
+    features = _features(
+        uncalibrated=0.0,
+        implausible_height_fraction=0.8,
+        zone_classifiable_fraction=1.0,
+        outside_pixel_fraction=0.0,
+        blob_count=2,
+        color_fraction=0.2,
+        is_daylight=True,
+    )
+    assert classify(features) == "animal_candidate"
+
+
+def test_classify_inside_elevated_animal_requires_compact_motion():
+    features = _features(
+        uncalibrated=0.0,
+        implausible_height_fraction=0.8,
+        zone_classifiable_fraction=1.0,
+        outside_pixel_fraction=0.0,
+        blob_count=3,
+        color_fraction=0.2,
+        is_daylight=True,
+    )
+    assert classify(features) == "environment_candidate"
+
+
+def test_classify_inside_elevated_animal_requires_real_daylight():
+    features = _features(
+        uncalibrated=0.0,
+        implausible_height_fraction=0.8,
+        zone_classifiable_fraction=1.0,
+        outside_pixel_fraction=0.0,
+        blob_count=2,
+        color_fraction=0.2,
+        is_daylight=False,
+    )
+    assert classify(features) == "environment_candidate"
+
+
 def test_classify_implausible_height_does_not_gate_at_or_below_threshold():
     features = _features(uncalibrated=0.0, implausible_height_fraction=0.5)
     assert classify(features) != "environment_candidate"
@@ -231,6 +272,72 @@ def test_classify_environment_wins_over_animal_incident_shape():
 def test_classify_animal_candidate_on_daylight_color():
     features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.2, color_fraction=0.3)
     assert classify(features) == "animal_candidate"
+
+
+def test_classify_near_fence_daylight_animal():
+    # cam10/9405 sits just below the standard 0.10 distance floor.
+    features = _features(
+        outside_pixel_fraction=1.0,
+        median_fence_distance=0.097,
+        color_fraction=0.23,
+        row_normalised_area=101.0,
+        is_daylight=True,
+    )
+    assert classify(features) == "animal_candidate"
+
+
+def test_classify_near_fence_animal_does_not_relax_night_geometry():
+    features = _features(
+        outside_pixel_fraction=1.0,
+        median_fence_distance=0.097,
+        color_fraction=0.23,
+        row_normalised_area=101.0,
+        is_daylight=False,
+    )
+    assert classify(features) == "unclassified"
+
+
+def test_classify_night_fence_straddle_subject():
+    # cam15/15454: the clearest porcupine contour is exactly 50/50, while its
+    # temporal track is outside and crosses the fence.
+    features = _features(
+        outside_pixel_fraction=0.5,
+        median_fence_distance=0.034,
+        outside_frame_fraction=1.0,
+        fence_crossed=1.0,
+        color_fraction=0.016,
+        row_normalised_area=2028.0,
+        motion_pixel_fraction_median=0.003,
+        scenery_motion_fraction=0.0,
+        is_daylight=False,
+    )
+    assert classify(features) == "incident_candidate"
+
+
+@pytest.mark.parametrize(
+    ("override", "value"),
+    [
+        ("outside_pixel_fraction", 0.49),
+        ("median_fence_distance", 0.02),
+        ("outside_frame_fraction", 0.6),
+        ("fence_crossed", 0.0),
+        ("scenery_motion_fraction", 0.13),
+    ],
+)
+def test_classify_night_fence_straddle_requires_all_corroboration(override, value):
+    features = _features(
+        outside_pixel_fraction=0.5,
+        median_fence_distance=0.034,
+        outside_frame_fraction=1.0,
+        fence_crossed=1.0,
+        color_fraction=0.016,
+        row_normalised_area=2028.0,
+        motion_pixel_fraction_median=0.003,
+        scenery_motion_fraction=0.0,
+        is_daylight=False,
+    )
+    features[override] = value
+    assert classify(features) == "unclassified"
 
 
 def test_classify_animal_candidate_large_blob_redirects_to_environment():
@@ -522,6 +629,67 @@ def test_classify_implausible_height_threshold_is_wired():
     )
 
 
+def test_classify_inside_blob_count_threshold_is_wired():
+    features = _features(
+        uncalibrated=0.0,
+        implausible_height_fraction=0.8,
+        zone_classifiable_fraction=1.0,
+        outside_pixel_fraction=0.0,
+        blob_count=2,
+        color_fraction=0.2,
+        is_daylight=True,
+    )
+    assert classify(features) == "animal_candidate"
+    assert (
+        classify(features, _thresholds(inside_blob_count_max=1.0))
+        == "environment_candidate"
+    )
+
+
+def test_classify_near_fence_distance_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=1.0,
+        median_fence_distance=0.097,
+        color_fraction=0.23,
+        row_normalised_area=101.0,
+        is_daylight=True,
+    )
+    assert classify(features) == "animal_candidate"
+    assert classify(features, _thresholds(near_fence_distance_min=0.099)) == "unclassified"
+
+
+def test_classify_straddle_pixel_fraction_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.5,
+        median_fence_distance=0.034,
+        outside_frame_fraction=1.0,
+        fence_crossed=1.0,
+        color_fraction=0.016,
+        row_normalised_area=2028.0,
+        scenery_motion_fraction=0.0,
+        is_daylight=False,
+    )
+    assert classify(features) == "incident_candidate"
+    assert (
+        classify(features, _thresholds(straddle_pixel_fraction_min=0.55)) == "unclassified"
+    )
+
+
+def test_classify_straddle_distance_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.5,
+        median_fence_distance=0.034,
+        outside_frame_fraction=1.0,
+        fence_crossed=1.0,
+        color_fraction=0.016,
+        row_normalised_area=2028.0,
+        scenery_motion_fraction=0.0,
+        is_daylight=False,
+    )
+    assert classify(features) == "incident_candidate"
+    assert classify(features, _thresholds(straddle_distance_min=0.04)) == "unclassified"
+
+
 def test_classify_outside_pixel_fraction_threshold_is_wired():
     features = _features(
         outside_pixel_fraction=0.65, median_fence_distance=0.2, color_fraction=0.0
@@ -703,12 +871,87 @@ def test_reason_blob_count_sustained():
     assert result.contributing == {"blob_count_median": 4.5}
 
 
+def test_reason_inside_elevated_animal():
+    features = _features(
+        uncalibrated=0.0,
+        implausible_height_fraction=0.8,
+        zone_classifiable_fraction=1.0,
+        outside_pixel_fraction=0.0,
+        blob_count=2,
+        color_fraction=0.2,
+        is_daylight=True,
+    )
+    result = classify_detailed(features)
+    assert result.category == "animal_candidate" == classify(features)
+    assert result.reason == "inside_elevated_animal"
+    assert result.contributing == {
+        "uncalibrated": 0.0,
+        "implausible_height_fraction": 0.8,
+        "zone_classifiable_fraction": 1.0,
+        "outside_pixel_fraction": 0.0,
+        "blob_count": 2,
+        "color_fraction": 0.2,
+        "is_daylight": True,
+    }
+
+
 def test_reason_implausible_height():
     features = _features(uncalibrated=0.0, implausible_height_fraction=0.6)
     result = classify_detailed(features)
     assert result.category == "environment_candidate" == classify(features)
     assert result.reason == "implausible_height"
     assert result.contributing == {"uncalibrated": 0.0, "implausible_height_fraction": 0.6}
+
+
+def test_reason_near_fence_animal():
+    features = _features(
+        outside_pixel_fraction=1.0,
+        median_fence_distance=0.097,
+        color_fraction=0.23,
+        row_normalised_area=101.0,
+        is_daylight=True,
+    )
+    result = classify_detailed(features)
+    assert result.category == "animal_candidate" == classify(features)
+    assert result.reason == "near_fence_animal"
+    assert result.contributing == {
+        "outside_pixel_fraction": 1.0,
+        "median_fence_distance": 0.097,
+        "color_fraction": 0.23,
+        "row_normalised_area": 101.0,
+        "blob_white_fraction": 0.0,
+        "motion_pixel_fraction_median": 0.0,
+        "is_daylight": True,
+    }
+
+
+def test_reason_fence_straddle_no_colour():
+    features = _features(
+        outside_pixel_fraction=0.5,
+        median_fence_distance=0.034,
+        outside_frame_fraction=1.0,
+        fence_crossed=1.0,
+        color_fraction=0.016,
+        row_normalised_area=2028.0,
+        motion_pixel_fraction_median=0.003,
+        scenery_motion_fraction=0.0,
+        is_daylight=False,
+    )
+    result = classify_detailed(features)
+    assert result.category == "incident_candidate" == classify(features)
+    assert result.reason == "fence_straddle_no_colour"
+    assert result.contributing == {
+        "outside_pixel_fraction": 0.5,
+        "median_fence_distance": 0.034,
+        "outside_frame_fraction": 1.0,
+        "fence_crossed": 1.0,
+        "is_daylight": False,
+        "color_fraction": 0.016,
+        "row_normalised_area": 2028.0,
+        "blob_white_fraction": 0.0,
+        "motion_pixel_fraction_median": 0.003,
+        "scenery_motion_fraction": 0.0,
+    }
 
 
 def test_reason_blinding_blob_white():
@@ -828,23 +1071,28 @@ def test_reason_no_rule_matched():
     assert result.contributing == {}
 
 
-def test_all_15_reason_codes_are_distinct():
+def test_all_20_reason_codes_are_distinct():
     # Guards against a copy-paste reusing a reason code across two branches.
     codes = {
         "no_features",
         "green_light",
         "warmup_flashlight",
+        "multi_object_flashlight",
         "blob_count_peak",
         "blob_count_sustained",
+        "inside_elevated_animal",
         "implausible_height",
+        "near_fence_animal",
+        "fence_straddle_no_colour",
         "blinding_blob_white",
         "motion_pixel_sustained",
         "animal_row_area",
         "outside_colour",
         "outside_no_colour",
+        "outside_person_daylight",
         "jitter_solidity",
         "inside_only_daylight",
         "inside_only_night",
         "no_rule_matched",
     }
-    assert len(codes) == 15
+    assert len(codes) == 20

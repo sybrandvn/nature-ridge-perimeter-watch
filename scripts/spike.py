@@ -94,7 +94,12 @@ from src.ground_calibration import (  # noqa: E402
     MAX_SUBJECT_WIDTH_M,
     calibrate,
 )
-from src.motion import ClipDetection, FrameDetection, TrackedObject  # noqa: E402
+from src.motion import (  # noqa: E402
+    ClipDetection,
+    FrameDetection,
+    GeometryObservations,
+    TrackedObject,
+)
 from src.zones import (  # noqa: E402
     classify_zone,
     median_fence_distance,
@@ -2003,6 +2008,24 @@ def _multi_object_outside_features(
     leaking guard clip actually is -- a flashlight beam? a second real
     entity? multi-object tracker fragmentation? -- not a hand-tuned number).
     """
+    return _multi_object_outside_features_from_tracks(
+        detection.multi_tracks,
+        zone,
+        frame_width,
+        frame_height,
+        fallback_outside_fraction=fallback_outside_fraction,
+    )
+
+
+def _multi_object_outside_features_from_tracks(
+    multi_tracks: tuple[tuple[TrackedObject, ...], ...] | list[list[TrackedObject]],
+    zone: CameraZone,
+    frame_width: int,
+    frame_height: int,
+    *,
+    fallback_outside_fraction: float | None = None,
+) -> dict[str, float]:
+    """Fence-side features from compact persistent-track observations."""
     zeros = {
         "multi_object_outside_fraction_weighted": (
             0.0 if fallback_outside_fraction is None else fallback_outside_fraction
@@ -2012,12 +2035,12 @@ def _multi_object_outside_features(
         ),
         "multi_object_count": 0.0,
     }
-    if not detection.multi_tracks:
+    if not multi_tracks:
         return zeros
 
     verdicts: dict[int, list[bool]] = {}
     areas: dict[int, float] = {}
-    for frame_tracks in detection.multi_tracks:
+    for frame_tracks in multi_tracks:
         for obj in frame_tracks:
             # obj.bbox is corner form (x0, y0, x1, y1) -- see _contour_bbox and
             # track_multiple_objects' own dead-reckoning step, both of which
@@ -2055,6 +2078,104 @@ def _multi_object_outside_features(
         "multi_object_outside_fraction_weighted": weighted,
         "multi_object_dominant_outside_fraction": object_fractions[dominant_id],
         "multi_object_count": float(len(object_fractions)),
+    }
+
+
+def geometry_observations_from_detection(
+    detection: ClipDetection,
+) -> GeometryObservations | None:
+    """Reduce a detection to the compact evidence needed for fence replay.
+
+    The point and track-selection rules intentionally mirror
+    ``extract_clip_features``: its best contour skips merged multi-object
+    frames when possible, while its per-frame side feature uses only genuine
+    (not recovered or reverse-filled) contours.  Keeping this reduction free
+    of a zone makes the resulting payload reusable for fence, side and depth
+    edits.
+    """
+    best_contour: np.ndarray | None = None
+    best_area = -1.0
+    best_contour_any: np.ndarray | None = None
+    best_area_any = -1.0
+    centroids: list[tuple[float, float]] = []
+    genuine_contours: list[tuple[tuple[float, float], ...]] = []
+
+    for detected in detection.frames:
+        contour = detected.largest
+        if contour is None:
+            continue
+        area = cv2.contourArea(contour)
+        if area > best_area_any:
+            best_area_any = area
+            best_contour_any = contour
+        if not _frame_is_merged(detection, detected.index) and area > best_area:
+            best_area = area
+            best_contour = contour
+        if detected.centroid is None:
+            continue
+        centroids.append(
+            (
+                detected.centroid[0] / detection.frame_width,
+                detected.centroid[1] / detection.frame_height,
+            )
+        )
+        if not detected.recovered and not detected.filled_by_reverse:
+            genuine_contours.append(
+                tuple(
+                    normalized_contour_points(
+                        contour, detection.frame_width, detection.frame_height
+                    )
+                )
+            )
+
+    selected = best_contour if best_contour is not None else best_contour_any
+    if selected is None:
+        return None
+    return GeometryObservations(
+        frame_width=detection.frame_width,
+        frame_height=detection.frame_height,
+        best_contour_points=tuple(
+            normalized_contour_points(selected, detection.frame_width, detection.frame_height)
+        ),
+        genuine_contour_points=tuple(genuine_contours),
+        centroid_track=tuple(centroids),
+        multi_tracks=tuple(tuple(frame_tracks) for frame_tracks in detection.multi_tracks),
+    )
+
+
+def geometry_features_from_observations(
+    observations: GeometryObservations, zone: CameraZone
+) -> dict[str, float]:
+    """Re-score all current fence/depth features without video or imagery.
+
+    This is deliberately narrower than ``features_from_detection``.  It is
+    the cacheable replay path for geometry only; colour, texture, warmup and
+    metric-calibration features still need the in-memory detection and are
+    therefore not silently approximated here.
+    """
+    points = observations.best_contour_points
+    classified = [
+        contour
+        for contour in observations.genuine_contour_points
+        if zone_classifiable_fraction(contour, zone) > 0.0
+    ]
+    outside_frames = sum(
+        outside_pixel_fraction(contour, zone) > 0.5 for contour in classified
+    )
+    outside_fraction = outside_pixel_fraction(points, zone)
+    return {
+        "outside_pixel_fraction": outside_fraction,
+        "zone_classifiable_fraction": zone_classifiable_fraction(points, zone),
+        "outside_frame_fraction": outside_frames / len(classified) if classified else 0.0,
+        **_multi_object_outside_features_from_tracks(
+            observations.multi_tracks,
+            zone,
+            observations.frame_width,
+            observations.frame_height,
+            fallback_outside_fraction=outside_fraction,
+        ),
+        "fence_crossed": float(track_crosses_fence(observations.centroid_track, zone)),
+        "median_fence_distance": median_fence_distance(observations.centroid_track, zone),
     }
 
 
@@ -2657,8 +2778,6 @@ def extract_clip_features(
     white_fraction = 0.0
     frames_with_box = 0
     flashlight_bbox_frames = 0
-    classified_frames = 0
-    outside_frames = 0
 
     # The guard's flashlight is often visible ONLY in the frames dropped for IR
     # flare: they walk out of shot before the gain settles, so every scored
@@ -2745,17 +2864,6 @@ def extract_clip_features(
                 prev_genuine_index = detected.index
                 prev_genuine_gray = curr_gray
                 prev_genuine_contour = contour
-                # Per-frame side verdict. The single-best-frame
-                # `outside_pixel_fraction` below describes the clearest
-                # silhouette; this instead asks how much of the TRACK was
-                # spent outside, which is what separates a subject that was
-                # genuinely out there from one caught outside on a single
-                # frame (a beam sweep, or a guard leaning over the line).
-                frame_points = normalized_contour_points(contour, frame_width, frame_height)
-                if zone_classifiable_fraction(frame_points, zone) > 0.0:
-                    classified_frames += 1
-                    if outside_pixel_fraction(frame_points, zone) > 0.5:
-                        outside_frames += 1
 
     if best_contour is None or best_frame is None:
         best_contour, best_frame = best_contour_any, best_frame_any
@@ -2764,17 +2872,18 @@ def extract_clip_features(
         return None
 
     ref_row = reference_row if reference_row is not None else float(frame_height)
-    points = normalized_contour_points(best_contour, frame_width, frame_height)
-    track = [(x / frame_width, y / frame_height) for x, y in centroids]
+    geometry_observations = geometry_observations_from_detection(detection)
+    # `best_contour` above and the compact reduction use the same selection
+    # rule. The guard is defensive: a malformed hand-built ClipDetection
+    # should retain the extractor's established no-feature result.
+    if geometry_observations is None:
+        return None
+    geometry_features = geometry_features_from_observations(geometry_observations, zone)
     best_width = float(cv2.boundingRect(best_contour)[2])
     color_fraction = sum(color_fractions) / len(color_fractions) if color_fractions else 0.0
 
     return {
-        "outside_pixel_fraction": outside_pixel_fraction(points, zone),
-        "zone_classifiable_fraction": zone_classifiable_fraction(points, zone),
-        "outside_frame_fraction": (
-            outside_frames / classified_frames if classified_frames else 0.0
-        ),
+        **geometry_features,
         "aspect_ratio": aspect_ratio(best_contour),
         "solidity": solidity(best_contour),
         "saturation_ratio": saturation_ratio(best_frame, best_contour),
@@ -2806,13 +2915,6 @@ def extract_clip_features(
             frame_width,
             frame_height,
             threshold=threshold,
-        ),
-        **_multi_object_outside_features(
-            detection,
-            zone,
-            frame_width,
-            frame_height,
-            fallback_outside_fraction=outside_pixel_fraction(points, zone),
         ),
         **_multi_object_flashlight_features(
             detection, zone, frame_width, frame_height, exclude_mask=ignore_mask
@@ -2856,8 +2958,6 @@ def extract_clip_features(
             _median(flow_coherence_values) if flow_coherence_values else 0.0
         ),
         "flow_direction_coherence_has_evidence": float(bool(flow_coherence_values)),
-        "fence_crossed": float(track_crosses_fence(track, zone)),
-        "median_fence_distance": median_fence_distance(track, zone),
         "recovered_fraction": (
             non_genuine_frames / len(considered) if considered else 0.0
         ),

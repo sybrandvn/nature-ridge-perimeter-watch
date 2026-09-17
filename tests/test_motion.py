@@ -8,6 +8,7 @@ from src.motion import (
     EXTRACTOR_VERSION,
     ClipDetection,
     FrameDetection,
+    GeometryObservations,
     TrackedObject,
     extraction_fingerprint,
     get_cached_features,
@@ -51,6 +52,20 @@ def test_detector_dtos_live_in_motion_and_spike_reexports_them():
         dropped_frame_boxes=[],
     )
     assert clip.frames[0].frame is frame
+
+
+def test_geometry_observations_round_trip_as_json_safe_payload():
+    observed = GeometryObservations(
+        frame_width=60,
+        frame_height=40,
+        best_contour_points=((0.1, 0.2), (0.3, 0.4)),
+        genuine_contour_points=(((0.1, 0.2),),),
+        centroid_track=((0.2, 0.3),),
+        multi_tracks=((TrackedObject(track_id=4, bbox=(1, 2, 3, 4), merged_ids=(5,)),),),
+    )
+
+    payload = observed.to_payload()
+    assert GeometryObservations.from_payload(payload) == observed
 
 
 def test_extraction_fingerprint_covers_video_zone_reference_and_daylight(tmp_path):

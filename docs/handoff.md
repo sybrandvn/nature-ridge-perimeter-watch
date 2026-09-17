@@ -1,7 +1,7 @@
 # Handoff: animal-event regressions fixed; detector extraction still next
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-16. **If you are a new agent
-picking this up, search this file for "Handoff for a new agent (2026-09-16, session #18)"
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-17. **If you are a new agent
+picking this up, search this file for "Handoff for a new agent (2026-09-17, session #19)"
 and start there.** (This file's session sections are not in one consistent order: #1-#5 are the
 oldest, kept in their original forward-chronological spot further up; starting from #6, each new
 session's entry is instead inserted directly above its predecessor, so the chain from #6 to the
@@ -17,6 +17,26 @@ this file is the short version of
 where things actually stand and what to do next. `docs/detection_improvement_review.md` is the
 authoritative record of everything session #16 measured and shipped, with its own itemised
 "Implementation status" section at the top.
+
+## Handoff for a new agent (2026-09-17, session #19)
+
+Continued the raw-track extraction without changing detector behaviour. `src.motion.GeometryObservations`
+is a compact JSON-safe DTO for the fence-side evidence only: selected contour vertices, genuine
+per-frame contour vertices, centroid path, frame dimensions, and persistent multi-object boxes.
+It excludes images, masks and OpenCV contours. `scripts.spike.geometry_observations_from_detection()`
+reduces an in-memory `ClipDetection` to that DTO; `geometry_features_from_observations()` replays the
+eight current fence/depth features (`outside_*`, multi-object outside readings, crossing and median
+fence distance) after a fence/side/depth edit without opening video. The normal extractor now uses
+that same replay path, and tests round-trip its JSON payload and prove exact agreement with normal
+feature extraction.
+
+This is intentionally not the final raw cache yet: colour/texture, warmup and metric-calibration
+features still require the in-memory imagery/contours, and `zone.ignore` remains a detector input.
+Full tests: 721 passed. Incident/animal regression: all 5 incident events and all 8 animal events
+pass with the existing documented cam10/7632 exception; the labelled warm run remains 29 TP / 22 FP
+/ 18 FN (F1 0.592). The next safe seam is compact metric observations (genuine contour bounding
+boxes plus frame indices), then a cache record can combine those geometry observations with stable
+image-derived scalars.
 
 ## Handoff for a new agent (2026-09-16, session #18)
 

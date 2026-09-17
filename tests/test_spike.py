@@ -2197,6 +2197,34 @@ def test_features_from_detection_matches_standard_extraction(monkeypatch):
     assert from_detection == standard
 
 
+def test_compact_geometry_observations_replay_fence_features(monkeypatch):
+    frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+    assert detection is not None
+
+    observations = spike.geometry_observations_from_detection(detection)
+    assert observations is not None
+    restored = spike.GeometryObservations.from_payload(observations.to_payload())
+    replayed = spike.geometry_features_from_observations(restored, _ZONE)
+    standard = spike.features_from_detection(detection, _ZONE, fps=10.0, threshold=18)
+
+    assert standard is not None
+    assert replayed == {
+        key: standard[key]
+        for key in (
+            "outside_pixel_fraction",
+            "zone_classifiable_fraction",
+            "outside_frame_fraction",
+            "multi_object_outside_fraction_weighted",
+            "multi_object_dominant_outside_fraction",
+            "multi_object_count",
+            "fence_crossed",
+            "median_fence_distance",
+        )
+    }
+
+
 def test_extract_clip_features_uncalibrated_when_zone_has_no_pickets(monkeypatch, tmp_path):
     # _ZONE has no fence_bottom/fence_pickets/metric_calibration -- the physics
     # gate must report "uncalibrated" rather than a misleadingly clean 0.0.

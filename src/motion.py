@@ -91,6 +91,76 @@ class ClipDetection:
     has_reference_background: bool = False
 
 
+@dataclass(frozen=True)
+class GeometryObservations:
+    """Compact, JSON-safe detector evidence needed for fence-side scoring.
+
+    Unlike :class:`ClipDetection`, this deliberately contains no frames,
+    masks, or OpenCV contours.  It is the first cacheable slice of detector
+    output: enough to replay the fence/depth features after a zone edit, but
+    not enough to replay colour, texture, or metric-calibration features.
+    Pixel dimensions and multi-object boxes stay in pixel coordinates so a
+    replay has exactly the same base-of-box convention as the detector.
+    """
+
+    frame_width: int
+    frame_height: int
+    best_contour_points: tuple[tuple[float, float], ...]
+    genuine_contour_points: tuple[tuple[tuple[float, float], ...], ...]
+    centroid_track: tuple[tuple[float, float], ...]
+    multi_tracks: tuple[tuple[TrackedObject, ...], ...]
+
+    def to_payload(self) -> dict[str, Any]:
+        """Return a plain JSON-compatible representation for future storage."""
+        return {
+            "frame_width": self.frame_width,
+            "frame_height": self.frame_height,
+            "best_contour_points": [list(point) for point in self.best_contour_points],
+            "genuine_contour_points": [
+                [list(point) for point in contour] for contour in self.genuine_contour_points
+            ],
+            "centroid_track": [list(point) for point in self.centroid_track],
+            "multi_tracks": [
+                [
+                    {
+                        "track_id": obj.track_id,
+                        "bbox": list(obj.bbox),
+                        "merged_ids": list(obj.merged_ids),
+                    }
+                    for obj in frame_tracks
+                ]
+                for frame_tracks in self.multi_tracks
+            ],
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> GeometryObservations:
+        """Restore a payload produced by :meth:`to_payload`."""
+        return cls(
+            frame_width=int(payload["frame_width"]),
+            frame_height=int(payload["frame_height"]),
+            best_contour_points=tuple(
+                (float(x), float(y)) for x, y in payload["best_contour_points"]
+            ),
+            genuine_contour_points=tuple(
+                tuple((float(x), float(y)) for x, y in contour)
+                for contour in payload["genuine_contour_points"]
+            ),
+            centroid_track=tuple((float(x), float(y)) for x, y in payload["centroid_track"]),
+            multi_tracks=tuple(
+                tuple(
+                    TrackedObject(
+                        track_id=int(obj["track_id"]),
+                        bbox=tuple(int(value) for value in obj["bbox"]),
+                        merged_ids=tuple(int(value) for value in obj["merged_ids"]),
+                    )
+                    for obj in frame_tracks
+                )
+                for frame_tracks in payload["multi_tracks"]
+            ),
+        )
+
+
 def _hash_file(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as source:

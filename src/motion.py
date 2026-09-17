@@ -106,6 +106,55 @@ def contour_centroid(contour: np.ndarray) -> tuple[float, float] | None:
     return (moments["m10"] / moments["m00"], moments["m01"] / moments["m00"])
 
 
+def _bbox_to_rect_contour(bbox: tuple[int, int, int, int]) -> np.ndarray:
+    """Synthesize a rectangular contour from a corner-form bounding box."""
+    x0, y0, x1, y1 = bbox
+    return np.array([[[x0, y0]], [[x1, y0]], [[x1, y1]], [[x0, y1]]], dtype=np.int32)
+
+
+def reacquire_by_template(
+    gray_frame: np.ndarray,
+    template: np.ndarray,
+    last_bbox: tuple[int, int, int, int],
+    *,
+    search_margin: float,
+    match_threshold: float,
+    velocity: tuple[float, float] = (0.0, 0.0),
+) -> tuple[int, int, int, int] | None:
+    """Find a prior subject template in a local, velocity-biased window."""
+    template_height, template_width = template.shape[:2]
+    if template_height == 0 or template_width == 0:
+        return None
+    x0, y0, x1, y1 = last_bbox
+    center_x, center_y = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    velocity_x, velocity_y = velocity
+    base_half_width = (x1 - x0) / 2.0 + search_margin
+    base_half_height = (y1 - y0) / 2.0 + search_margin
+    center_x += velocity_x / 2.0
+    center_y += velocity_y / 2.0
+    half_width = base_half_width + abs(velocity_x) / 2.0
+    half_height = base_half_height + abs(velocity_y) / 2.0
+    frame_height, frame_width = gray_frame.shape[:2]
+    window_x0 = max(int(center_x - half_width), 0)
+    window_y0 = max(int(center_y - half_height), 0)
+    window_x1 = min(int(center_x + half_width), frame_width)
+    window_y1 = min(int(center_y + half_height), frame_height)
+    window = gray_frame[window_y0:window_y1, window_x0:window_x1]
+    if window.shape[0] < template_height or window.shape[1] < template_width:
+        return None
+    result = cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED)
+    _, maximum, _, location = cv2.minMaxLoc(result)
+    if maximum < match_threshold:
+        return None
+    match_x, match_y = location
+    return (
+        window_x0 + match_x,
+        window_y0 + match_y,
+        window_x0 + match_x + template_width,
+        window_y0 + match_y + template_height,
+    )
+
+
 @dataclass(frozen=True)
 class TrackedObject:
     """One persistently identified object in one frame.

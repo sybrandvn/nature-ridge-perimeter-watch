@@ -55,8 +55,10 @@ competing reference-derived candidates rather than merely substitute the whole d
 **Progress, next physical slice:** `src.motion` now owns contour selection, contour centroids and
 the corner-form bounding-box primitives (area, IoU, centre, size plausibility and relative search
 margin). `scripts.spike` re-exports them for compatibility while `track_contour` and the larger
-tracking passes still use them. Full tests remain 723 passing and the incident/animal regression
-check remains green after the move.
+tracking passes still use them. The next slice also moved template reacquisition and recovered-box
+contour construction to `src.motion`; the high-level single/multi-object tracking passes remain in
+`scripts.spike`. Full tests remain 723 passing and the incident/animal regression check remains
+green after the move.
 
 ## Handoff for a new agent (2026-09-16, session #18)
 

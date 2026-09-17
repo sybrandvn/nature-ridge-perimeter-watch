@@ -102,11 +102,13 @@ from src.motion import (  # noqa: E402
     _bbox_area,
     _bbox_center,
     _bbox_iou,
+    _bbox_to_rect_contour,
     _contour_bbox,
     _size_change_plausible,
     _size_relative_margin,
     contour_centroid,
     detect_clip,
+    reacquire_by_template,
 )
 from src.motion import largest_contour as _largest_contour  # noqa: E402
 from src.zones import (  # noqa: E402
@@ -355,78 +357,6 @@ def track_contour(
     # miss-tolerance machinery gets a chance, and only a track that is fully
     # dropped (track_bbox is None) starts fresh anywhere.
     return None
-
-
-def _bbox_to_rect_contour(bbox: tuple[int, int, int, int]) -> np.ndarray:
-    """Synthesize a rectangular contour from a bbox, for tracks recovered by
-    appearance matching rather than a real background-subtraction blob."""
-    x0, y0, x1, y1 = bbox
-    return np.array([[[x0, y0]], [[x1, y0]], [[x1, y1]], [[x0, y1]]], dtype=np.int32)
-
-
-def reacquire_by_template(
-    gray_frame: np.ndarray,
-    template: np.ndarray,
-    last_bbox: tuple[int, int, int, int],
-    *,
-    search_margin: float,
-    match_threshold: float,
-    velocity: tuple[float, float] = (0.0, 0.0),
-) -> tuple[int, int, int, int] | None:
-    """Look for the last-known subject's appearance directly in the raw frame,
-    for the frames where background-subtraction finds no candidate at all
-    (e.g. the subject now blends into the background in brightness terms, even
-    though it hasn't moved or changed shape). Returns the matched bbox, sized
-    like `template`, or None if nothing in the search window around
-    `last_bbox` clears `match_threshold`.
-
-    This is a template match (normalised cross-correlation) of the last known
-    crop against a window around the last known position, not a full-frame
-    search -- keeps it cheap and stops it latching onto an unrelated lookalike
-    elsewhere in frame. `search_margin` should already be scaled to the
-    subject's own size (see `_size_relative_margin`) rather than a fixed
-    frame-relative radius, or a small subject can match a lookalike patch far
-    from anywhere it could plausibly be.
-
-    `velocity` (last observed per-frame centre displacement) shifts and
-    stretches the window toward the direction of travel: the edge trailing
-    the motion stays exactly `search_margin` from the last known position
-    (so a subject that doubles back is still covered), while the leading edge
-    extends out to roughly the last position plus `velocity` -- a moving
-    subject is more likely to have continued than reversed, but not so much
-    more likely that a genuine reversal gets missed.
-
-    The match is fixed-scale: the returned box is always the size of the
-    template it was given. Trying several scales per frame and keeping the
-    best was measured on 40 labelled clips and was worse on every proxy --
-    coverage barely moved (30 to 28 boxless frames) while frame-to-frame box
-    size jitter rose from 0.229 to 0.263 and centre-path jerk from 13.0 to
-    13.8, because normalised cross-correlation picks a slightly different
-    best scale each frame and the box flickers between them.
-    """
-    th, tw = template.shape[:2]
-    if th == 0 or tw == 0:
-        return None
-    x0, y0, x1, y1 = last_bbox
-    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-    vx, vy = velocity
-    base_half_w, base_half_h = (x1 - x0) / 2.0 + search_margin, (y1 - y0) / 2.0 + search_margin
-    center_x, center_y = cx + vx / 2.0, cy + vy / 2.0
-    half_w, half_h = base_half_w + abs(vx) / 2.0, base_half_h + abs(vy) / 2.0
-    frame_height, frame_width = gray_frame.shape[:2]
-    wx0 = max(int(center_x - half_w), 0)
-    wy0 = max(int(center_y - half_h), 0)
-    wx1 = min(int(center_x + half_w), frame_width)
-    wy1 = min(int(center_y + half_h), frame_height)
-    window = gray_frame[wy0:wy1, wx0:wx1]
-    if window.shape[0] < th or window.shape[1] < tw:
-        return None
-    result = cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(result)
-    if max_val < match_threshold:
-        return None
-    match_x, match_y = max_loc
-    return (wx0 + match_x, wy0 + match_y, wx0 + match_x + tw, wy0 + match_y + th)
 
 
 # Below this grey-level spread a patch has no texture for normalised

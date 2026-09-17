@@ -2508,6 +2508,8 @@ def extract_clip_features(
     compensate_warmup: bool = _DEFAULT_MOTION_THRESHOLDS.compensate_warmup,
     prefer_flashlight_candidate: bool = _DEFAULT_MOTION_THRESHOLDS.prefer_flashlight_candidate,
     multi_track_confirm_frames: int = _DEFAULT_MOTION_THRESHOLDS.multi_track_confirm_frames,
+    _detection: ClipDetection | None = None,
+    _fps: float | None = None,
 ) -> dict[str, float] | None:
     """Run the detector over one clip and compute features for its largest
     track. Returns None if no motion was detected.
@@ -2555,40 +2557,42 @@ def extract_clip_features(
     Off by default, unmeasured corpus-wide -- pass `True` here (and thread it
     through a caller's own CLI flag) to sweep it before adopting it.
     """
-    detection = detect_clip(
-        video_path,
-        max_area_fraction=max_area_fraction,
-        min_blob_area_fraction=min_blob_area_fraction,
-        threshold=threshold,
-        flare_tolerance=flare_tolerance,
-        max_flare_fraction=max_flare_fraction,
-        max_track_jump_fraction=max_track_jump_fraction,
-        max_track_miss_frames=max_track_miss_frames,
-        template_match_threshold=template_match_threshold,
-        flare_match_relax=flare_match_relax,
-        track_search_margin_fraction=track_search_margin_fraction,
-        min_track_search_margin=min_track_search_margin,
-        fragment_close_kernel_size=fragment_close_kernel_size,
-        max_recovered_streak=max_recovered_streak,
-        max_size_change_ratio=max_size_change_ratio,
-        anchor_refine=anchor_refine,
-        max_anchor_streak=max_anchor_streak,
-        min_reacquire_area=min_reacquire_area,
-        ignore_polygons=zone.ignore,
-        reference_background=reference_background,
-        max_scenery_streak=max_scenery_streak,
-        scenery_correlation=scenery_correlation,
-        compensate_warmup=compensate_warmup,
-        prefer_flashlight_candidate=prefer_flashlight_candidate,
-        multi_track_confirm_frames=multi_track_confirm_frames,
-    )
+    detection = _detection
+    if detection is None:
+        detection = detect_clip(
+            video_path,
+            max_area_fraction=max_area_fraction,
+            min_blob_area_fraction=min_blob_area_fraction,
+            threshold=threshold,
+            flare_tolerance=flare_tolerance,
+            max_flare_fraction=max_flare_fraction,
+            max_track_jump_fraction=max_track_jump_fraction,
+            max_track_miss_frames=max_track_miss_frames,
+            template_match_threshold=template_match_threshold,
+            flare_match_relax=flare_match_relax,
+            track_search_margin_fraction=track_search_margin_fraction,
+            min_track_search_margin=min_track_search_margin,
+            fragment_close_kernel_size=fragment_close_kernel_size,
+            max_recovered_streak=max_recovered_streak,
+            max_size_change_ratio=max_size_change_ratio,
+            anchor_refine=anchor_refine,
+            max_anchor_streak=max_anchor_streak,
+            min_reacquire_area=min_reacquire_area,
+            ignore_polygons=zone.ignore,
+            reference_background=reference_background,
+            max_scenery_streak=max_scenery_streak,
+            scenery_correlation=scenery_correlation,
+            compensate_warmup=compensate_warmup,
+            prefer_flashlight_candidate=prefer_flashlight_candidate,
+            multi_track_confirm_frames=multi_track_confirm_frames,
+        )
     if detection is None:
         return None
 
     # Real elapsed time between frames for speed_mps -- detect_clip itself
     # only tracks frame INDEX, not wall-clock spacing. Sanitised because ~2% of
     # this corpus reports impossible fps (1005, 16000).
-    fps = sane_fps(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS))
+    fps = sane_fps(_fps if _fps is not None else cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS))
 
     frame_width, frame_height = detection.frame_width, detection.frame_height
     considered = detection.frames
@@ -2861,6 +2865,40 @@ def extract_clip_features(
         "has_reference_background": float(detection.has_reference_background),
         **_metric_track_features(considered, zone, frame_width, frame_height, fps),
     }
+
+
+def features_from_detection(
+    detection: ClipDetection,
+    zone: CameraZone,
+    *,
+    fps: float,
+    reference_row: float | None = None,
+    threshold: int = _DEFAULT_MOTION_THRESHOLDS.threshold,
+    daylight_color_fraction: float = 0.15,
+    daylight_hint: bool | None = None,
+) -> dict[str, float] | None:
+    """Re-score an already-observed clip for a zone without rerunning detection.
+
+    This is the public detector/feature seam. ``ClipDetection`` remains an
+    in-memory object today, so it is not itself a cache payload; its frames and
+    contours are still needed by colour, texture and calibration features. A
+    later compact raw-track representation can call this same interface (or a
+    narrower successor) after restoring the observations it retains.
+
+    The detector currently receives ``zone.ignore`` as an input, so changing
+    an ignore polygon still requires detection. Fence, side, depth and metric
+    calibration changes can be re-scored from the same detection object.
+    """
+    return extract_clip_features(
+        "",
+        zone,
+        reference_row=reference_row,
+        threshold=threshold,
+        daylight_color_fraction=daylight_color_fraction,
+        daylight_hint=daylight_hint,
+        _detection=detection,
+        _fps=fps,
+    )
 
 
 def iter_labelled_clips_with_files(conn, *, camera_id: str) -> Iterator[dict[str, Any]]:

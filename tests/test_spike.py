@@ -2168,6 +2168,35 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
     assert result["persistence"] > 0
 
 
+def test_features_from_detection_rescores_without_running_detector(monkeypatch):
+    frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+    assert detection is not None
+
+    def unexpected_detection(*_args, **_kwargs):
+        raise AssertionError("features_from_detection must not run detect_clip")
+
+    monkeypatch.setattr(spike, "detect_clip", unexpected_detection)
+    result = spike.features_from_detection(detection, _ZONE, fps=10.0, threshold=18)
+
+    assert result is not None
+    assert result["persistence"] > 0
+
+
+def test_features_from_detection_matches_standard_extraction(monkeypatch):
+    frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+    assert detection is not None
+
+    from_detection = spike.features_from_detection(detection, _ZONE, fps=10.0, threshold=18)
+    monkeypatch.setattr(spike, "detect_clip", lambda *_args, **_kwargs: detection)
+    standard = spike.extract_clip_features("clip.mp4", _ZONE, threshold=18)
+
+    assert from_detection == standard
+
+
 def test_extract_clip_features_uncalibrated_when_zone_has_no_pickets(monkeypatch, tmp_path):
     # _ZONE has no fence_bottom/fence_pickets/metric_calibration -- the physics
     # gate must report "uncalibrated" rather than a misleadingly clean 0.0.

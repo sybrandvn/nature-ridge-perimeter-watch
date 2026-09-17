@@ -46,6 +46,13 @@ reapplying zones to a zone-independent raw-track payload.
 implementation and zone-specific feature reduction remain in `scripts.spike` pending a compact
 serialisable raw-track design.
 
+**Progress, second seam:** `scripts.spike.features_from_detection()` now re-scores an existing
+`ClipDetection` for a zone without reopening the video or calling `detect_clip`. The standard
+`extract_clip_features()` path and this helper share the same established scoring body via a private
+bridge, so output remains byte-identical while a future raw payload gains a real consumer. The only current
+non-reusable geometry input is `zone.ignore`, because it is intentionally applied during detection;
+fence/side/depth/calibration are consumed at scoring time.
+
 ## Handoff for a new agent (2026-09-13, session #17)
 
 Picked up plan step 22, `motion.py` caching. Clean baseline: ruff green and 688 tests passing.

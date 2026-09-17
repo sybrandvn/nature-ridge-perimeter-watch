@@ -99,8 +99,16 @@ from src.motion import (  # noqa: E402
     FrameDetection,
     GeometryObservations,
     TrackedObject,
+    _bbox_area,
+    _bbox_center,
+    _bbox_iou,
+    _contour_bbox,
+    _size_change_plausible,
+    _size_relative_margin,
+    contour_centroid,
     detect_clip,
 )
+from src.motion import largest_contour as _largest_contour  # noqa: E402
 from src.zones import (  # noqa: E402
     classify_zone,
     median_fence_distance,
@@ -186,78 +194,8 @@ def _default_motion_thresholds() -> MotionThresholds:
 
 _DEFAULT_MOTION_THRESHOLDS = _default_motion_thresholds()
 
-
-def largest_contour(mask: np.ndarray, *, max_area: float | None = None) -> np.ndarray | None:
-    """Largest external contour in a binary motion mask, or None if empty.
-
-    `max_area` discards blobs bigger than that, which on these cameras means a
-    whole-frame IR gain/flicker change rather than a subject.
-
-    This is the "throwaway per-clip detector" referenced in the module
-    docstring: good enough to validate feature separability, not a claim
-    about the eventual production motion pipeline.
-    """
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if max_area is not None:
-        contours = [c for c in contours if cv2.contourArea(c) <= max_area]
-    if not contours:
-        return None
-    return max(contours, key=cv2.contourArea)
-
-
-def _contour_bbox(contour: np.ndarray) -> tuple[int, int, int, int]:
-    x, y, w, h = cv2.boundingRect(contour)
-    return (x, y, x + w, y + h)
-
-
-def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
-    ax0, ay0, ax1, ay1 = a
-    bx0, by0, bx1, by1 = b
-    iw = max(0, min(ax1, bx1) - max(ax0, bx0))
-    ih = max(0, min(ay1, by1) - max(ay0, by0))
-    inter = iw * ih
-    if inter <= 0:
-        return 0.0
-    area_a = (ax1 - ax0) * (ay1 - ay0)
-    area_b = (bx1 - bx0) * (by1 - by0)
-    union = area_a + area_b - inter
-    return inter / union if union > 0 else 0.0
-
-
-def _bbox_center(bbox: tuple[int, int, int, int]) -> tuple[float, float]:
-    x0, y0, x1, y1 = bbox
-    return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
-
-
-def _bbox_area(bbox: tuple[int, int, int, int]) -> float:
-    x0, y0, x1, y1 = bbox
-    return max(0, x1 - x0) * max(0, y1 - y0)
-
-
-def _size_change_plausible(from_area: float, to_area: float, max_ratio: float) -> bool:
-    """Whether `to_area` is within `max_ratio` of `from_area`, both growing and
-    shrinking -- a same-subject bounding box shouldn't balloon or collapse by
-    many times its own area from one tracked frame to the next; that's a sign
-    a track has latched onto (or is handing off to) an unrelated blob that
-    merely overlaps or sits near the last known position, not the same
-    subject changing size gradually.
-    """
-    if from_area <= 0 or to_area <= 0:
-        return True
-    ratio = to_area / from_area
-    return (1.0 / max_ratio) <= ratio <= max_ratio
-
-
-def _size_relative_margin(
-    bbox: tuple[int, int, int, int], *, margin_fraction: float, min_margin: float
-) -> float:
-    """Search/jump slack scaled to the tracked object's own size rather than a
-    fixed fraction of the frame -- a frame-relative radius lets a small
-    subject's track latch onto an unrelated blob or lookalike patch far
-    outside where it could plausibly have moved by the next frame.
-    """
-    x0, y0, x1, y1 = bbox
-    return max(margin_fraction * max(x1 - x0, y1 - y0), min_margin)
+# Compatibility re-export while detector primitives move to src.motion.
+largest_contour = _largest_contour
 
 
 def track_contour(
@@ -1138,13 +1076,6 @@ def _anchor_trace(
             steps += 1
             index += direction
     return boxes
-
-
-def contour_centroid(contour: np.ndarray) -> tuple[float, float] | None:
-    m = cv2.moments(contour)
-    if m["m00"] == 0:
-        return None
-    return (m["m10"] / m["m00"], m["m01"] / m["m00"])
 
 
 def normalized_contour_points(contour: np.ndarray, frame_width: int, frame_height: int) -> list:

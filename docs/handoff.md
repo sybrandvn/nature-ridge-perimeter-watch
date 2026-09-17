@@ -52,6 +52,12 @@ recovers foreground without yet selecting/describing the animal reliably; do not
 default or count it as an animal-recall improvement. The next experiment, if pursued, must compare
 competing reference-derived candidates rather than merely substitute the whole difference mask.
 
+**Progress, next physical slice:** `src.motion` now owns contour selection, contour centroids and
+the corner-form bounding-box primitives (area, IoU, centre, size plausibility and relative search
+margin). `scripts.spike` re-exports them for compatibility while `track_contour` and the larger
+tracking passes still use them. Full tests remain 723 passing and the incident/animal regression
+check remains green after the move.
+
 ## Handoff for a new agent (2026-09-16, session #18)
 
 Closed the three unaccepted animal-event regression failures surfaced in session #16. The

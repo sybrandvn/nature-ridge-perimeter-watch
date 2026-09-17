@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 
 from src import db
@@ -42,6 +43,67 @@ def detect_clip(*args: Any, **kwargs: Any) -> ClipDetection | None:
     from scripts.spike import _detect_clip
 
     return _detect_clip(*args, **kwargs)
+
+
+def largest_contour(mask: np.ndarray, *, max_area: float | None = None) -> np.ndarray | None:
+    """Largest external contour in a binary motion mask, or ``None`` if empty."""
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if max_area is not None:
+        contours = [contour for contour in contours if cv2.contourArea(contour) <= max_area]
+    return max(contours, key=cv2.contourArea) if contours else None
+
+
+def _contour_bbox(contour: np.ndarray) -> tuple[int, int, int, int]:
+    """Return a contour box in corner form ``(x0, y0, x1, y1)``."""
+    x, y, width, height = cv2.boundingRect(contour)
+    return (x, y, x + width, y + height)
+
+
+def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    intersection_width = max(0, min(ax1, bx1) - max(ax0, bx0))
+    intersection_height = max(0, min(ay1, by1) - max(ay0, by0))
+    intersection = intersection_width * intersection_height
+    if intersection <= 0:
+        return 0.0
+    area_a = (ax1 - ax0) * (ay1 - ay0)
+    area_b = (bx1 - bx0) * (by1 - by0)
+    union = area_a + area_b - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _bbox_center(bbox: tuple[int, int, int, int]) -> tuple[float, float]:
+    x0, y0, x1, y1 = bbox
+    return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+
+
+def _bbox_area(bbox: tuple[int, int, int, int]) -> float:
+    x0, y0, x1, y1 = bbox
+    return max(0, x1 - x0) * max(0, y1 - y0)
+
+
+def _size_change_plausible(from_area: float, to_area: float, max_ratio: float) -> bool:
+    """Whether two tracked-box areas can plausibly describe one subject."""
+    if from_area <= 0 or to_area <= 0:
+        return True
+    ratio = to_area / from_area
+    return (1.0 / max_ratio) <= ratio <= max_ratio
+
+
+def _size_relative_margin(
+    bbox: tuple[int, int, int, int], *, margin_fraction: float, min_margin: float
+) -> float:
+    """A position-search margin scaled to the tracked object's own size."""
+    x0, y0, x1, y1 = bbox
+    return max(margin_fraction * max(x1 - x0, y1 - y0), min_margin)
+
+
+def contour_centroid(contour: np.ndarray) -> tuple[float, float] | None:
+    moments = cv2.moments(contour)
+    if moments["m00"] == 0:
+        return None
+    return (moments["m10"] / moments["m00"], moments["m01"] / moments["m00"])
 
 
 @dataclass(frozen=True)

@@ -10,8 +10,10 @@ from src.motion import (
     FrameDetection,
     GeometryObservations,
     TrackedObject,
+    contour_centroid,
     extraction_fingerprint,
     get_cached_features,
+    largest_contour,
     put_cached_features,
 )
 
@@ -27,6 +29,8 @@ def test_detector_dtos_live_in_motion_and_spike_reexports_them():
     assert spike.TrackedObject is TrackedObject
     assert spike.FrameDetection is FrameDetection
     assert spike.ClipDetection is ClipDetection
+    assert spike.largest_contour is largest_contour
+    assert spike.contour_centroid is contour_centroid
 
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     observed = FrameDetection(

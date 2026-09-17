@@ -20,6 +20,7 @@ import csv
 import json
 import sys
 from collections.abc import Callable, Iterator
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -356,13 +357,26 @@ def main() -> None:  # pragma: no cover - requires real downloaded footage
         action="store_true",
         help="bypass blob_tracks reads and writes for a cold extraction/regression comparison",
     )
+    parser.add_argument(
+        "--reference-background-primary",
+        action="store_true",
+        help="experiment: detect foreground against the aligned cross-clip reference; "
+        "implies an uncached, unrecorded run",
+    )
     args = parser.parse_args()
+    if args.reference_background_primary and not args.no_record:
+        parser.error("--reference-background-primary requires --no-record")
 
     app_cfg = load_app_config(require_telegram=False)
     cameras_cfg = load_cameras_config("config/cameras.yaml")
     conn = db.connect(app_cfg.db_path)
 
     reference_entries = [] if args.no_reference_bg else load_manifest(args.reference_bg)
+    extract_fn = (
+        partial(extract_clip_features, reference_background_primary=True)
+        if args.reference_background_primary
+        else extract_clip_features
+    )
     rows = list(
         run_backtest(
             conn,
@@ -371,7 +385,8 @@ def main() -> None:  # pragma: no cover - requires real downloaded footage
             labelled_only=args.labelled_only,
             reference_entries=reference_entries,
             reference_root=args.reference_bg,
-            use_cache=not args.no_cache,
+            extract_fn=extract_fn,
+            use_cache=not args.no_cache and not args.reference_background_primary,
         )
     )
 

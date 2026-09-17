@@ -99,6 +99,7 @@ from src.motion import (  # noqa: E402
     FrameDetection,
     GeometryObservations,
     TrackedObject,
+    detect_clip,
 )
 from src.zones import (  # noqa: E402
     classify_zone,
@@ -1168,7 +1169,7 @@ def _frame_is_merged(detection: ClipDetection, frame_index: int) -> bool:
     return any(t.merged_ids for t in detection.multi_tracks[frame_index])
 
 
-def detect_clip(
+def _detect_clip(
     video_path: str,
     *,
     max_area_fraction: float = 0.25,
@@ -1189,6 +1190,7 @@ def detect_clip(
     max_anchor_streak: int = 4,
     min_reacquire_area: float = 20.0,
     reference_background: np.ndarray | None = None,
+    reference_background_primary: bool = False,
     max_scenery_streak: int = 2,
     scenery_correlation: float = 0.94,
     ignore_polygons: tuple[tuple[tuple[float, float], ...], ...] = (),
@@ -1369,6 +1371,15 @@ def detect_clip(
     correlation first, because cameras drift on their mounts between clips and
     the comparison is per-pixel. Omit it to disable the check.
 
+    `reference_background_primary=True` is an EXPERIMENTAL recovery path. It
+    uses the aligned cross-clip reference as the scored-frame difference
+    target, rather than this clip's median background. This can reveal a
+    subject that is already present for most of a short clip and was therefore
+    absorbed into its own median. It is off by default and must be measured
+    through ``scripts.backtest --reference-background-primary`` before any
+    production decision: a reference mismatch can also make stationary scene
+    changes look like foreground.
+
     `prefer_flashlight_candidate=True` (default off) computes `green_light_
     ratio` for every raw motion candidate in every frame (see `track_contour`)
     and lets it override the largest-area pick for a track's fresh/
@@ -1470,6 +1481,9 @@ def detect_clip(
 
     background = np.median(np.stack(grays), axis=0).astype(np.uint8)
     aligned_ref = _aligned_reference(reference_background, background)
+    detection_background = (
+        aligned_ref if reference_background_primary and aligned_ref is not None else background
+    )
     kernel = np.ones((3, 3), np.uint8)
     close_kernel = (
         np.ones((fragment_close_kernel_size, fragment_close_kernel_size), np.uint8)
@@ -1493,7 +1507,7 @@ def detect_clip(
     scenery_motion_area = 0.0
     per_frame_flashlight_scores: list[list[float]] = []
     for frame_index, gray in enumerate(grays):
-        diff = cv2.absdiff(gray, background)
+        diff = cv2.absdiff(gray, detection_background)
         _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         if close_kernel is not None:
@@ -1798,6 +1812,13 @@ def detect_clip(
         ),
         has_reference_background=aligned_ref is not None,
     )
+
+
+# ``src.motion.detect_clip`` is the public lazy proxy while the detector body
+# is extracted in slices. Preserve this operational signature for the strict
+# motion-config wiring check (and for IDE/help introspection) without making
+# callers import this implementation module again.
+detect_clip.__wrapped__ = _detect_clip
 
 
 def _warmup_motion_features(
@@ -2623,6 +2644,7 @@ def extract_clip_features(
     max_anchor_streak: int = _DEFAULT_MOTION_THRESHOLDS.max_anchor_streak,
     min_reacquire_area: float = _DEFAULT_MOTION_THRESHOLDS.min_reacquire_area,
     reference_background: np.ndarray | None = None,
+    reference_background_primary: bool = False,
     max_scenery_streak: int = _DEFAULT_MOTION_THRESHOLDS.max_scenery_streak,
     scenery_correlation: float = _DEFAULT_MOTION_THRESHOLDS.scenery_correlation,
     daylight_hint: bool | None = None,
@@ -2674,6 +2696,12 @@ def extract_clip_features(
     with no reference at all looks identical to one with a reference that
     simply found nothing.
 
+    `reference_background_primary` is an experimental detector mode. When a
+    compatible reference is available it uses that aligned cross-clip image as
+    the scored-frame difference target, which can recover a subject absorbed
+    into this clip's median background. It is reporting-only through
+    ``scripts.backtest --reference-background-primary`` and defaults off.
+
     `prefer_flashlight_candidate` (see `detect_clip`) is forwarded unchanged.
     Off by default, unmeasured corpus-wide -- pass `True` here (and thread it
     through a caller's own CLI flag) to sweep it before adopting it.
@@ -2701,6 +2729,7 @@ def extract_clip_features(
             min_reacquire_area=min_reacquire_area,
             ignore_polygons=zone.ignore,
             reference_background=reference_background,
+            reference_background_primary=reference_background_primary,
             max_scenery_streak=max_scenery_streak,
             scenery_correlation=scenery_correlation,
             compensate_warmup=compensate_warmup,

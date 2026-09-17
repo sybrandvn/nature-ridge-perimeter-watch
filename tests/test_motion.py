@@ -54,6 +54,16 @@ def test_detector_dtos_live_in_motion_and_spike_reexports_them():
     assert clip.frames[0].frame is frame
 
 
+def test_motion_detect_clip_dispatches_to_the_private_compatibility_body(monkeypatch):
+    from scripts import spike
+    from src import motion
+
+    sentinel = object()
+    monkeypatch.setattr(spike, "_detect_clip", lambda *args, **kwargs: sentinel)
+
+    assert motion.detect_clip("clip.mp4", threshold=18) is sentinel
+
+
 def test_geometry_observations_round_trip_as_json_safe_payload():
     observed = GeometryObservations(
         frame_width=60,

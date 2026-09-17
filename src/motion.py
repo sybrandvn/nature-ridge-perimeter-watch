@@ -31,6 +31,19 @@ EXTRACTOR_VERSION = "motion-features-v1"
 _NO_MOTION_KEY = "__perimeter_watch_no_motion__"
 
 
+def detect_clip(*args: Any, **kwargs: Any) -> ClipDetection | None:
+    """Public detector entry point.
+
+    The implementation remains in ``scripts.spike._detect_clip`` during its
+    behaviour-preserving extraction, because its tracking helpers are still
+    colocated there.  Keeping callers on this neutral entry point first lets
+    those helpers move in small tested slices without another import churn.
+    """
+    from scripts.spike import _detect_clip
+
+    return _detect_clip(*args, **kwargs)
+
+
 @dataclass(frozen=True)
 class TrackedObject:
     """One persistently identified object in one frame.

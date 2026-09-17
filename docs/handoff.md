@@ -32,11 +32,25 @@ feature extraction.
 
 This is intentionally not the final raw cache yet: colour/texture, warmup and metric-calibration
 features still require the in-memory imagery/contours, and `zone.ignore` remains a detector input.
-Full tests: 721 passed. Incident/animal regression: all 5 incident events and all 8 animal events
+Full tests: 723 passed. Incident/animal regression: all 5 incident events and all 8 animal events
 pass with the existing documented cam10/7632 exception; the labelled warm run remains 29 TP / 22 FP
 / 18 FN (F1 0.592). The next safe seam is compact metric observations (genuine contour bounding
 boxes plus frame indices), then a cache record can combine those geometry observations with stable
 image-derived scalars.
+
+**In progress 2026-09-17:** `src.motion.detect_clip` is now the public detector entry point;
+debug/zone-rendering callers use it directly. It currently delegates to `scripts.spike._detect_clip`
+while the large tracking-helper cluster moves in behaviour-preserving slices, so this is API
+ownership rather than a completed physical move. `scripts.backtest --reference-background-primary
+--no-record` is a separate, uncached experimental mode: it differences scored frames against an
+aligned cross-clip reference to test recovery of subjects absorbed by a short clip's own median.
+It remains off by default and must be judged on the labelled corpus before becoming a detector
+option. The first targeted check (the five labelled animal clips currently reporting `no_motion`:
+cam05/9692, 18269, 18271 and 18916; cam12/9720) found a genuine but insufficient result: all five
+now produce detector features, but all five classify as `environment_candidate`. It therefore
+recovers foreground without yet selecting/describing the animal reliably; do not enable it as a
+default or count it as an animal-recall improvement. The next experiment, if pursued, must compare
+competing reference-derived candidates rather than merely substitute the whole difference mask.
 
 ## Handoff for a new agent (2026-09-16, session #18)
 

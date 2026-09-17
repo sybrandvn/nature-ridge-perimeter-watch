@@ -1011,6 +1011,31 @@ def test_detect_clip_scenery_motion_fraction_zero_without_a_reference(monkeypatc
     assert detection.scenery_motion_fraction == pytest.approx(0.0)
 
 
+def test_reference_background_primary_recovers_a_subject_absorbed_by_clip_median(monkeypatch):
+    # A subject present in every frame becomes part of the ordinary per-clip
+    # median, so the standard detector has no foreground. A compatible
+    # cross-clip reference without that subject gives the experimental path a
+    # real difference target without changing the default behaviour.
+    frame = _frame_with_square(20)
+    frames = [frame.copy() for _ in range(5)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    reference = np.zeros(frame.shape[:2], dtype=np.uint8)
+    monkeypatch.setattr(spike, "_aligned_reference", lambda ref, _bg: ref)
+
+    standard = spike.detect_clip("clip.mp4", threshold=18, reference_background=reference)
+    recovered = spike.detect_clip(
+        "clip.mp4",
+        threshold=18,
+        reference_background=reference,
+        reference_background_primary=True,
+    )
+
+    assert standard is not None
+    assert all(detected.largest is None for detected in standard.frames)
+    assert recovered is not None
+    assert any(detected.largest is not None for detected in recovered.frames)
+
+
 def test_extract_clip_features_surfaces_scenery_motion_fraction(monkeypatch):
     monkeypatch.setattr(spike, "_aligned_reference", lambda ref, _bg: ref)
     positions = [(10, 10), (30, 30), (50, 10)]

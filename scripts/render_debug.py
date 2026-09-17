@@ -17,7 +17,7 @@ Drawn per frame:
     now visible so flare-cutoff accuracy can be judged by eye
   - a HUD of live per-frame values and the clip's final feature vector
 
-Detection comes from `scripts.spike.detect_clip`, the same function that feeds
+Detection comes from `src.motion.detect_clip`, the same function that feeds
 `extract_clip_features`, so what is drawn is what scored the clip. The tuning
 flags default to the spike's own values and the HUD marks them when overridden.
 
@@ -56,7 +56,7 @@ from scripts.label import (
     _EVENT_TS_RE,  # noqa: E402
     _event_key,  # noqa: E402
 )
-from scripts.spike import detect_clip, extract_clip_features  # noqa: E402
+from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
@@ -71,7 +71,7 @@ from src.features import (  # noqa: E402
     sane_fps,
 )
 from src.ground_calibration import GroundCalibration, calibrate  # noqa: E402
-from src.motion import ClipDetection, TrackedObject  # noqa: E402
+from src.motion import ClipDetection, TrackedObject, detect_clip  # noqa: E402
 from src.reference_bg import (  # noqa: E402
     era_of,
     load_manifest,

@@ -6,7 +6,7 @@ For a full per-frame video with a live HUD instead of a single still, use
 scripts/render_debug.py -- it draws every blob, the tracked blob's trail, and
 IR flare frames, not just the clearest one.
 
-Uses `scripts.spike.detect_clip`, the same detector `extract_clip_features`
+Uses `src.motion.detect_clip`, the same detector `extract_clip_features`
 feeds on, so the box shown here is what actually produced
 `outside_pixel_fraction` for this clip.
 
@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cv2  # noqa: E402
 
-from scripts.spike import detect_clip  # noqa: E402
 from src.config import CameraZone, load_cameras_config  # noqa: E402
+from src.motion import detect_clip  # noqa: E402
 from src.zones import effective_fence, outside_pixel_fraction, side_name  # noqa: E402
 
 

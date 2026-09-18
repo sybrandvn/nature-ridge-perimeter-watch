@@ -28,6 +28,7 @@ import numpy as np
 from src import db
 from src.config import CameraZone
 from src.features import FLASHLIGHT_CANDIDATE_MIN_RATIO
+from src.reference_bg import align
 
 EXTRACTOR_VERSION = "motion-features-v1"
 _NO_MOTION_KEY = "__perimeter_watch_no_motion__"
@@ -386,6 +387,122 @@ def _run_track_pass(
                     template = crop
         results.append((contour, recovered))
     return results
+
+
+def _aligned_reference(
+    reference: np.ndarray | None, background: np.ndarray
+) -> np.ndarray | None:
+    """Register a compatible cross-clip reference onto this clip's median."""
+    if reference is None or reference.shape != background.shape:
+        return None
+    aligned, _shift = align(reference, background)
+    return aligned
+
+
+def _reverse_template_trace(
+    grays: list[np.ndarray],
+    start_bbox: tuple[int, int, int, int],
+    start_template: np.ndarray,
+    *,
+    search_margin: float,
+    match_threshold: float,
+    search_margin_fraction: float = 0.75,
+    min_search_margin: float = 6.0,
+) -> list[tuple[int, int, int, int] | None]:
+    """Trace a fixed subject template backward through warmup/flare frames."""
+    results: list[tuple[int, int, int, int] | None] = []
+    bbox = start_bbox
+    velocity = (0.0, 0.0)
+    for gray in grays:
+        margin = min(
+            search_margin,
+            _size_relative_margin(
+                bbox, margin_fraction=search_margin_fraction, min_margin=min_search_margin
+            ),
+        )
+        match = reacquire_by_template(
+            gray,
+            start_template,
+            bbox,
+            search_margin=margin,
+            match_threshold=match_threshold,
+            velocity=velocity,
+        )
+        if match is None:
+            break
+        old_center, new_center = _bbox_center(bbox), _bbox_center(match)
+        velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
+        results.append(match)
+        bbox = match
+    results.extend([None] * (len(grays) - len(results)))
+    return results
+
+
+def _anchor_exemplar_index(detections: list[FrameDetection]) -> int | None:
+    """Select the genuine detection nearest the clip's median tracked area."""
+    genuine = [
+        detected
+        for detected in detections
+        if detected.largest is not None and not detected.recovered
+    ]
+    if not genuine:
+        return None
+    areas = sorted(_bbox_area(_contour_bbox(detected.largest)) for detected in genuine)
+    typical = areas[len(areas) // 2]
+    return min(
+        genuine,
+        key=lambda detected: abs(
+            _bbox_area(_contour_bbox(detected.largest)) - typical
+        ),
+    ).index
+
+
+def _anchor_trace(
+    grays: list[np.ndarray],
+    anchor_index: int,
+    anchor_bbox: tuple[int, int, int, int],
+    anchor_template: np.ndarray,
+    *,
+    search_margin: float,
+    match_threshold: float,
+    max_streak: int,
+    search_margin_fraction: float = 0.75,
+    min_search_margin: float = 6.0,
+) -> list[tuple[int, int, int, int] | None]:
+    """Sweep a fixed exemplar outward from an established anchor frame."""
+    boxes: list[tuple[int, int, int, int] | None] = [None] * len(grays)
+    boxes[anchor_index] = anchor_bbox
+    for direction in (1, -1):
+        bbox = anchor_bbox
+        velocity = (0.0, 0.0)
+        index = anchor_index + direction
+        steps = 0
+        while 0 <= index < len(grays) and steps < max_streak:
+            margin = min(
+                search_margin,
+                _size_relative_margin(
+                    bbox,
+                    margin_fraction=search_margin_fraction,
+                    min_margin=min_search_margin,
+                ),
+            )
+            match = reacquire_by_template(
+                grays[index],
+                anchor_template,
+                bbox,
+                search_margin=margin,
+                match_threshold=match_threshold,
+                velocity=velocity,
+            )
+            if match is None:
+                break
+            old_center, new_center = _bbox_center(bbox), _bbox_center(match)
+            velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
+            boxes[index] = match
+            bbox = match
+            steps += 1
+            index += direction
+    return boxes
 
 
 @dataclass(frozen=True)

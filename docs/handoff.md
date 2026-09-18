@@ -63,8 +63,14 @@ substantial extraction is `_run_track_pass`, which owns the state-machine sequen
 That pass is now active from `src.motion` too, along with its patch-similarity/scenery guard; the
 previous `scripts.spike` body is retained temporarily as a private parity oracle until its active
 equivalent has a clip-level comparison harness. That harness now exercises recovery plus the
-reference-scenery guard against the legacy body. Full tests remain 723 passing and the incident/
+reference-scenery guard against the legacy body. Full tests now have 724 passing and the incident/
 animal regression check remains green after the move.
+
+**Progress 2026-09-18:** reference alignment, reverse warmup tracing, anchor selection and
+bidirectional anchor tracing now live only in `src.motion`; their `scripts.spike` definitions were
+removed and compatibility is maintained through imports. Remaining physical moves are the
+multi-object tracker and `_detect_clip` orchestration body, followed by deletion of the temporary
+single-track legacy oracle.
 
 ## Handoff for a new agent (2026-09-16, session #18)
 

@@ -99,11 +99,15 @@ from src.motion import (  # noqa: E402
     FrameDetection,
     GeometryObservations,
     TrackedObject,
+    _aligned_reference,
+    _anchor_exemplar_index,
+    _anchor_trace,
     _bbox_area,
     _bbox_center,
     _bbox_iou,
     _bbox_to_rect_contour,
     _contour_bbox,
+    _reverse_template_trace,
     _run_track_pass,
     _size_change_plausible,
     _size_relative_margin,
@@ -215,20 +219,6 @@ _SCENERY_DRIFT_TOLERANCE = 1.0
 def _bbox_crop(image: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
     x0, y0, x1, y1 = bbox
     return image[y0:y1, x0:x1]
-
-
-def _aligned_reference(
-    reference: np.ndarray | None, background: np.ndarray
-) -> np.ndarray | None:
-    """Register a reference background onto this clip's own median, or drop it
-    if the two don't even describe the same frame size (a camera swapped
-    resolution mid-era)."""
-    if reference is None or reference.shape != background.shape:
-        return None
-    from src.reference_bg import align
-
-    aligned, _shift = align(reference, background)
-    return aligned
 
 
 def _patch_similarity(patch: np.ndarray, other: np.ndarray) -> float:
@@ -708,150 +698,6 @@ def track_multiple_objects(
 
         results.append(frame_tracks)
     return results
-
-
-def _reverse_template_trace(
-    grays: list[np.ndarray],
-    start_bbox: tuple[int, int, int, int],
-    start_template: np.ndarray,
-    *,
-    search_margin: float,
-    match_threshold: float,
-    search_margin_fraction: float = 0.75,
-    min_search_margin: float = 6.0,
-) -> list[tuple[int, int, int, int] | None]:
-    """Walk backward through frames with no usable background model at all
-    (warmup/flare, dropped before the flare-settle cutoff) using only
-    appearance matching against a single fixed anchor template -- there's no
-    diff mask to track against there, and the anchor isn't refreshed frame to
-    frame since a flare frame's own crop is a worse reference, not a better
-    one. Stops (leaving the rest None) at the first frame that doesn't match,
-    rather than keep guessing once the trail goes cold.
-
-    Each step's search window is scaled to the subject's own size (like
-    `_run_track_pass`) and biased by the displacement observed on the
-    previous step, so the trace follows a plausible path back through the
-    flare rather than jumping to a lookalike patch.
-    """
-    results: list[tuple[int, int, int, int] | None] = []
-    bbox = start_bbox
-    velocity = (0.0, 0.0)
-    for gray in grays:
-        margin = min(
-            search_margin,
-            _size_relative_margin(
-                bbox, margin_fraction=search_margin_fraction, min_margin=min_search_margin
-            ),
-        )
-        match = reacquire_by_template(
-            gray,
-            start_template,
-            bbox,
-            search_margin=margin,
-            match_threshold=match_threshold,
-            velocity=velocity,
-        )
-        if match is None:
-            break
-        old_center, new_center = _bbox_center(bbox), _bbox_center(match)
-        velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
-        results.append(match)
-        bbox = match
-    results.extend([None] * (len(grays) - len(results)))
-    return results
-
-
-def _anchor_exemplar_index(detections: list[FrameDetection]) -> int | None:
-    """Index of the frame that shows the subject best, to use as a fixed
-    reference for the whole clip. None if no frame is trustworthy enough.
-
-    Only real background-subtraction hits qualify: a box that was itself
-    produced by appearance matching is not independent evidence of what the
-    subject looks like, so seeding from one would just entrench whatever the
-    first match latched onto. Among those, the one closest to the clip's own
-    median tracked area wins.
-
-    Picking the *largest* box instead is tempting -- more pixels carry more
-    appearance -- but measured on 40 labelled clips it inflated the median
-    box area across the clip from 798 to 2184 px, because the sweep carries
-    the exemplar's size into every frame it fills, including frames where the
-    subject is genuinely smaller. The median-sized exemplar is the one that
-    best represents the subject's typical appearance.
-    """
-    real = [fd for fd in detections if fd.largest is not None and not fd.recovered]
-    if not real:
-        return None
-    areas = sorted(_bbox_area(_contour_bbox(fd.largest)) for fd in real)
-    typical = areas[len(areas) // 2]
-    return min(
-        real, key=lambda fd: abs(_bbox_area(_contour_bbox(fd.largest)) - typical)
-    ).index
-
-
-def _anchor_trace(
-    grays: list[np.ndarray],
-    anchor_index: int,
-    anchor_bbox: tuple[int, int, int, int],
-    anchor_template: np.ndarray,
-    *,
-    search_margin: float,
-    match_threshold: float,
-    max_streak: int,
-    search_margin_fraction: float = 0.75,
-    min_search_margin: float = 6.0,
-) -> list[tuple[int, int, int, int] | None]:
-    """Sweep outward from `anchor_index` in both directions, matching every
-    frame against one fixed exemplar of the subject.
-
-    The forward/backward `_run_track_pass` templates are refreshed on each
-    real detection, which is what lets them follow a subject that genuinely
-    changes appearance -- but it also means a partly-wrong box teaches the
-    next match to look for a partly-wrong thing, and the reference can drift
-    into background over a run of frames. Matching against a single
-    never-updated crop of the clip's best-evidenced frame cannot drift.
-
-    Each direction stops at the first frame that fails to match, or after
-    `max_streak` consecutive matches, rather than guessing on past a cold
-    trail. The cap matters even though this exemplar can't drift the way a
-    refreshed template can: once the real subject has left the search window
-    for good (walked out of frame), nothing stops the exemplar from matching
-    some unrelated static background patch that merely resembles it -- and
-    because that patch never moves, it keeps re-matching itself at high
-    confidence indefinitely. Observed on a real clip where the subjects exit
-    through the frame edge: uncapped, the sweep locked onto a static patch
-    and held it, unmoving, for the remaining 16 frames of a 43-frame clip.
-    """
-    boxes: list[tuple[int, int, int, int] | None] = [None] * len(grays)
-    boxes[anchor_index] = anchor_bbox
-    for direction in (1, -1):
-        bbox = anchor_bbox
-        velocity = (0.0, 0.0)
-        index = anchor_index + direction
-        steps = 0
-        while 0 <= index < len(grays) and steps < max_streak:
-            margin = min(
-                search_margin,
-                _size_relative_margin(
-                    bbox, margin_fraction=search_margin_fraction, min_margin=min_search_margin
-                ),
-            )
-            match = reacquire_by_template(
-                grays[index],
-                anchor_template,
-                bbox,
-                search_margin=margin,
-                match_threshold=match_threshold,
-                velocity=velocity,
-            )
-            if match is None:
-                break
-            old_center, new_center = _bbox_center(bbox), _bbox_center(match)
-            velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
-            boxes[index] = match
-            bbox = match
-            steps += 1
-            index += direction
-    return boxes
 
 
 def normalized_contour_points(contour: np.ndarray, frame_width: int, frame_height: int) -> list:

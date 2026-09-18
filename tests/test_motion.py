@@ -10,6 +10,10 @@ from src.motion import (
     FrameDetection,
     GeometryObservations,
     TrackedObject,
+    _aligned_reference,
+    _anchor_exemplar_index,
+    _anchor_trace,
+    _reverse_template_trace,
     _run_track_pass,
     contour_centroid,
     extraction_fingerprint,
@@ -37,6 +41,10 @@ def test_detector_dtos_live_in_motion_and_spike_reexports_them():
     assert spike.reacquire_by_template is reacquire_by_template
     assert spike.track_contour is track_contour
     assert spike._run_track_pass is _run_track_pass
+    assert spike._aligned_reference is _aligned_reference
+    assert spike._reverse_template_trace is _reverse_template_trace
+    assert spike._anchor_exemplar_index is _anchor_exemplar_index
+    assert spike._anchor_trace is _anchor_trace
 
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     observed = FrameDetection(

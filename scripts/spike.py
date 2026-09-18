@@ -1169,6 +1169,126 @@ def _summarize_detection_features(
     )
 
 
+def _appearance_features(
+    summary: _DetectionFeatureSummary,
+    *,
+    exclude_mask: np.ndarray | None,
+    reference_row: float,
+) -> dict[str, float]:
+    """Shape, colour, light and texture readings for the selected subject."""
+    contour, frame = summary.best_contour, summary.best_frame
+    return {
+        "aspect_ratio": aspect_ratio(contour),
+        "solidity": solidity(contour),
+        "saturation_ratio": saturation_ratio(frame, contour),
+        "color_fraction": summary.color_fraction,
+        "green_light_ratio": green_light_ratio(
+            frame, contour, exclude_mask=exclude_mask
+        ),
+        "green_light_flicker": green_light_flicker(
+            summary.whole_frame_green_ratios
+        ),
+        # Diagnostic whole-frame counterpart to the subject-only green ratio.
+        "whole_frame_green_ratio": (
+            max(summary.whole_frame_green_ratios)
+            if summary.whole_frame_green_ratios
+            else 0.0
+        ),
+        "flashlight_subject_fraction": (
+            0.0
+            if not summary.frames_with_box
+            else summary.flashlight_bbox_frames / summary.frames_with_box
+        ),
+        "row_normalised_area": row_normalised_area(contour, reference_row),
+        "edge_density": edge_density(frame, contour),
+        "blob_white_fraction": summary.white_fraction,
+    }
+
+
+def _temporal_features(
+    detection: ClipDetection, summary: _DetectionFeatureSummary
+) -> dict[str, float]:
+    """Motion continuity, trajectory and whole-clip transition readings."""
+    frame_count = len(detection.frames)
+    best_width = float(cv2.boundingRect(summary.best_contour)[2])
+    return {
+        "post_flash_red_shift": post_flash_red_shift(
+            list(detection.dropped_frames)
+            + [detected.frame for detected in detection.frames]
+        ),
+        "path_length": path_length(summary.genuine_centroids),
+        "jitter": jitter(summary.genuine_centroids),
+        "persistence": persistence(summary.genuine_frames_detected, frame_count),
+        "motion_pixel_fraction": summary.motion_pixel_fraction,
+        "blob_count": float(summary.blob_count),
+        "motion_pixel_fraction_median": summary.motion_pixel_fraction_median,
+        "blob_count_median": summary.blob_count_median,
+        "longest_detection_run": longest_detection_run(
+            summary.genuine_detected_indices, frame_count
+        ),
+        "area_stability": area_stability(summary.genuine_blob_areas),
+        "normalised_speed": normalised_speed(
+            summary.genuine_centroids, best_width
+        ),
+        "heading_change": heading_change(summary.genuine_centroids),
+        "flow_direction_coherence": (
+            _median(summary.flow_coherence_values)
+            if summary.flow_coherence_values
+            else 0.0
+        ),
+        "flow_direction_coherence_has_evidence": float(
+            bool(summary.flow_coherence_values)
+        ),
+        "recovered_fraction": (
+            summary.non_genuine_frames / frame_count if frame_count else 0.0
+        ),
+        "scenery_motion_fraction": detection.scenery_motion_fraction,
+        "has_reference_background": float(detection.has_reference_background),
+    }
+
+
+def _warmup_features(
+    detection: ClipDetection,
+    zone: CameraZone,
+    summary: _DetectionFeatureSummary,
+    *,
+    threshold: int,
+) -> dict[str, float]:
+    """Features sourced from, or explicitly describing, the warmup window."""
+    return {
+        "warmup_flashlight_ratio": summary.warmup_flashlight_ratio,
+        **_warmup_motion_features(
+            detection,
+            zone,
+            detection.frame_width,
+            detection.frame_height,
+            threshold=threshold,
+        ),
+        "long_flare_frames": float(detection.warmup_dropped),
+    }
+
+
+def _multi_object_features(
+    detection: ClipDetection,
+    zone: CameraZone,
+    *,
+    exclude_mask: np.ndarray | None,
+) -> dict[str, float]:
+    """Combine per-object flashlight and coarse type feature groups."""
+    return {
+        **_multi_object_flashlight_features(
+            detection,
+            zone,
+            detection.frame_width,
+            detection.frame_height,
+            exclude_mask=exclude_mask,
+        ),
+        **_multi_object_type_features(
+            detection, zone, detection.frame_width, detection.frame_height
+        ),
+    }
+
+
 def extract_clip_features(
     video_path: str,
     zone: CameraZone,
@@ -1319,8 +1439,6 @@ def features_from_detection(
     an ignore polygon still requires detection. Fence, side, depth and metric
     calibration changes can be re-scored from the same detection object.
     """
-    frame_width, frame_height = detection.frame_width, detection.frame_height
-    considered = detection.frames
     ignore_mask = _feature_exclude_mask(detection, zone)
     summary = _summarize_detection_features(
         detection,
@@ -1330,111 +1448,25 @@ def features_from_detection(
     )
     if summary is None:
         return None
-    best_contour = summary.best_contour
-    best_frame = summary.best_frame
-
-    ref_row = reference_row if reference_row is not None else float(frame_height)
+    ref_row = (
+        reference_row if reference_row is not None else float(detection.frame_height)
+    )
     geometry_observations = geometry_observations_from_detection(detection)
-    # `best_contour` above and the compact reduction use the same selection
-    # rule. The guard is defensive: a malformed hand-built ClipDetection
-    # should retain the extractor's established no-feature result.
+    # The compact reduction and frame summary share the same best-contour rule.
     if geometry_observations is None:
         return None
-    geometry_features = geometry_features_from_observations(geometry_observations, zone)
     metric_observations = metric_observations_from_detection(detection, fps=fps)
-    best_width = float(cv2.boundingRect(best_contour)[2])
 
     return {
-        **geometry_features,
-        "aspect_ratio": aspect_ratio(best_contour),
-        "solidity": solidity(best_contour),
-        "saturation_ratio": saturation_ratio(best_frame, best_contour),
-        "color_fraction": summary.color_fraction,
-        "green_light_ratio": green_light_ratio(
-            best_frame, best_contour, exclude_mask=ignore_mask
+        **geometry_features_from_observations(geometry_observations, zone),
+        **_appearance_features(
+            summary,
+            exclude_mask=ignore_mask,
+            reference_row=ref_row,
         ),
-        "green_light_flicker": green_light_flicker(summary.whole_frame_green_ratios),
-        # Peak flashlight-hue fraction of the WHOLE frame, the scored-frame
-        # counterpart of warmup_flashlight_ratio. green_light_ratio only looks
-        # inside the tracked contour, so it reads 0.0 whenever the tracker is
-        # following the ground the beam is lighting up rather than the beam
-        # itself -- confirmed visually on cam07/11174, where an obvious green
-        # flashlight sits on the fence while the tracked box is 40% of the
-        # frame away on the illuminated bushes outside it.
-        # Diagnostic only, deliberately NOT a classify() rule: measured
-        # 2026-09-08 it separates well (guard p90 0.244, max 0.881; every
-        # incident under 0.00074) but the worst real ANIMAL clip sits at
-        # 0.01119, leaving only 1.8x margin at a useful threshold, and against
-        # the current rule set it buys one event. Both numbers would have to
-        # improve before it earns a place above the geometry rule.
-        "whole_frame_green_ratio": (
-            max(summary.whole_frame_green_ratios)
-            if summary.whole_frame_green_ratios
-            else 0.0
-        ),
-        "warmup_flashlight_ratio": summary.warmup_flashlight_ratio,
-        **_warmup_motion_features(
-            detection,
-            zone,
-            frame_width,
-            frame_height,
-            threshold=threshold,
-        ),
-        **_multi_object_flashlight_features(
-            detection, zone, frame_width, frame_height, exclude_mask=ignore_mask
-        ),
-        **_multi_object_type_features(detection, zone, frame_width, frame_height),
-        "flashlight_subject_fraction": (
-            0.0
-            if not summary.frames_with_box
-            else summary.flashlight_bbox_frames / summary.frames_with_box
-        ),
-        "row_normalised_area": row_normalised_area(best_contour, ref_row),
-        "edge_density": edge_density(best_frame, best_contour),
-        "blob_white_fraction": summary.white_fraction,
-        "long_flare_frames": float(detection.warmup_dropped),
-        # Whole-clip transition, so it spans the dropped warmup frames AND the
-        # scored ones -- the flash itself is often inside the flare window.
-        "post_flash_red_shift": post_flash_red_shift(
-            list(detection.dropped_frames) + [d.frame for d in considered]
-        ),
-        "path_length": path_length(summary.genuine_centroids),
-        "jitter": jitter(summary.genuine_centroids),
-        "persistence": persistence(summary.genuine_frames_detected, len(considered)),
-        "motion_pixel_fraction": summary.motion_pixel_fraction,
-        "blob_count": float(summary.blob_count),
-        # Median counterparts of the two peak readings above. The peak is what a
-        # storm needs, but it also fires on a single flare-settle frame at the
-        # start of an otherwise quiet clip (cam04/10887 reads [16, 5, 5, 4, 3...]);
-        # the median only rises when the scattered motion actually persists.
-        "motion_pixel_fraction_median": summary.motion_pixel_fraction_median,
-        "blob_count_median": summary.blob_count_median,
-        "longest_detection_run": longest_detection_run(
-            summary.genuine_detected_indices, len(considered)
-        ),
-        "area_stability": area_stability(summary.genuine_blob_areas),
-        "normalised_speed": normalised_speed(summary.genuine_centroids, best_width),
-        "heading_change": heading_change(summary.genuine_centroids),
-        # Median, not mean, over the frame-pair coherence values -- a single
-        # bad optical-flow read (a genuine miss, a compression artefact)
-        # shouldn't swing the whole clip's reading the way it would in a
-        # mean. `_has_evidence` disambiguates "measured a genuinely
-        # incoherent 0.0" from "never had two consecutive genuine frames
-        # with enough texture to measure" -- see optical_flow_direction_
-        # coherence's own docstring for why that distinction is real.
-        "flow_direction_coherence": (
-            _median(summary.flow_coherence_values)
-            if summary.flow_coherence_values
-            else 0.0
-        ),
-        "flow_direction_coherence_has_evidence": float(
-            bool(summary.flow_coherence_values)
-        ),
-        "recovered_fraction": (
-            summary.non_genuine_frames / len(considered) if considered else 0.0
-        ),
-        "scenery_motion_fraction": detection.scenery_motion_fraction,
-        "has_reference_background": float(detection.has_reference_background),
+        **_warmup_features(detection, zone, summary, threshold=threshold),
+        **_multi_object_features(detection, zone, exclude_mask=ignore_mask),
+        **_temporal_features(detection, summary),
         **metric_features_from_observations(metric_observations, zone),
     }
 

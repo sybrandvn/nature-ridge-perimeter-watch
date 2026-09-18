@@ -99,6 +99,9 @@ Configured/automatic light exclusion is independently handled by `_feature_exclu
 The public scorer now composes those observations with geometry, warmup, multi-object and metric
 feature groups; thresholds and feature values are unchanged. Full suite: 727 passed, and all
 incident/animal fixture events remain green with the documented cam10/7632 exception.
+Final dictionary assembly is also split into `_appearance_features()`, `_temporal_features()`,
+`_warmup_features()` and `_multi_object_features()`, leaving `features_from_detection()` as the
+small orchestration boundary over six explicit groups (those four plus geometry and metric replay).
 
 ## Handoff for a new agent (2026-09-13, session #17)
 

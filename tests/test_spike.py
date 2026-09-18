@@ -945,6 +945,37 @@ def test_run_track_pass_scenery_check_is_off_without_a_reference_background():
     assert all(contour is not None for contour, _r in _scenery_pass(None, max_scenery_streak=2))
 
 
+def test_moved_track_pass_matches_legacy_oracle_on_recovery_and_scenery_paths():
+    rail = _square_contour(20, 20, 12)
+    distant = _square_contour(55, 55, 10)
+    reference = np.zeros((80, 80), dtype=np.uint8)
+    _draw_textured_patch(reference, 20, 20, 200, 100)
+    grays = []
+    for _ in range(6):
+        frame = np.zeros((80, 80), dtype=np.uint8)
+        _draw_textured_patch(frame, 20, 20, 200, 100)
+        grays.append(frame)
+    candidates = [[rail], [rail], [distant], [], [], []]
+    kwargs = {
+        "max_jump_distance": 200,
+        "max_track_miss_frames": 5,
+        "template_match_threshold": 0.5,
+        "reference_background": reference,
+        "max_scenery_streak": 2,
+    }
+
+    moved = spike._run_track_pass(grays, candidates, **kwargs)
+    legacy = spike._legacy_run_track_pass(grays, candidates, **kwargs)
+
+    def compact(results):
+        return [
+            (None if contour is None else spike._contour_bbox(contour), recovered)
+            for contour, recovered in results
+        ]
+
+    assert compact(moved) == compact(legacy)
+
+
 def test_detect_clip_scenery_motion_fraction_high_when_blobs_match_reference(monkeypatch):
     # A blob visits three different spots across the clip -- unlike the frozen
     # single-location veto tests above, this exercises the whole-clip

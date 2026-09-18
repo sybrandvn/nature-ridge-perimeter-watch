@@ -62,7 +62,8 @@ distance, area plausibility and flashlight override), now also lives in `src.mot
 substantial extraction is `_run_track_pass`, which owns the state-machine sequencing around it.
 That pass is now active from `src.motion` too, along with its patch-similarity/scenery guard; the
 previous `scripts.spike` body is retained temporarily as a private parity oracle until its active
-equivalent has a clip-level comparison harness. Full tests remain 723 passing and the incident/
+equivalent has a clip-level comparison harness. That harness now exercises recovery plus the
+reference-scenery guard against the legacy body. Full tests remain 723 passing and the incident/
 animal regression check remains green after the move.
 
 ## Handoff for a new agent (2026-09-16, session #18)

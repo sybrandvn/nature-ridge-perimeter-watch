@@ -32,7 +32,7 @@ Rules:
     labelled corpus: its maximum is 0.0000 on all 32 animal, all 10 incident,
     all 8 resident and all 5 neighbour clips, against guard p90 0.222 and max
     0.909. That is what allowed the daylight veto to be dropped from the
-    scored-frame features (see scripts.spike.extract_clip_features), so a
+    scored-frame features (see src.scoring.extract_clip_features), so a
     flashlight in DAYLIGHT is now detectable rather than discarded -- measured
     on the 19 labelled daylight guard clips, peak green_light_ratio went from
     0.0000 (everything vetoed) to 0.4182, while the 21 daylight animal, 58
@@ -56,7 +56,7 @@ Rules:
     eleven reviewed false candidates had exactly ONE genuine detection frame,
     several of them the last scored frame.
     `warmup_flashlight_ratio` scores the DROPPED frames for the flashlight (see
-    scripts.spike.extract_clip_features), which no other feature looks at.
+    src.scoring.extract_clip_features), which no other feature looks at.
     Measured over the whole labelled corpus, with the same daylight gate the
     other green-light features use: animal 11/11 exactly 0.0, incident max
     0.00046, guard median 0.00049 and max 0.154. A 0.002 threshold sits 4.3x
@@ -77,7 +77,7 @@ Rules:
     a real flashlight sits on the fence, the tracked box is on a bush 40% of
     the frame away). `multi_object_max_flashlight_ratio` scores EVERY
     persistently-tracked object independently (see
-    `scripts.spike._multi_object_flashlight_features`), so it sees the beam
+    `src.scoring._multi_object_flashlight_features`), so it sees the beam
     regardless of which object won the single-track pick.
     Measured on the full 678-clip labelled corpus, checked against ONLY the
     clips this rule and every rule ABOVE it did not already catch (so the

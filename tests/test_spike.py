@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from scripts import spike
-from src import db, motion
+from src import db, motion, scoring
 from src.config import Camera, CamerasConfig, CameraZone
 
 _ZONE = CameraZone(fence=((0.0, 0.5), (1.0, 0.5)), outside="left", depth_cutoff=0.0, ignore=())
@@ -81,7 +81,7 @@ def test_contour_centroid_of_square():
 
 def test_normalized_contour_points_scales_to_unit_range():
     contour = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]], dtype=np.int32)
-    points = spike.normalized_contour_points(contour, frame_width=100, frame_height=100)
+    points = scoring.normalized_contour_points(contour, frame_width=100, frame_height=100)
     assert points == [(0.0, 0.0), (0.5, 0.0), (0.5, 1.0), (0.0, 1.0)]
 
 
@@ -684,8 +684,8 @@ def test_reacquire_by_template_velocity_still_finds_reversal_near_last_position(
 
 def _exemplar_detection(index, bbox, *, recovered=False):
     x0, y0, x1, y1 = bbox
-    contour = spike._bbox_to_rect_contour((x0, y0, x1, y1))
-    return spike.FrameDetection(
+    contour = motion._bbox_to_rect_contour((x0, y0, x1, y1))
+    return motion.FrameDetection(
         index=index,
         frame=np.zeros((40, 40, 3), dtype=np.uint8),
         mask=np.zeros((40, 40), dtype=np.uint8),
@@ -996,7 +996,7 @@ def test_detect_clip_scenery_motion_fraction_high_when_blobs_match_reference(mon
         for c in range(3):
             _draw_textured_patch(frame[:, :, c], x, y, 200, 100)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
     reference = np.zeros((70, 70), dtype=np.uint8)
     for x, y in positions:
         _draw_textured_patch(reference, x, y, 200, 100)
@@ -1005,7 +1005,7 @@ def test_detect_clip_scenery_motion_fraction_high_when_blobs_match_reference(mon
     # against the (blurred) clip frames underscores real texture, not scenery.
     reference = cv2.GaussianBlur(reference, (5, 5), 0)
 
-    detection = spike.detect_clip("clip.mp4", threshold=18, reference_background=reference)
+    detection = motion.detect_clip("clip.mp4", threshold=18, reference_background=reference)
 
     assert detection is not None
     assert detection.has_reference_background is True
@@ -1023,10 +1023,10 @@ def test_detect_clip_scenery_motion_fraction_low_when_blobs_dont_match_reference
         for c in range(3):
             _draw_textured_patch(frame[:, :, c], x, y, 200, 100)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
     reference = np.zeros((70, 70), dtype=np.uint8)
 
-    detection = spike.detect_clip("clip.mp4", threshold=18, reference_background=reference)
+    detection = motion.detect_clip("clip.mp4", threshold=18, reference_background=reference)
 
     assert detection is not None
     assert detection.has_reference_background is True
@@ -1038,9 +1038,9 @@ def test_detect_clip_scenery_motion_fraction_zero_without_a_reference(monkeypatc
     # has_reference_background must say so rather than silently reading the
     # same as "found no scenery motion".
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    detection = motion.detect_clip("clip.mp4", threshold=18)
 
     assert detection is not None
     assert detection.has_reference_background is False
@@ -1054,12 +1054,12 @@ def test_reference_background_primary_recovers_a_subject_absorbed_by_clip_median
     # real difference target without changing the default behaviour.
     frame = _frame_with_square(20)
     frames = [frame.copy() for _ in range(5)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
     reference = np.zeros(frame.shape[:2], dtype=np.uint8)
     monkeypatch.setattr(motion, "_aligned_reference", lambda ref, _bg: ref)
 
-    standard = spike.detect_clip("clip.mp4", threshold=18, reference_background=reference)
-    recovered = spike.detect_clip(
+    standard = motion.detect_clip("clip.mp4", threshold=18, reference_background=reference)
+    recovered = motion.detect_clip(
         "clip.mp4",
         threshold=18,
         reference_background=reference,
@@ -1081,13 +1081,13 @@ def test_extract_clip_features_surfaces_scenery_motion_fraction(monkeypatch):
         for c in range(3):
             _draw_textured_patch(frame[:, :, c], x, y, 200, 100)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
     reference = np.zeros((70, 70), dtype=np.uint8)
     for x, y in positions:
         _draw_textured_patch(reference, x, y, 200, 100)
     reference = cv2.GaussianBlur(reference, (5, 5), 0)
 
-    result = spike.extract_clip_features(
+    result = scoring.extract_clip_features(
         "clip.mp4", _ZONE, threshold=18, reference_background=reference
     )
 
@@ -1098,9 +1098,9 @@ def test_extract_clip_features_surfaces_scenery_motion_fraction(monkeypatch):
 
 def test_extract_clip_features_scenery_motion_fraction_zero_without_reference(monkeypatch):
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features("clip.mp4", _ZONE, threshold=18)
+    result = scoring.extract_clip_features("clip.mp4", _ZONE, threshold=18)
 
     assert result is not None
     assert result["has_reference_background"] == 0.0
@@ -1129,8 +1129,8 @@ def test_daylight_hint_no_longer_gates_the_scored_frame_features(monkeypatch):
     frames = [_foliage_frame(pos, subject=(40, 255, 40)) for pos in (5, 12, 19, 26, 33, 40)]
     out = {}
     for hint in (None, True, False):
-        monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-        out[hint] = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=hint)
+        monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+        out[hint] = scoring.extract_clip_features("clip.mp4", _ZONE, daylight_hint=hint)
     assert out[None] is not None
     assert out[None]["green_light_ratio"] > 0.5
     assert out[True] == out[None] == out[False]
@@ -1138,10 +1138,10 @@ def test_daylight_hint_no_longer_gates_the_scored_frame_features(monkeypatch):
 
 def test_daylight_hint_false_overrules_the_colour_gate_on_the_warmup_ratio(monkeypatch):
     frames = _flare_then_settled((40, 255, 40))
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    gated = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=True)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    hinted = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=False)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    gated = scoring.extract_clip_features("clip.mp4", _ZONE, daylight_hint=True)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    hinted = scoring.extract_clip_features("clip.mp4", _ZONE, daylight_hint=False)
 
     assert gated is not None and hinted is not None
     assert gated["warmup_flashlight_ratio"] == pytest.approx(0.0)
@@ -1152,8 +1152,8 @@ def test_daylight_hint_does_not_invent_colour_where_there_is_none(monkeypatch):
     # Overruling the gate must not manufacture a flashlight reading on a clip
     # that has no green in it at all.
     frames = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    result = spike.extract_clip_features("clip.mp4", _ZONE, daylight_hint=False)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result = scoring.extract_clip_features("clip.mp4", _ZONE, daylight_hint=False)
 
     assert result is not None
     assert result["green_light_ratio"] == pytest.approx(0.0)
@@ -1168,8 +1168,8 @@ def test_whole_frame_green_ratio_sees_a_light_outside_the_tracked_blob(monkeypat
         frame = _frame_with_square(pos)
         cv2.rectangle(frame, (2, 2), (14, 14), (40, 255, 40), thickness=-1)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    result = spike.extract_clip_features("clip.mp4", _ZONE)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result = scoring.extract_clip_features("clip.mp4", _ZONE)
 
     assert result is not None
     assert result["whole_frame_green_ratio"] > 0.0
@@ -1193,9 +1193,9 @@ def test_detect_clip_recovers_track_via_appearance_when_bg_diff_finds_nothing(mo
         _draw_textured_patch(frame[:, :, 1], pos, 30, outer, inner)
         _draw_textured_patch(frame[:, :, 2], pos, 30, outer, inner)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    detection = motion.detect_clip("clip.mp4", threshold=18)
 
     assert detection is not None
     dip_frame = detection.frames[2]
@@ -1231,10 +1231,10 @@ def test_detect_clip_prefer_flashlight_candidate_picks_the_light_not_the_bigger_
     # whenever it clears FLASHLIGHT_CANDIDATE_MIN_RATIO.
     frames = [_frame_with_bush_and_flashlight(i) for i in range(5)]
 
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    off = spike.detect_clip("clip.mp4", threshold=18, prefer_flashlight_candidate=False)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    on = spike.detect_clip("clip.mp4", threshold=18, prefer_flashlight_candidate=True)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    off = motion.detect_clip("clip.mp4", threshold=18, prefer_flashlight_candidate=False)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    on = motion.detect_clip("clip.mp4", threshold=18, prefer_flashlight_candidate=True)
 
     assert off is not None and on is not None
     off_boxes = [cv2.boundingRect(f.largest) for f in off.frames if f.largest is not None]
@@ -1261,9 +1261,9 @@ def test_extract_clip_features_excludes_recovered_frames_from_motion_stats(monke
         for c in range(3):
             _draw_textured_patch(frame[:, :, c], pos, pos, outer, inner)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features("clip.mp4", _ZONE, threshold=18)
+    result = scoring.extract_clip_features("clip.mp4", _ZONE, threshold=18)
 
     assert result is not None
     # 5 of 6 frames are genuine bg-diff hits -- the recovered one is excluded.
@@ -1279,17 +1279,17 @@ def test_extract_clip_features_recovered_fraction_zero_when_all_genuine(monkeypa
         for c in range(3):
             _draw_textured_patch(frame[:, :, c], pos, pos, 200, 100)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features("clip.mp4", _ZONE, threshold=18)
+    result = scoring.extract_clip_features("clip.mp4", _ZONE, threshold=18)
 
     assert result is not None
     assert result["recovered_fraction"] == pytest.approx(0.0)
     assert result["persistence"] == pytest.approx(1.0)
 
 
-def _fake_frame_detection(index: int, contour: np.ndarray) -> "spike.FrameDetection":
-    return spike.FrameDetection(
+def _fake_frame_detection(index: int, contour: np.ndarray) -> "motion.FrameDetection":
+    return motion.FrameDetection(
         index=index,
         frame=_blank_frame(),
         mask=np.zeros((60, 60), dtype=np.uint8),
@@ -1313,7 +1313,7 @@ def test_extract_clip_features_excludes_merged_blob_frame_from_best_contour(monk
     square = _rect_contour(5, 5, 10, 10)  # area 100, aspect_ratio 1.0
     merged_rect = _rect_contour(5, 5, 40, 8)  # area 320, aspect_ratio 0.2
     frames = [_fake_frame_detection(0, square), _fake_frame_detection(1, merged_rect)]
-    clip_detection = spike.ClipDetection(
+    clip_detection = motion.ClipDetection(
         frames=frames,
         background=_blank_frame()[:, :, 0],
         frame_width=60,
@@ -1325,14 +1325,14 @@ def test_extract_clip_features_excludes_merged_blob_frame_from_best_contour(monk
         multi_tracks=[
             [],
             [
-                spike.TrackedObject(track_id=0, bbox=(5, 5, 25, 13), merged_ids=(1,)),
-                spike.TrackedObject(track_id=1, bbox=(25, 5, 45, 13), merged_ids=(0,)),
+                motion.TrackedObject(track_id=0, bbox=(5, 5, 25, 13), merged_ids=(1,)),
+                motion.TrackedObject(track_id=1, bbox=(25, 5, 45, 13), merged_ids=(0,)),
             ],
         ],
     )
-    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_a, **_k: clip_detection)
 
-    result = spike.extract_clip_features("clip.mp4", _ZONE)
+    result = scoring.extract_clip_features("clip.mp4", _ZONE)
 
     assert result is not None
     assert result["aspect_ratio"] == pytest.approx(1.0, abs=0.05)
@@ -1345,10 +1345,10 @@ def test_extract_clip_features_falls_back_to_merged_frame_when_no_alternative(mo
     big_merge = _rect_contour(5, 5, 40, 8)  # area 320, aspect_ratio 0.2
     frames = [_fake_frame_detection(0, small_merge), _fake_frame_detection(1, big_merge)]
     merged_tracks = [
-        spike.TrackedObject(track_id=0, bbox=(5, 5, 25, 13), merged_ids=(1,)),
-        spike.TrackedObject(track_id=1, bbox=(25, 5, 45, 13), merged_ids=(0,)),
+        motion.TrackedObject(track_id=0, bbox=(5, 5, 25, 13), merged_ids=(1,)),
+        motion.TrackedObject(track_id=1, bbox=(25, 5, 45, 13), merged_ids=(0,)),
     ]
-    clip_detection = spike.ClipDetection(
+    clip_detection = motion.ClipDetection(
         frames=frames,
         background=_blank_frame()[:, :, 0],
         frame_width=60,
@@ -1359,9 +1359,9 @@ def test_extract_clip_features_falls_back_to_merged_frame_when_no_alternative(mo
         dropped_frame_boxes=[],
         multi_tracks=[merged_tracks, merged_tracks],
     )
-    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_a, **_k: clip_detection)
 
-    result = spike.extract_clip_features("clip.mp4", _ZONE)
+    result = scoring.extract_clip_features("clip.mp4", _ZONE)
 
     assert result is not None
     assert result["aspect_ratio"] == pytest.approx(0.2, abs=0.05)
@@ -1382,9 +1382,9 @@ def test_detect_clip_fills_gap_before_track_first_locks_on_via_backward_pass(mon
         for c in range(3):
             _draw_textured_patch(frame[:, :, c], pos, 30, outer, inner)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    detection = motion.detect_clip("clip.mp4", threshold=18)
 
     assert detection is not None
     assert detection.frames[0].largest is not None
@@ -1412,10 +1412,10 @@ def test_detect_clip_traces_track_backward_into_dropped_flare_frames(monkeypatch
     trailing = [_frame(0, pos) for pos in positions]  # settled, but still part of the ramp clip
     subject = [_frame(0, pos) for pos in positions]
     monkeypatch.setattr(
-        spike.cv2, "VideoCapture", lambda _path: FakeCapture(ramp + trailing + subject)
+        cv2, "VideoCapture", lambda _path: FakeCapture(ramp + trailing + subject)
     )
 
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    detection = motion.detect_clip("clip.mp4", threshold=18)
 
     assert detection is not None
     assert detection.warmup_dropped == 5
@@ -1443,10 +1443,10 @@ def test_detect_clip_compensate_warmup_off_by_default(monkeypatch):
     trailing = [_frame(0, pos) for pos in positions]
     subject = [_frame(0, pos) for pos in positions]
     monkeypatch.setattr(
-        spike.cv2, "VideoCapture", lambda _path: FakeCapture(ramp + trailing + subject)
+        cv2, "VideoCapture", lambda _path: FakeCapture(ramp + trailing + subject)
     )
 
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    detection = motion.detect_clip("clip.mp4", threshold=18)
 
     assert detection is not None
     assert detection.dropped_frame_compensated == []
@@ -1486,10 +1486,10 @@ def test_detect_clip_compensate_warmup_tracks_real_motion_in_flare_window(monkey
     trailing = [_frame(0, pos) for pos in positions]  # settled, still part of the ramp clip
     subject = [_frame(0, pos) for pos in positions]
     monkeypatch.setattr(
-        spike.cv2, "VideoCapture", lambda _path: FakeCapture(ramp + trailing + subject)
+        cv2, "VideoCapture", lambda _path: FakeCapture(ramp + trailing + subject)
     )
 
-    detection = spike.detect_clip("clip.mp4", threshold=18, compensate_warmup=True)
+    detection = motion.detect_clip("clip.mp4", threshold=18, compensate_warmup=True)
 
     assert detection is not None
     assert detection.warmup_dropped >= 5
@@ -1532,9 +1532,9 @@ def test_detect_clip_reverse_trace_seeds_from_plausible_size_not_frame_zero(monk
 
     positions = [10, 40, 70, 100, 130, 160, 190, 220]
     frames = [_frame(positions[0], big=True)] + [_frame(p) for p in positions[1:]]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    detection = spike.detect_clip(
+    detection = motion.detect_clip(
         "clip.mp4", threshold=18, max_track_miss_frames=3, min_track_search_margin=35
     )
 
@@ -1564,9 +1564,9 @@ def test_detect_clip_bridges_fragmented_low_contrast_blob_by_default(monkeypatch
     # of only ever finding one half of the animal.
     positions = (5, 15, 25, 35, 45)
     frames = [_frame_with_split_subject(pos, gap=5) for pos in positions]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    detection = motion.detect_clip("clip.mp4", threshold=18)
 
     assert detection is not None
     last = detection.frames[-1]
@@ -1580,9 +1580,9 @@ def test_detect_clip_leaves_fragments_separate_when_closing_disabled(monkeypatch
     # so disabling MORPH_CLOSE is what's actually being exercised here.
     positions = (5, 15, 25, 35, 45)
     frames = [_frame_with_split_subject(pos, gap=20) for pos in positions]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    detection = spike.detect_clip("clip.mp4", threshold=18, fragment_close_kernel_size=0)
+    detection = motion.detect_clip("clip.mp4", threshold=18, fragment_close_kernel_size=0)
 
     assert detection is not None
     last = detection.frames[-1]
@@ -1598,13 +1598,13 @@ def test_detect_clip_populates_multi_tracks_for_two_independent_subjects(monkeyp
             _draw_textured_patch(frame[:, :, c], pos, 30, 200, 100)
             _draw_textured_patch(frame[:, :, c], pos + 80, 30, 200, 100)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
     # multi_track_confirm_frames defaults to 1 (off) -- see its docstring for
     # why: at 3 it was measured to silently suppress short-lived flashlight
     # objects the shipped guard_candidate rule depends on. Both subjects are
     # reported immediately, every frame, same as the pre-rewrite tracker.
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    detection = motion.detect_clip("clip.mp4", threshold=18)
 
     assert detection is not None
     assert len(detection.multi_tracks) == len(detection.frames)
@@ -1625,9 +1625,9 @@ def test_detect_clip_multi_track_confirm_frames_suppresses_short_lived_noise(mon
             _draw_textured_patch(frame[:, :, c], pos, 30, 200, 100)
             _draw_textured_patch(frame[:, :, c], pos + 80, 30, 200, 100)
         frames.append(frame)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    detection = spike.detect_clip("clip.mp4", threshold=18, multi_track_confirm_frames=3)
+    detection = motion.detect_clip("clip.mp4", threshold=18, multi_track_confirm_frames=3)
 
     assert detection is not None
     assert len(detection.multi_tracks) == len(detection.frames)
@@ -1655,7 +1655,7 @@ _VERTICAL_ZONE = CameraZone(
 
 
 def _clip_detection_with_tracks(multi_tracks, *, frame_width=60, frame_height=60):
-    return spike.ClipDetection(
+    return motion.ClipDetection(
         frames=[],
         background=_blank_frame(size=frame_width)[:, :, 0],
         frame_width=frame_width,
@@ -1670,7 +1670,7 @@ def _clip_detection_with_tracks(multi_tracks, *, frame_width=60, frame_height=60
 
 def test_multi_object_outside_features_zero_with_no_tracks():
     detection = _clip_detection_with_tracks([])
-    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    result = scoring._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
     assert result == {
         "multi_object_outside_fraction_weighted": 0.0,
         "multi_object_dominant_outside_fraction": 0.0,
@@ -1680,7 +1680,7 @@ def test_multi_object_outside_features_zero_with_no_tracks():
 
 def test_multi_object_outside_features_zero_when_frames_have_no_objects():
     detection = _clip_detection_with_tracks([[], [], []])
-    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    result = scoring._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
     assert result["multi_object_count"] == 0.0
 
 
@@ -1688,11 +1688,11 @@ def test_multi_object_outside_features_single_object_all_outside():
     # bbox is corner form (x0, y0, x1, y1): a 10x10 box at (5,5)-(15,15).
     # base-point x = (5 + 15) / 2 / 60 = 0.167 -- left of the x=0.5 fence.
     tracks = [
-        [spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))],
-        [spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))],
+        [motion.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))],
+        [motion.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))],
     ]
     detection = _clip_detection_with_tracks(tracks)
-    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    result = scoring._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
     assert result["multi_object_outside_fraction_weighted"] == pytest.approx(1.0)
     assert result["multi_object_dominant_outside_fraction"] == pytest.approx(1.0)
     assert result["multi_object_count"] == 1.0
@@ -1706,11 +1706,11 @@ def test_multi_object_outside_features_dominant_is_the_largest_by_total_area_not
     # cam07/22393 scenario: a small artifact seen across many frames must not
     # outrank a single genuinely large detection of the real subject.
     # bbox is corner form (x0, y0, x1, y1).
-    small_outside = spike.TrackedObject(track_id=0, bbox=(0, 0, 10, 10))  # x=0.083, outside
-    large_inside = spike.TrackedObject(track_id=1, bbox=(40, 0, 70, 30))  # x=0.917, inside
+    small_outside = motion.TrackedObject(track_id=0, bbox=(0, 0, 10, 10))  # x=0.083, outside
+    large_inside = motion.TrackedObject(track_id=1, bbox=(40, 0, 70, 30))  # x=0.917, inside
     tracks = [[small_outside]] * 5 + [[large_inside]]
     detection = _clip_detection_with_tracks(tracks)
-    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    result = scoring._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
     assert result["multi_object_count"] == 2.0
     assert result["multi_object_dominant_outside_fraction"] == pytest.approx(0.0)  # object 1
 
@@ -1720,11 +1720,11 @@ def test_multi_object_outside_features_weighted_blends_by_area():
     # 900 (30x30). Weighted average must lean toward object 1's 0.0 (inside),
     # not a plain 50/50 average of the two objects' own fractions.
     # bbox is corner form (x0, y0, x1, y1).
-    outside_obj = spike.TrackedObject(track_id=0, bbox=(0, 0, 10, 10))
-    inside_obj = spike.TrackedObject(track_id=1, bbox=(40, 0, 70, 30))
+    outside_obj = motion.TrackedObject(track_id=0, bbox=(0, 0, 10, 10))
+    inside_obj = motion.TrackedObject(track_id=1, bbox=(40, 0, 70, 30))
     tracks = [[outside_obj, inside_obj]]
     detection = _clip_detection_with_tracks(tracks)
-    result = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    result = scoring._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
     # weighted = (1.0*100 + 0.0*900) / 1000 = 0.1
     assert result["multi_object_outside_fraction_weighted"] == pytest.approx(0.1)
     # dominant = object 1 (larger area), which is fully inside
@@ -1738,9 +1738,9 @@ def test_multi_object_outside_features_excludes_beyond_depth_cutoff():
     # bbox is corner form (x0, y0, x1, y1): base-point y = 10/60 = 0.167,
     # below the 0.5 depth cutoff -- ambiguous, must be excluded entirely
     # rather than read as a false 0.0.
-    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 0, 15, 10))]]
+    tracks = [[motion.TrackedObject(track_id=0, bbox=(5, 0, 15, 10))]]
     detection = _clip_detection_with_tracks(tracks)
-    result = spike._multi_object_outside_features(detection, zone, 60, 60)
+    result = scoring._multi_object_outside_features(detection, zone, 60, 60)
     assert result["multi_object_count"] == 0.0
 
 
@@ -1754,11 +1754,11 @@ def test_multi_object_outside_features_no_evidence_uses_fallback_not_zero():
     # RECOVERY, which multi_tracks never sees) lost their alert status when
     # this feature was swapped in for outside_pixel_fraction with no fallback.
     detection = _clip_detection_with_tracks([])
-    no_fallback = spike._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
+    no_fallback = scoring._multi_object_outside_features(detection, _VERTICAL_ZONE, 60, 60)
     assert no_fallback["multi_object_outside_fraction_weighted"] == 0.0
     assert no_fallback["multi_object_dominant_outside_fraction"] == 0.0
 
-    with_fallback = spike._multi_object_outside_features(
+    with_fallback = scoring._multi_object_outside_features(
         detection, _VERTICAL_ZONE, 60, 60, fallback_outside_fraction=0.83
     )
     assert with_fallback["multi_object_outside_fraction_weighted"] == pytest.approx(0.83)
@@ -1770,9 +1770,9 @@ def test_multi_object_outside_features_fallback_ignored_when_real_evidence_exist
     # A fallback is only for the zero-evidence case -- it must never override
     # a real per-object reading, even a fallback that disagrees with it.
     # bbox is corner form; a 10x10 box at (5,5)-(15,15), outside, x=0.167.
-    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
+    tracks = [[motion.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
     detection = _clip_detection_with_tracks(tracks)
-    result = spike._multi_object_outside_features(
+    result = scoring._multi_object_outside_features(
         detection, _VERTICAL_ZONE, 60, 60, fallback_outside_fraction=0.0
     )
     assert result["multi_object_dominant_outside_fraction"] == pytest.approx(1.0)
@@ -1784,8 +1784,8 @@ def test_extract_clip_features_wires_multi_object_features_into_the_result(monke
     frames = [_fake_frame_detection(0, square)]
     # TrackedObject.bbox is corner form (x0, y0, x1, y1), matching the same
     # 10x10 box _rect_contour(5, 5, 10, 10) draws.
-    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
-    clip_detection = spike.ClipDetection(
+    tracks = [[motion.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
+    clip_detection = motion.ClipDetection(
         frames=frames,
         background=_blank_frame()[:, :, 0],
         frame_width=60,
@@ -1796,9 +1796,9 @@ def test_extract_clip_features_wires_multi_object_features_into_the_result(monke
         dropped_frame_boxes=[],
         multi_tracks=tracks,
     )
-    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_a, **_k: clip_detection)
 
-    result = spike.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
+    result = scoring.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
 
     assert result is not None
     for key in (
@@ -1817,7 +1817,7 @@ def test_extract_clip_features_multi_object_falls_back_to_outside_pixel_fraction
     # that value through as the fallback, not silently claim 0.0.
     square = _rect_contour(5, 5, 10, 10)  # base-point x=0.167, outside under _VERTICAL_ZONE
     frames = [_fake_frame_detection(0, square)]
-    clip_detection = spike.ClipDetection(
+    clip_detection = motion.ClipDetection(
         frames=frames,
         background=_blank_frame()[:, :, 0],
         frame_width=60,
@@ -1828,9 +1828,9 @@ def test_extract_clip_features_multi_object_falls_back_to_outside_pixel_fraction
         dropped_frame_boxes=[],
         multi_tracks=[[]],  # no real per-object evidence at all
     )
-    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_a, **_k: clip_detection)
 
-    result = spike.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
+    result = scoring.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
 
     assert result is not None
     assert result["multi_object_count"] == 0.0
@@ -1864,7 +1864,7 @@ def _clip_detection_with_tracks_and_frames(
     multi_tracks, frames_bgr, *, frame_width=60, frame_height=60
 ):
     frame_detections = [
-        spike.FrameDetection(
+        motion.FrameDetection(
             index=i,
             frame=frame_bgr,
             mask=np.zeros((frame_height, frame_width), dtype=np.uint8),
@@ -1878,7 +1878,7 @@ def _clip_detection_with_tracks_and_frames(
         )
         for i, frame_bgr in enumerate(frames_bgr)
     ]
-    return spike.ClipDetection(
+    return motion.ClipDetection(
         frames=frame_detections,
         background=_blank_frame(size=frame_width)[:, :, 0],
         frame_width=frame_width,
@@ -1893,7 +1893,7 @@ def _clip_detection_with_tracks_and_frames(
 
 def test_multi_object_flashlight_features_zero_with_no_tracks():
     detection = _clip_detection_with_tracks_and_frames([], [])
-    result = spike._multi_object_flashlight_features(detection, _VERTICAL_ZONE, 60, 60)
+    result = scoring._multi_object_flashlight_features(detection, _VERTICAL_ZONE, 60, 60)
     assert result == {
         "multi_object_flashlight_track_count": 0.0,
         "multi_object_max_flashlight_ratio": 0.0,
@@ -1908,12 +1908,12 @@ def test_multi_object_flashlight_features_identifies_a_separate_flashlight_track
     # bbox around the plain grey patch, bottom-right, INSIDE) are two
     # separate objects. The dominant reading, excluding the flashlight
     # track, must reflect the SUBJECT's side, not the flashlight's.
-    flashlight = spike.TrackedObject(track_id=0, bbox=(2, 2, 10, 10))
-    subject = spike.TrackedObject(track_id=1, bbox=(35, 35, 55, 55))
+    flashlight = motion.TrackedObject(track_id=0, bbox=(2, 2, 10, 10))
+    subject = motion.TrackedObject(track_id=1, bbox=(35, 35, 55, 55))
     frames_bgr = [_frame_with_flashlight_and_subject()]
     detection = _clip_detection_with_tracks_and_frames([[flashlight, subject]], frames_bgr)
 
-    result = spike._multi_object_flashlight_features(detection, _VERTICAL_ZONE, 60, 60)
+    result = scoring._multi_object_flashlight_features(detection, _VERTICAL_ZONE, 60, 60)
 
     assert result["multi_object_flashlight_track_count"] == 1.0
     assert result["multi_object_max_flashlight_ratio"] > 0.5
@@ -1924,11 +1924,11 @@ def test_multi_object_flashlight_features_identifies_a_separate_flashlight_track
 
 
 def test_multi_object_flashlight_features_no_evidence_when_only_object_is_the_flashlight():
-    flashlight = spike.TrackedObject(track_id=0, bbox=(2, 2, 10, 10))
+    flashlight = motion.TrackedObject(track_id=0, bbox=(2, 2, 10, 10))
     frames_bgr = [_frame_with_flashlight_and_subject()]
     detection = _clip_detection_with_tracks_and_frames([[flashlight]], frames_bgr)
 
-    result = spike._multi_object_flashlight_features(detection, _VERTICAL_ZONE, 60, 60)
+    result = scoring._multi_object_flashlight_features(detection, _VERTICAL_ZONE, 60, 60)
 
     assert result["multi_object_flashlight_track_count"] == 1.0
     assert result["multi_object_max_flashlight_ratio"] > 0.5
@@ -1940,14 +1940,14 @@ def test_multi_object_flashlight_features_no_evidence_when_only_object_is_the_fl
 
 
 def test_multi_object_flashlight_features_exclude_mask_suppresses_a_known_fixed_light():
-    flashlight = spike.TrackedObject(track_id=0, bbox=(2, 2, 10, 10))
-    subject = spike.TrackedObject(track_id=1, bbox=(35, 35, 55, 55))
+    flashlight = motion.TrackedObject(track_id=0, bbox=(2, 2, 10, 10))
+    subject = motion.TrackedObject(track_id=1, bbox=(35, 35, 55, 55))
     frames_bgr = [_frame_with_flashlight_and_subject()]
     detection = _clip_detection_with_tracks_and_frames([[flashlight, subject]], frames_bgr)
     exclude_mask = np.zeros((60, 60), dtype=bool)
     exclude_mask[0:15, 0:15] = True  # covers the flashlight patch entirely
 
-    result = spike._multi_object_flashlight_features(
+    result = scoring._multi_object_flashlight_features(
         detection, _VERTICAL_ZONE, 60, 60, exclude_mask=exclude_mask
     )
 
@@ -1960,8 +1960,8 @@ def test_extract_clip_features_wires_multi_object_flashlight_features_into_the_r
 ):
     square = _rect_contour(5, 5, 10, 10)
     frames = [_fake_frame_detection(0, square)]
-    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
-    clip_detection = spike.ClipDetection(
+    tracks = [[motion.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
+    clip_detection = motion.ClipDetection(
         frames=frames,
         background=_blank_frame()[:, :, 0],
         frame_width=60,
@@ -1972,9 +1972,9 @@ def test_extract_clip_features_wires_multi_object_flashlight_features_into_the_r
         dropped_frame_boxes=[],
         multi_tracks=tracks,
     )
-    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_a, **_k: clip_detection)
 
-    result = spike.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
+    result = scoring.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
 
     assert result is not None
     for key in (
@@ -1999,7 +1999,7 @@ def test_extract_clip_features_wires_multi_object_flashlight_features_into_the_r
 
 def test_multi_object_type_features_zero_with_no_tracks():
     detection = _clip_detection_with_tracks_and_frames([], [])
-    result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
+    result = scoring._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
     assert result == {
         "multi_object_person_track_count": 0.0,
         "multi_object_animal_track_count": 0.0,
@@ -2010,15 +2010,15 @@ def test_multi_object_type_features_zero_with_no_tracks():
 
 def test_multi_object_type_features_identifies_person_and_animal_by_height():
     # bbox (25, 10, 35, 20) -> height_m ~1.44 (person range, 0.9-2.2).
-    person = spike.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
+    person = motion.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
     # bbox (25, 25, 35, 27) -> height_m ~0.26 (well under the person floor).
-    animal = spike.TrackedObject(track_id=1, bbox=(25, 25, 35, 27))
+    animal = motion.TrackedObject(track_id=1, bbox=(25, 25, 35, 27))
     # Both tracks persist for MIN_TRACK_FRAMES_FOR_TYPE frames -- a single
     # frame of evidence is deliberately not enough (see the next test).
     frames_bgr = [_blank_frame(size=60, value=90)] * 3
     detection = _clip_detection_with_tracks_and_frames([[person, animal]] * 3, frames_bgr)
 
-    result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
+    result = scoring._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
 
     assert result["multi_object_person_track_count"] == 1.0
     assert result["multi_object_animal_track_count"] == 1.0
@@ -2032,12 +2032,12 @@ def test_multi_object_type_features_ignores_single_frame_tracks():
     # multi_object_animal_track_count > 0 fired on 138/158 environment
     # clips, more often than on real animal clips). A single frame of
     # evidence must not count toward any type.
-    person = spike.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
-    animal = spike.TrackedObject(track_id=1, bbox=(25, 25, 35, 27))
+    person = motion.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
+    animal = motion.TrackedObject(track_id=1, bbox=(25, 25, 35, 27))
     frames_bgr = [_blank_frame(size=60, value=90)]
     detection = _clip_detection_with_tracks_and_frames([[person, animal]], frames_bgr)
 
-    result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
+    result = scoring._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
 
     assert result["multi_object_person_track_count"] == 0.0
     assert result["multi_object_animal_track_count"] == 0.0
@@ -2047,12 +2047,12 @@ def test_multi_object_type_features_ignores_single_frame_tracks():
 
 
 def test_multi_object_type_features_identifies_artifact_by_white_fraction():
-    obstruction = spike.TrackedObject(track_id=0, bbox=(2, 2, 20, 20))
+    obstruction = motion.TrackedObject(track_id=0, bbox=(2, 2, 20, 20))
     frame = _blank_frame(size=60, value=90)
     cv2.rectangle(frame, (2, 2), (20, 20), (250, 250, 250), thickness=-1)
     detection = _clip_detection_with_tracks_and_frames([[obstruction]] * 3, [frame] * 3)
 
-    result = spike._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
+    result = scoring._multi_object_type_features(detection, _CALIBRATED_ZONE, 60, 60)
 
     assert result["multi_object_artifact_track_count"] == 1.0
     assert result["multi_object_person_track_count"] == 0.0
@@ -2062,11 +2062,11 @@ def test_multi_object_type_features_identifies_artifact_by_white_fraction():
 def test_multi_object_type_features_no_evidence_when_uncalibrated():
     # _VERTICAL_ZONE has no fence_bottom/fence_pickets/metric_calibration --
     # person/animal must read "no evidence", not a misleadingly confident 0.
-    person_shaped = spike.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
+    person_shaped = motion.TrackedObject(track_id=0, bbox=(25, 10, 35, 20))
     frames_bgr = [_blank_frame(size=60, value=90)] * 3
     detection = _clip_detection_with_tracks_and_frames([[person_shaped]] * 3, frames_bgr)
 
-    result = spike._multi_object_type_features(detection, _VERTICAL_ZONE, 60, 60)
+    result = scoring._multi_object_type_features(detection, _VERTICAL_ZONE, 60, 60)
 
     assert result["multi_object_type_has_evidence"] == 0.0
     assert result["multi_object_person_track_count"] == 0.0
@@ -2076,8 +2076,8 @@ def test_multi_object_type_features_no_evidence_when_uncalibrated():
 def test_extract_clip_features_wires_multi_object_type_features_into_the_result(monkeypatch):
     square = _rect_contour(5, 5, 10, 10)
     frames = [_fake_frame_detection(0, square)]
-    tracks = [[spike.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
-    clip_detection = spike.ClipDetection(
+    tracks = [[motion.TrackedObject(track_id=0, bbox=(5, 5, 15, 15))]]
+    clip_detection = motion.ClipDetection(
         frames=frames,
         background=_blank_frame()[:, :, 0],
         frame_width=60,
@@ -2088,9 +2088,9 @@ def test_extract_clip_features_wires_multi_object_type_features_into_the_result(
         dropped_frame_boxes=[],
         multi_tracks=tracks,
     )
-    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_a, **_k: clip_detection)
 
-    result = spike.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
+    result = scoring.extract_clip_features("clip.mp4", _VERTICAL_ZONE)
 
     assert result is not None
     for key in (
@@ -2109,7 +2109,7 @@ def test_extract_clip_features_flow_direction_coherence_no_evidence_with_one_fra
     # between at all -- must read as "no evidence", not a confident 0.0.
     square = _rect_contour(5, 5, 10, 10)
     frames = [_fake_frame_detection(0, square)]
-    clip_detection = spike.ClipDetection(
+    clip_detection = motion.ClipDetection(
         frames=frames,
         background=_blank_frame()[:, :, 0],
         frame_width=60,
@@ -2120,9 +2120,9 @@ def test_extract_clip_features_flow_direction_coherence_no_evidence_with_one_fra
         dropped_frame_boxes=[],
         multi_tracks=[[]],
     )
-    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_a, **_k: clip_detection)
 
-    result = spike.extract_clip_features("clip.mp4", _ZONE)
+    result = scoring.extract_clip_features("clip.mp4", _ZONE)
 
     assert result is not None
     assert result["flow_direction_coherence"] == 0.0
@@ -2145,9 +2145,9 @@ def test_extract_clip_features_flow_direction_coherence_measures_real_coherent_m
     shifted = cv2.warpAffine(patch, matrix, (size, size), borderMode=cv2.BORDER_REPLICATE)
     contour = _rect_contour(10, 10, 40, 40)
 
-    def _frame_detection_with_gray(index: int, gray: np.ndarray) -> spike.FrameDetection:
+    def _frame_detection_with_gray(index: int, gray: np.ndarray) -> motion.FrameDetection:
         frame_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        return spike.FrameDetection(
+        return motion.FrameDetection(
             index=index,
             frame=frame_bgr,
             mask=np.zeros((size, size), dtype=np.uint8),
@@ -2164,7 +2164,7 @@ def test_extract_clip_features_flow_direction_coherence_measures_real_coherent_m
         _frame_detection_with_gray(0, patch),
         _frame_detection_with_gray(1, shifted),
     ]
-    clip_detection = spike.ClipDetection(
+    clip_detection = motion.ClipDetection(
         frames=frames,
         background=_blank_frame(size=size)[:, :, 0],
         frame_width=size,
@@ -2175,9 +2175,9 @@ def test_extract_clip_features_flow_direction_coherence_measures_real_coherent_m
         dropped_frame_boxes=[],
         multi_tracks=[[], []],
     )
-    monkeypatch.setattr(spike, "detect_clip", lambda *_a, **_k: clip_detection)
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_a, **_k: clip_detection)
 
-    result = spike.extract_clip_features("clip.mp4", _ZONE)
+    result = scoring.extract_clip_features("clip.mp4", _ZONE)
 
     assert result is not None
     assert result["flow_direction_coherence_has_evidence"] == 1.0
@@ -2186,18 +2186,18 @@ def test_extract_clip_features_flow_direction_coherence_measures_real_coherent_m
 
 def test_extract_clip_features_returns_none_without_motion(monkeypatch, tmp_path):
     frames = [_blank_frame() for _ in range(5)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is None
 
 
 def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tmp_path):
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     for key in (
@@ -2231,15 +2231,15 @@ def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tm
 
 def test_features_from_detection_rescores_without_running_detector(monkeypatch):
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    detection = motion.detect_clip("clip.mp4", threshold=18)
     assert detection is not None
 
     def unexpected_detection(*_args, **_kwargs):
         raise AssertionError("features_from_detection must not run detect_clip")
 
-    monkeypatch.setattr(spike, "detect_clip", unexpected_detection)
-    result = spike.features_from_detection(detection, _ZONE, fps=10.0, threshold=18)
+    monkeypatch.setattr(scoring, "detect_clip", unexpected_detection)
+    result = scoring.features_from_detection(detection, _ZONE, fps=10.0, threshold=18)
 
     assert result is not None
     assert result["persistence"] > 0
@@ -2248,16 +2248,16 @@ def test_features_from_detection_rescores_without_running_detector(monkeypatch):
 def test_extract_clip_features_delegates_to_detection_scorer(monkeypatch):
     sentinel_detection = object()
     captured = {}
-    monkeypatch.setattr(spike, "detect_clip", lambda *_args, **_kwargs: sentinel_detection)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture([]))
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_args, **_kwargs: sentinel_detection)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture([]))
 
     def score(detection, zone, **kwargs):
         captured.update(detection=detection, zone=zone, **kwargs)
         return {"delegated": 1.0}
 
-    monkeypatch.setattr(spike, "features_from_detection", score)
+    monkeypatch.setattr(scoring, "features_from_detection", score)
 
-    result = spike.extract_clip_features(
+    result = scoring.extract_clip_features(
         "clip.mp4",
         _ZONE,
         reference_row=42.0,
@@ -2280,28 +2280,28 @@ def test_extract_clip_features_delegates_to_detection_scorer(monkeypatch):
 
 def test_features_from_detection_matches_standard_extraction(monkeypatch):
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    detection = motion.detect_clip("clip.mp4", threshold=18)
     assert detection is not None
 
-    from_detection = spike.features_from_detection(detection, _ZONE, fps=10.0, threshold=18)
-    monkeypatch.setattr(spike, "detect_clip", lambda *_args, **_kwargs: detection)
-    standard = spike.extract_clip_features("clip.mp4", _ZONE, threshold=18)
+    from_detection = scoring.features_from_detection(detection, _ZONE, fps=10.0, threshold=18)
+    monkeypatch.setattr(scoring, "detect_clip", lambda *_args, **_kwargs: detection)
+    standard = scoring.extract_clip_features("clip.mp4", _ZONE, threshold=18)
 
     assert from_detection == standard
 
 
 def test_compact_geometry_observations_replay_fence_features(monkeypatch):
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    detection = motion.detect_clip("clip.mp4", threshold=18)
     assert detection is not None
 
-    observations = spike.geometry_observations_from_detection(detection)
+    observations = scoring.geometry_observations_from_detection(detection)
     assert observations is not None
-    restored = spike.GeometryObservations.from_payload(observations.to_payload())
-    replayed = spike.geometry_features_from_observations(restored, _ZONE)
-    standard = spike.features_from_detection(detection, _ZONE, fps=10.0, threshold=18)
+    restored = motion.GeometryObservations.from_payload(observations.to_payload())
+    replayed = scoring.geometry_features_from_observations(restored, _ZONE)
+    standard = scoring.features_from_detection(detection, _ZONE, fps=10.0, threshold=18)
 
     assert standard is not None
     assert replayed == {
@@ -2323,9 +2323,9 @@ def test_extract_clip_features_uncalibrated_when_zone_has_no_pickets(monkeypatch
     # _ZONE has no fence_bottom/fence_pickets/metric_calibration -- the physics
     # gate must report "uncalibrated" rather than a misleadingly clean 0.0.
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result["uncalibrated"] == 1.0
     assert result["implausible_height_fraction"] == 0.0
@@ -2368,14 +2368,14 @@ _CALIBRATED_ZONE = CameraZone(
 
 def test_compact_metric_observations_replay_calibration_features(monkeypatch):
     frames = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    detection = spike.detect_clip("clip.mp4", threshold=18)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    detection = motion.detect_clip("clip.mp4", threshold=18)
     assert detection is not None
 
-    observations = spike.metric_observations_from_detection(detection, fps=10.0)
-    restored = spike.MetricObservations.from_payload(observations.to_payload())
-    replayed = spike.metric_features_from_observations(restored, _CALIBRATED_ZONE)
-    standard = spike.features_from_detection(
+    observations = scoring.metric_observations_from_detection(detection, fps=10.0)
+    restored = motion.MetricObservations.from_payload(observations.to_payload())
+    replayed = scoring.metric_features_from_observations(restored, _CALIBRATED_ZONE)
+    standard = scoring.features_from_detection(
         detection, _CALIBRATED_ZONE, fps=10.0, threshold=18
     )
 
@@ -2404,7 +2404,7 @@ def test_metric_observations_keep_only_genuine_boxes_and_original_indices():
     genuine = _fake_frame_detection(3, contour)
     recovered = replace(genuine, index=4, recovered=True)
     reverse_filled = replace(genuine, index=8, filled_by_reverse=True)
-    detection = spike.ClipDetection(
+    detection = motion.ClipDetection(
         frames=[genuine, recovered, reverse_filled],
         background=_blank_frame(),
         frame_width=60,
@@ -2415,10 +2415,10 @@ def test_metric_observations_keep_only_genuine_boxes_and_original_indices():
         dropped_frame_boxes=[],
     )
 
-    observations = spike.metric_observations_from_detection(detection, fps=7.5)
+    observations = scoring.metric_observations_from_detection(detection, fps=7.5)
 
     assert observations.frames == (
-        spike.MetricFrameObservation(frame_index=3, bbox=(5, 6, 15, 18)),
+        motion.MetricFrameObservation(frame_index=3, bbox=(5, 6, 15, 18)),
     )
     assert observations.fps == 7.5
 
@@ -2427,10 +2427,10 @@ def test_extract_clip_features_depth_progression_higher_for_steady_travel(monkey
     steady = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
     oscillating = [_frame_with_square(pos) for pos in (5, 20, 8, 22, 6, 24)]
 
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(steady))
-    steady_result = spike.extract_clip_features(str(tmp_path / "a.mp4"), _CALIBRATED_ZONE)
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(oscillating))
-    oscillating_result = spike.extract_clip_features(str(tmp_path / "b.mp4"), _CALIBRATED_ZONE)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(steady))
+    steady_result = scoring.extract_clip_features(str(tmp_path / "a.mp4"), _CALIBRATED_ZONE)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(oscillating))
+    oscillating_result = scoring.extract_clip_features(str(tmp_path / "b.mp4"), _CALIBRATED_ZONE)
 
     assert steady_result["uncalibrated"] == 0.0
     assert oscillating_result["uncalibrated"] == 0.0
@@ -2439,9 +2439,9 @@ def test_extract_clip_features_depth_progression_higher_for_steady_travel(monkey
 
 def test_extract_clip_features_computes_scale_invariant_metric_size(monkeypatch, tmp_path):
     frames = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _CALIBRATED_ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _CALIBRATED_ZONE)
 
     assert result["uncalibrated"] == 0.0
     # A real, positive real-world size and range -- not asserting exact values
@@ -2471,9 +2471,9 @@ def test_extract_clip_features_ignores_ir_warmup_brightness_swing(monkeypatch, t
     # instead of a genuine bg-diff hit, which would defeat this test's own
     # persistence assertion for reasons unrelated to IR warmup handling.
     subject = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40, 33, 26, 19, 12)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(warmup + subject))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(warmup + subject))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     # The 8x8 square, not the 60x60 flare -- a whole-frame blob would be far from square.
@@ -2484,9 +2484,9 @@ def test_extract_clip_features_ignores_ir_warmup_brightness_swing(monkeypatch, t
 def test_extract_clip_features_keeps_warmup_frames_on_short_clips(monkeypatch, tmp_path):
     # A short clip with no illumination step at all should have nothing dropped.
     frames = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     assert result["persistence"] > 0
@@ -2504,9 +2504,9 @@ def test_extract_clip_features_flags_swinging_flashlight(monkeypatch, tmp_path):
     frames = [
         _frame_with_square_and_green(pos, green=i % 2 == 0) for i, pos in enumerate(positions)
     ]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     assert result["green_light_flicker"] > 0.1
@@ -2526,9 +2526,9 @@ def test_extract_clip_features_ignores_low_saturation_daylight_foliage(monkeypat
     # daylight foliage now -- so this reads 0.0 even though color_fraction is
     # high and no gate is applied to the scored-frame features any more.
     frames = [_foliage_frame(pos) for pos in (5, 12, 19, 26, 33, 40)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     assert result["color_fraction"] > 0.15
@@ -2540,9 +2540,9 @@ def test_extract_clip_features_still_sees_a_flashlight_in_broad_daylight(monkeyp
     # The point of sharpening the mask: a genuinely saturated light is no
     # longer discarded just because the clip is colourful.
     frames = [_foliage_frame(pos, subject=(40, 255, 40)) for pos in (5, 12, 19, 26, 33, 40)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     assert result["color_fraction"] > 0.15
@@ -2563,9 +2563,9 @@ def test_extract_clip_features_flags_the_tracked_box_itself_as_the_flashlight(
 
     positions = (5, 12, 19, 26, 33, 40)
     frames = [_green_square(pos) for pos in positions]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     assert result["flashlight_subject_fraction"] > 0.5
@@ -2575,9 +2575,9 @@ def test_extract_clip_features_flashlight_subject_fraction_zero_for_real_subject
     monkeypatch, tmp_path
 ):
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     assert result["flashlight_subject_fraction"] == pytest.approx(0.0)
@@ -2589,9 +2589,9 @@ def test_extract_clip_features_flashlight_subject_fraction_ignores_foliage(
     # Lightly-saturated ambient foliage shouldn't get tagged FLASHLIGHT --
     # now rejected by the saturation floor rather than a whole-frame gate.
     frames = [_foliage_frame(pos) for pos in (5, 12, 19, 26, 33, 40)]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     assert result["flashlight_subject_fraction"] == 0.0
@@ -2613,14 +2613,14 @@ def test_detect_clip_ignore_polygons_mask_out_a_stationary_light(monkeypatch, tm
         _frame_with_subject_and_light(pos, light_on=i % 2 == 0) for i, pos in enumerate(positions)
     ]
 
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    unmasked = spike.detect_clip(str(tmp_path / "clip.mp4"), threshold=18)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    unmasked = motion.detect_clip(str(tmp_path / "clip.mp4"), threshold=18)
     assert unmasked is not None
     assert any(len(d.blobs) >= 2 for d in unmasked.frames)  # subject + flickering light
 
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
     ignore_polygons = (((0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)),)
-    masked = spike.detect_clip(
+    masked = motion.detect_clip(
         str(tmp_path / "clip.mp4"), threshold=18, ignore_polygons=ignore_polygons
     )
     assert masked is not None
@@ -2641,17 +2641,17 @@ def test_extract_clip_features_ignore_region_suppresses_light_blob_count_and_fli
         _frame_with_subject_and_light(pos, light_on=i % 2 == 0) for i, pos in enumerate(positions)
     ]
 
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    result_unmasked = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result_unmasked = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
     ignore_zone = CameraZone(
         fence=_ZONE.fence,
         outside=_ZONE.outside,
         depth_cutoff=_ZONE.depth_cutoff,
         ignore=(((0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)),),
     )
-    result_masked = spike.extract_clip_features(str(tmp_path / "clip.mp4"), ignore_zone)
+    result_masked = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), ignore_zone)
 
     assert result_unmasked is not None
     assert result_masked is not None
@@ -2670,8 +2670,8 @@ def test_extract_clip_features_median_counterparts_ignore_a_single_spike(monkeyp
         cv2.rectangle(noisy, (x, 2), (x + 3, 5), (255, 255, 255), thickness=-1)
     frames[1] = noisy
 
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     assert result["blob_count_median"] <= result["blob_count"]
@@ -2695,9 +2695,9 @@ def test_detect_clip_records_a_suppressed_light_box_instead_of_nothing(monkeypat
         _frame_with_subject_and_light(pos, light_on=i % 2 == 0) for i, pos in enumerate(positions)
     ]
 
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
     ignore_polygons = (((0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)),)
-    masked = spike.detect_clip(
+    masked = motion.detect_clip(
         str(tmp_path / "clip.mp4"), threshold=18, ignore_polygons=ignore_polygons
     )
 
@@ -2711,9 +2711,9 @@ def test_detect_clip_records_a_suppressed_light_box_instead_of_nothing(monkeypat
 def test_detect_clip_suppressed_light_box_is_none_without_an_ignore_region(monkeypatch, tmp_path):
     positions = (5, 12, 19, 26, 33, 40)
     frames = [_frame_with_square(pos) for pos in positions]
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
 
-    detection = spike.detect_clip(str(tmp_path / "clip.mp4"), threshold=18)
+    detection = motion.detect_clip(str(tmp_path / "clip.mp4"), threshold=18)
 
     assert detection is not None
     assert all(d.suppressed_light_box is None for d in detection.frames)
@@ -2733,8 +2733,8 @@ def test_extract_clip_features_auto_detects_a_stationary_light_without_zone_igno
     positions = (5, 12, 19, 26, 33, 40)
     frames = [_frame_with_subject_and_fixed_light(pos) for pos in positions]
 
-    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
-    result = spike.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is not None
     assert result["green_light_flicker"] == pytest.approx(0.0)

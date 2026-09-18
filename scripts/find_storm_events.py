@@ -36,11 +36,11 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.backtest import ExtractFn, iter_clips_with_files  # noqa: E402
-from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.classify import classify  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
 from src.features import daylight_hint, is_twilight  # noqa: E402
+from src.scoring import extract_clip_features  # noqa: E402
 from src.storm_events import ClipSignal, find_corroborated_events  # noqa: E402
 
 REPORT_COLUMNS = (

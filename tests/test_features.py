@@ -421,7 +421,7 @@ def _textured_patch(size: int = 60, seed: int = 0) -> np.ndarray:
     goodFeaturesToTrack/calcOpticalFlowPyrLK need real LOCAL spatial
     correlation to find and follow corners reliably (matching detect_clip's
     own preprocessing, which Gaussian-blurs every frame before diffing --
-    see `scripts.spike.detect_clip`)."""
+    see `src.motion.detect_clip`)."""
     rng = np.random.default_rng(seed)
     noise = rng.integers(0, 255, size=(size, size), dtype=np.uint8)
     return cv2.GaussianBlur(noise, (5, 5), 0)

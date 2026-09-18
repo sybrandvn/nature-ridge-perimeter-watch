@@ -188,7 +188,7 @@ world, give a second vanishing point; the two together fix focal length and, com
 `fence_height_m`, absolute scale). Superseded the older per-row picket-interpolation ruler in
 `src/zones.py`, which measurably caps around 4.7m with an unphysical discontinuity.
 
-Feeds `metric_features_from_observations` (`scripts/spike.py`), which is where the actual per-clip features
+Feeds `metric_features_from_observations` (`src/scoring.py`), which is where the actual per-clip features
 come from — **excludes recovered/reverse-filled frames**, same trap as §0:
 
 | feature | what it measures | wired? |

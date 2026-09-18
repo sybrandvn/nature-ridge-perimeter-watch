@@ -1,7 +1,7 @@
 """Motion detection, tracking, and versioned feature-cache persistence.
 
 This module owns the image-to-``ClipDetection`` pipeline and its tracking
-primitives. Zone-specific feature scoring remains in :mod:`scripts.spike`.
+primitives. Zone-specific feature scoring lives in :mod:`src.scoring`.
 Cached values are that extractor's JSON-safe feature mapping, not
 ``ClipDetection`` (which contains raw NumPy frames, masks, and contours).
 

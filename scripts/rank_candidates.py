@@ -11,7 +11,7 @@ every downloaded+detected clip in the corpus, and writes a per-camera
 stratified review queue: the top N unlabelled clips per camera by score, plus
 a matching `.message_ids` file for `scripts/label.py --message-ids-file`.
 
-Always uses whatever detector `scripts.spike.extract_clip_features` currently
+Always uses whatever detector `src.scoring.extract_clip_features` currently
 wraps -- rerun this whenever the detector changes, since every feature value
 depends on it. See docs/gate2_separability_finding.md for the model's
 validated leave-one-out AUC and the label-coverage caveat: this ranks well
@@ -49,7 +49,7 @@ import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
 from scripts.label import _event_key  # noqa: E402
-from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
+from scripts.spike import FEATURE_COLUMNS  # noqa: E402
 from src import db  # noqa: E402
 from src.classify import is_blinding_foreground  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
@@ -60,6 +60,7 @@ from src.reference_bg import (  # noqa: E402
     load_reference_image,
     reference_for,
 )
+from src.scoring import extract_clip_features  # noqa: E402
 
 ExtractFn = Callable[..., "dict[str, float] | None"]
 

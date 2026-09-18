@@ -12,8 +12,8 @@ from scripts.render_debug import (
     _draw_multi_tracks,
     render_clip,
 )
-from scripts.spike import TrackedObject, detect_clip
 from src.config import CameraZone
+from src.motion import TrackedObject, detect_clip
 
 HEIGHT, WIDTH = 48, 64
 
@@ -233,7 +233,7 @@ def test_detector_defaults_match_the_spike():
     # the values that actually scored the corpus.
     import inspect
 
-    from scripts.spike import extract_clip_features
+    from src.scoring import extract_clip_features
 
     params = inspect.signature(extract_clip_features).parameters
     assert DEFAULTS["threshold"] == params["threshold"].default

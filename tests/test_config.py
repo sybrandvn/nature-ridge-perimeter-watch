@@ -508,7 +508,8 @@ def test_motion_config_matches_both_operational_extractor_signatures():
     import dataclasses
     import inspect
 
-    from scripts.spike import detect_clip, extract_clip_features
+    from src.motion import detect_clip
+    from src.scoring import extract_clip_features
 
     thresholds = load_thresholds_config(_REPO_THRESHOLDS).motion_thresholds()
     detect_params = inspect.signature(detect_clip).parameters

@@ -192,7 +192,7 @@ def green_light_mask(
     foliage produce scattered single-pixel speckle that satisfies the same
     hue/saturation test. Without it the only defence against daylight foliage
     was the whole-frame `color_fraction` gate, which is a blunt instrument --
-    see `scripts.spike.extract_clip_features`. 0 (the default) keeps every
+    see `src.scoring.extract_clip_features`. 0 (the default) keeps every
     matching pixel, i.e. the pre-2026-09-08 behaviour.
     """
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
@@ -292,7 +292,7 @@ def flashlight_bbox_overlap(
     contour, see `green_light_ratio`) that read as the guard's flashlight.
 
     Shared by `scripts.render_debug` (marks a box as the flashlight itself,
-    not a subject) and `scripts.spike.extract_clip_features` (so the render
+    not a subject) and `src.scoring.extract_clip_features` (so the render
     and the model score the same signal the same way) -- checked per tracked
     frame, so a beam that only fills the box briefly still gets counted.
 
@@ -829,7 +829,7 @@ def is_twilight(
 
 def daylight_hint(timestamp_utc: str | None) -> bool | None:
     """Exogenous "could this clip plausibly have ambient daylight colour in it"
-    answer, for `scripts.spike.extract_clip_features(daylight_hint=...)`.
+    answer, for `src.scoring.extract_clip_features(daylight_hint=...)`.
 
     True for real daylight OR either twilight margin, so a dusk clip with
     genuine residual colour is still treated as colour footage. `None` when

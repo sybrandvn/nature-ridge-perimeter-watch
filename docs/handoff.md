@@ -23,7 +23,7 @@ authoritative record of everything session #16 measured and shipped, with its ow
 Continued the raw-track extraction without changing detector behaviour. `src.motion.GeometryObservations`
 is a compact JSON-safe DTO for the fence-side evidence only: selected contour vertices, genuine
 per-frame contour vertices, centroid path, frame dimensions, and persistent multi-object boxes.
-It excludes images, masks and OpenCV contours. `scripts.spike.geometry_observations_from_detection()`
+It excludes images, masks and OpenCV contours. `src.scoring.geometry_observations_from_detection()`
 reduces an in-memory `ClipDetection` to that DTO; `geometry_features_from_observations()` replays the
 eight current fence/depth features (`outside_*`, multi-object outside readings, crossing and median
 fence distance) after a fence/side/depth edit without opening video. The normal extractor now uses
@@ -86,7 +86,7 @@ reapplying zones to a zone-independent raw-track payload.
 implementation and zone-specific feature reduction remain in `scripts.spike` pending a compact
 serialisable raw-track design.
 
-**Progress, second seam:** `scripts.spike.features_from_detection()` now re-scores an existing
+**Progress, second seam:** `src.scoring.features_from_detection()` now re-scores an existing
 `ClipDetection` for a zone without reopening the video or calling `detect_clip`. The standard
 `extract_clip_features()` path now performs detection and delegates directly to that scorer; the
 private `_detection`/`_fps` backdoor and inverted call direction are gone. The only current
@@ -102,6 +102,12 @@ incident/animal fixture events remain green with the documented cam10/7632 excep
 Final dictionary assembly is also split into `_appearance_features()`, `_temporal_features()`,
 `_warmup_features()` and `_multi_object_features()`, leaving `features_from_detection()` as the
 small orchestration boundary over six explicit groups (those four plus geometry and metric replay).
+
+**Progress, scoring ownership:** all reusable scoring code now lives in `src/scoring.py`.
+Operational consumers import it directly. `scripts/spike.py` is reduced to the labelled-corpus
+report schema, database iteration, CSV writing and its CLI; it no longer owns detector or scorer
+implementation. Tests address `src.motion` and `src.scoring` as the respective owners instead of
+depending on compatibility re-exports from the script.
 
 ## Handoff for a new agent (2026-09-13, session #17)
 
@@ -417,11 +423,11 @@ those debug renders. 316 tests passing.
   written to `config/cameras.yaml`, pending user confirmation.
 - **`CameraZone.ignore` wired into detection for the first time.** It existed in `src/config.py`
   and `src/zones.py` (`in_ignore_region`/`classify_zone`, built for the future zone-classification
-  pipeline) but `scripts/spike.py`'s actual blob-detection/feature-extraction loop never consumed
-  it — confirmed zero references in `scripts/spike.py` before this change. Now:
+  pipeline) but the then-colocated detector/feature loop never consumed it — confirmed zero
+  references before this change. Now:
   - `src/features.py::ignore_region_mask(frame_width, frame_height, ignore_polygons)` rasterises
     normalised ignore polygons to a boolean pixel mask (`cv2.fillPoly`).
-  - `scripts/spike.py::detect_clip` takes `ignore_polygons=()`; when non-empty, the mask is zeroed
+  - `src.motion.detect_clip` takes `ignore_polygons=()`; when non-empty, the mask is zeroed
     out of every frame's motion diff before `cv2.findContours`, so a known fixed artifact region
     can never itself become a tracked blob or inflate `blob_count`/`motion_pixel_fraction`.
   - `src/features.py::green_light_ratio` takes `exclude_mask=None`; `extract_clip_features` builds
@@ -1225,7 +1231,7 @@ clearly what this system needs right now; the environment leak above is the bigg
 
 ### IR flare tracking: IMPLEMENTED (2026-09-07), opt-in via `compensate_warmup`
 
-**What shipped.** `scripts.spike.detect_clip(..., compensate_warmup=True)` (default `False`,
+**What shipped.** `src.motion.detect_clip(..., compensate_warmup=True)` (default `False`,
 wired on only in `scripts/render_debug.py`): each dropped/warmup frame is photometrically matched
 (`src.features.photometric_match`, a per-frame least-squares gain/offset fit) onto the settled
 `background`, then diffed and tracked with the SAME threshold/morphology/contour pipeline used for

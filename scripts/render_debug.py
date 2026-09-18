@@ -56,7 +56,6 @@ from scripts.label import (
     _EVENT_TS_RE,  # noqa: E402
     _event_key,  # noqa: E402
 )
-from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
@@ -78,6 +77,7 @@ from src.reference_bg import (  # noqa: E402
     load_reference_image,
     reference_for,
 )
+from src.scoring import extract_clip_features  # noqa: E402
 from src.video_encode import Mp4Writer  # noqa: E402
 from src.zones import (  # noqa: E402
     _fence_x_at_y,
@@ -510,7 +510,7 @@ def render_clip(
     a generic file, not an inline video. `Mp4Writer` pipes frames to a bundled
     ffmpeg with a genuine libx264, so out_path is always coerced to .mp4.
 
-    `prefer_flashlight_candidate` (see `scripts.spike.detect_clip`) is
+    `prefer_flashlight_candidate` (see `src.motion.detect_clip`) is
     unmeasured-by-default plumbing for comparing the "biggest contour wins"
     tracker pick against the colour-aware one on one clip at a time -- pass
     `--prefer-flashlight-candidate` and re-render the same clip to see the
@@ -1121,7 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
         "--prefer-flashlight-candidate",
         action="store_true",
         help="let a colour-lit candidate beat a larger one for a track's fresh pick"
-        " (see scripts.spike.detect_clip); unmeasured by default, off",
+        " (see src.motion.detect_clip); unmeasured by default, off",
     )
     args = parser.parse_args(argv)
 

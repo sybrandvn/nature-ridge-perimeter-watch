@@ -12,7 +12,6 @@ from src.motion import (
     MetricFrameObservation,
     MetricObservations,
     TrackedObject,
-    detect_clip,
     extraction_fingerprint,
     get_cached_features,
     put_cached_features,
@@ -21,16 +20,7 @@ from src.motion import (
 _ZONE = CameraZone(fence=((0.0, 0.5), (1.0, 0.5)), outside="left", depth_cutoff=0.1, ignore=())
 
 
-def test_detector_dtos_and_entry_point_live_in_motion():
-    # Feature extraction keeps the shared DTOs and detector entry point as
-    # compatibility imports; detector primitives themselves live only in motion.
-    from scripts import spike
-
-    assert spike.TrackedObject is TrackedObject
-    assert spike.FrameDetection is FrameDetection
-    assert spike.ClipDetection is ClipDetection
-    assert spike.detect_clip is detect_clip
-
+def test_detector_dtos_construct_in_motion():
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     observed = FrameDetection(
         index=0,

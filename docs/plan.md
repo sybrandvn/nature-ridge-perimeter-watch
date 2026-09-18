@@ -100,7 +100,7 @@ similar clips without the bound; rejected, since even the tightest safe-looking 
 re-admits 6-12 environment and 8-15 guard clips for every 2-4 animal clips recovered -- a clearly
 bad trade against the leak this bound exists to stop.
 
-**IR flare tracking implemented (2026-09-07):** `scripts.spike.detect_clip(compensate_warmup=
+**IR flare tracking implemented (2026-09-07):** `src.motion.detect_clip(compensate_warmup=
 True)` now does real per-pixel tracking through the dropped IR-flare/warmup window (a
 photometric gain/offset fit onto the settled background, then the same diff/track pipeline as
 every scored frame), plus brightness/colour-corrected warmup frames for display. Scoped safe by

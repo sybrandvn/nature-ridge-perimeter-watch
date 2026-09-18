@@ -80,7 +80,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.spike import extract_clip_features  # noqa: E402
 from src import db  # noqa: E402
 from src.classify import classify  # noqa: E402
 from src.config import load_app_config, load_cameras_config  # noqa: E402
@@ -91,6 +90,7 @@ from src.reference_bg import (  # noqa: E402
     load_reference_image,
     reference_for,
 )
+from src.scoring import extract_clip_features  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "incident_regression.jsonl"
 REFERENCE_BG_ROOT = Path(__file__).resolve().parents[1] / "data" / "reference_bg"

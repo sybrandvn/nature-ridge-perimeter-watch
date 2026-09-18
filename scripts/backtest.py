@@ -26,7 +26,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.spike import FEATURE_COLUMNS, extract_clip_features  # noqa: E402
+from scripts.spike import FEATURE_COLUMNS  # noqa: E402
 from src import db  # noqa: E402
 from src.backtester import record_run  # noqa: E402
 from src.classify import classify_detailed, is_blinding_foreground  # noqa: E402
@@ -48,6 +48,7 @@ from src.reference_bg import (  # noqa: E402
     load_reference_image,
     reference_for,
 )
+from src.scoring import extract_clip_features  # noqa: E402
 
 ExtractFn = Callable[..., "dict[str, float] | None"]
 _THRESHOLDS_PATH = Path(__file__).resolve().parents[1] / "config" / "thresholds.yaml"

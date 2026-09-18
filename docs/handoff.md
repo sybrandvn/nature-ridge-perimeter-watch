@@ -54,7 +54,7 @@ default or count it as an animal-recall improvement. The next experiment, if pur
 competing reference-derived candidates rather than merely substitute the whole difference mask.
 
 The move retained a fixed trace regression for the former oracle's recovery/scenery path and moved
-detector tests to the owning module. Full suite: 726 passed. The incident/animal fixture still
+detector tests to the owning module. Full suite: 727 passed. The incident/animal fixture still
 passes all 5 incident events and all 8 animal events, including the existing documented cam10/7632
 exception.
 
@@ -88,8 +88,8 @@ serialisable raw-track design.
 
 **Progress, second seam:** `scripts.spike.features_from_detection()` now re-scores an existing
 `ClipDetection` for a zone without reopening the video or calling `detect_clip`. The standard
-`extract_clip_features()` path and this helper share the same established scoring body via a private
-bridge, so output remains byte-identical while a future raw payload gains a real consumer. The only current
+`extract_clip_features()` path now performs detection and delegates directly to that scorer; the
+private `_detection`/`_fps` backdoor and inverted call direction are gone. The only current
 non-reusable geometry input is `zone.ignore`, because it is intentionally applied during detection;
 fence/side/depth/calibration are consumed at scoring time.
 

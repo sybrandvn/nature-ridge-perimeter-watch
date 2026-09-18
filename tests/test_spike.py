@@ -2245,6 +2245,39 @@ def test_features_from_detection_rescores_without_running_detector(monkeypatch):
     assert result["persistence"] > 0
 
 
+def test_extract_clip_features_delegates_to_detection_scorer(monkeypatch):
+    sentinel_detection = object()
+    captured = {}
+    monkeypatch.setattr(spike, "detect_clip", lambda *_args, **_kwargs: sentinel_detection)
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture([]))
+
+    def score(detection, zone, **kwargs):
+        captured.update(detection=detection, zone=zone, **kwargs)
+        return {"delegated": 1.0}
+
+    monkeypatch.setattr(spike, "features_from_detection", score)
+
+    result = spike.extract_clip_features(
+        "clip.mp4",
+        _ZONE,
+        reference_row=42.0,
+        threshold=23,
+        daylight_color_fraction=0.2,
+        daylight_hint=False,
+    )
+
+    assert result == {"delegated": 1.0}
+    assert captured == {
+        "detection": sentinel_detection,
+        "zone": _ZONE,
+        "fps": 10.0,
+        "reference_row": 42.0,
+        "threshold": 23,
+        "daylight_color_fraction": 0.2,
+        "daylight_hint": False,
+    }
+
+
 def test_features_from_detection_matches_standard_extraction(monkeypatch):
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))

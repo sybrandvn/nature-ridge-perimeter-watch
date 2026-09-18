@@ -104,6 +104,7 @@ from src.motion import (  # noqa: E402
     _bbox_iou,
     _bbox_to_rect_contour,
     _contour_bbox,
+    _run_track_pass,
     _size_change_plausible,
     _size_relative_margin,
     contour_centroid,
@@ -246,7 +247,10 @@ def _patch_similarity(patch: np.ndarray, other: np.ndarray) -> float:
     return float(cv2.matchTemplate(a, b, cv2.TM_CCOEFF_NORMED)[0, 0])
 
 
-def _run_track_pass(
+# Temporary private parity oracle for the active implementation now imported
+# from src.motion. Remove after the detector body has a clip-level equivalence
+# harness; it is intentionally never called by production extraction.
+def _legacy_run_track_pass(
     grays: list[np.ndarray],
     candidates_per_frame: list[list[np.ndarray]],
     *,

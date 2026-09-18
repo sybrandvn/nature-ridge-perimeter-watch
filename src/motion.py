@@ -31,6 +31,9 @@ from src.features import FLASHLIGHT_CANDIDATE_MIN_RATIO
 
 EXTRACTOR_VERSION = "motion-features-v1"
 _NO_MOTION_KEY = "__perimeter_watch_no_motion__"
+_FLAT_PATCH_STD = 1e-3
+_FLAT_PATCH_TOLERANCE = 2.0
+_SCENERY_DRIFT_TOLERANCE = 1.0
 
 
 def detect_clip(*args: Any, **kwargs: Any) -> ClipDetection | None:
@@ -243,6 +246,146 @@ def track_contour(
                 max(flashlight_candidates, key=lambda index: cv2.contourArea(candidates[index]))
             ]
     return None
+
+
+def _bbox_crop(image: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
+    x0, y0, x1, y1 = bbox
+    return image[y0:y1, x0:x1]
+
+
+def _patch_similarity(patch: np.ndarray, other: np.ndarray) -> float:
+    """Compare matching patches, including stable handling of flat imagery."""
+    if patch.shape != other.shape or patch.size == 0:
+        return 0.0
+    first, second = patch.astype(np.float32), other.astype(np.float32)
+    if float(first.std()) < _FLAT_PATCH_STD or float(second.std()) < _FLAT_PATCH_STD:
+        return 1.0 if float(np.abs(first - second).mean()) <= _FLAT_PATCH_TOLERANCE else 0.0
+    return float(cv2.matchTemplate(first, second, cv2.TM_CCOEFF_NORMED)[0, 0])
+
+
+def _run_track_pass(
+    grays: list[np.ndarray],
+    candidates_per_frame: list[list[np.ndarray]],
+    *,
+    max_jump_distance: float,
+    max_track_miss_frames: int,
+    template_match_threshold: float,
+    search_margin_fraction: float = 0.75,
+    min_search_margin: float = 6.0,
+    max_recovered_streak: int = 12,
+    max_size_change_ratio: float = 4.0,
+    min_reacquire_area: float = 20.0,
+    enforce_min_area: list[bool] | None = None,
+    reference_background: np.ndarray | None = None,
+    max_scenery_streak: int = 2,
+    scenery_correlation: float = 0.94,
+    flashlight_scores_per_frame: list[list[float]] | None = None,
+) -> list[tuple[np.ndarray | None, bool]]:
+    """Apply the single-track state machine in forward or reverse order.
+
+    Background-difference candidates establish/continue a track; nearby
+    template matching fills short gaps. Long appearance-only runs are reset,
+    and a frozen recovered run matching a cross-clip reference background is
+    retrospectively discarded as scenery. ``enforce_min_area`` lets a reverse
+    pass retain chronological knowledge of when a track had already existed.
+    """
+    results: list[tuple[np.ndarray | None, bool]] = []
+    track_bbox: tuple[int, int, int, int] | None = None
+    track_miss = 0
+    recovered_streak = 0
+    scenery_streak = 0
+    template: np.ndarray | None = None
+    velocity = (0.0, 0.0)
+    ever_tracked = False
+    for index, (gray, candidates) in enumerate(zip(grays, candidates_per_frame, strict=True)):
+        externally_enforced = enforce_min_area is not None and enforce_min_area[index]
+        contour = track_contour(
+            candidates,
+            track_bbox,
+            max_jump_distance=max_jump_distance,
+            size_margin_fraction=search_margin_fraction,
+            min_size_margin=min_search_margin,
+            max_size_change_ratio=max_size_change_ratio,
+            min_reacquire_area=(min_reacquire_area if ever_tracked or externally_enforced else 0.0),
+            flashlight_scores=(
+                flashlight_scores_per_frame[index]
+                if flashlight_scores_per_frame is not None
+                else None
+            ),
+        )
+        recovered = False
+        if contour is None and track_bbox is not None and template is not None:
+            search_margin = min(
+                max_jump_distance,
+                _size_relative_margin(
+                    track_bbox,
+                    margin_fraction=search_margin_fraction,
+                    min_margin=min_search_margin,
+                ),
+            )
+            reacquired_bbox = reacquire_by_template(
+                gray,
+                template,
+                track_bbox,
+                search_margin=search_margin,
+                match_threshold=template_match_threshold,
+                velocity=velocity,
+            )
+            if reacquired_bbox is not None:
+                contour = _bbox_to_rect_contour(reacquired_bbox)
+                recovered = True
+        if contour is None:
+            track_miss += 1
+            recovered_streak = 0
+            scenery_streak = 0
+            if track_miss > max_track_miss_frames:
+                track_bbox = None
+                template = None
+                velocity = (0.0, 0.0)
+        else:
+            ever_tracked = True
+            new_bbox = _contour_bbox(contour)
+            drift = float("inf")
+            if track_bbox is not None:
+                old_center, new_center = _bbox_center(track_bbox), _bbox_center(new_bbox)
+                velocity = (new_center[0] - old_center[0], new_center[1] - old_center[1])
+                drift = (velocity[0] ** 2 + velocity[1] ** 2) ** 0.5
+            track_bbox = new_bbox
+            track_miss = 0
+            recovered_streak = recovered_streak + 1 if recovered else 0
+            if (
+                recovered
+                and reference_background is not None
+                and drift <= _SCENERY_DRIFT_TOLERANCE
+                and _patch_similarity(
+                    _bbox_crop(gray, new_bbox), _bbox_crop(reference_background, new_bbox)
+                )
+                >= scenery_correlation
+            ):
+                scenery_streak += 1
+            else:
+                scenery_streak = 0
+            if scenery_streak > max_scenery_streak:
+                for offset in range(1, scenery_streak):
+                    results[-offset] = (None, False)
+                contour, recovered = None, False
+                track_bbox = None
+                template = None
+                velocity = (0.0, 0.0)
+                recovered_streak = 0
+                scenery_streak = 0
+            elif recovered_streak > max_recovered_streak:
+                track_bbox = None
+                template = None
+                velocity = (0.0, 0.0)
+                recovered_streak = 0
+            if not recovered and track_bbox is not None:
+                x0, y0, x1, y1 = track_bbox
+                crop = gray[y0:y1, x0:x1]
+                if crop.size > 0:
+                    template = crop
+        results.append((contour, recovered))
+    return results
 
 
 @dataclass(frozen=True)

@@ -89,8 +89,10 @@ from src.ground_calibration import (  # noqa: E402
 )
 from src.motion import (  # noqa: E402
     ClipDetection,
-    FrameDetection,
+    FrameDetection,  # noqa: F401 - compatibility re-export for feature callers/tests
     GeometryObservations,
+    MetricFrameObservation,
+    MetricObservations,
     TrackedObject,
     _bbox_to_rect_contour,
     detect_clip,
@@ -552,7 +554,8 @@ def geometry_features_from_observations(
 
     This is deliberately narrower than ``features_from_detection``.  It is
     the cacheable replay path for geometry only; colour, texture, warmup and
-    metric-calibration features still need the in-memory detection and are
+    metric-calibration features use their own compact replay path; colour,
+    texture and warmup features still need the in-memory detection and are
     therefore not silently approximated here.
     """
     points = observations.best_contour_points
@@ -715,7 +718,7 @@ def _multi_object_type_features(
 
     Added 2026-09-09 (docs/detection_improvement_review.md section 3, stage
     2 of the object-linking design). Person/animal reuse `GroundCalibration.
-    height_m` exactly the way `_metric_track_features` already does for the
+    height_m` exactly the way `metric_features_from_observations` does for the
     single tracked subject -- the review's own note that this is "a
     mechanically small extension of an existing primitive, not new detection
     work" applies here just as it did to the per-object flashlight score
@@ -854,64 +857,41 @@ def _multi_object_type_features(
     }
 
 
-def _metric_track_features(
-    considered: list[FrameDetection],
-    zone: CameraZone,
-    frame_width: int,
-    frame_height: int,
-    fps: float,
+def metric_observations_from_detection(
+    detection: ClipDetection, *, fps: float
+) -> MetricObservations:
+    """Reduce genuine single-track boxes to zone-independent metric evidence."""
+    frames = []
+    for detected in detection.frames:
+        if (
+            detected.largest is None
+            or detected.recovered
+            or detected.filled_by_reverse
+        ):
+            continue
+        x, y, width, height = cv2.boundingRect(detected.largest)
+        frames.append(
+            MetricFrameObservation(
+                frame_index=detected.index,
+                bbox=(x, y, x + width, y + height),
+            )
+        )
+    return MetricObservations(
+        frame_width=detection.frame_width,
+        frame_height=detection.frame_height,
+        fps=fps,
+        frames=tuple(frames),
+    )
+
+
+def metric_features_from_observations(
+    observations: MetricObservations, zone: CameraZone
 ) -> dict[str, float]:
-    """Metric features from the ground-plane model (see `src.ground_calibration`),
-    computed in one pass over genuine bg-diff frames (excludes recovered/
-    reverse-filled, matching every other per-frame feature in this module --
-    a hallucinated continuation box says nothing about the real subject).
+    """Re-score ground-plane metric features without video or contour imagery.
 
-    Only meaningful when this camera has opted in to metric calibration
-    (`zone.metric_calibration`); `uncalibrated=1.0` otherwise and every other
-    key here is 0.0 rather than misleadingly "clean" or "consistent".
-
-    implausible_height_fraction / off_plane_fraction -- a physics gate: how
-    often the blob implies an impossible real-world height, or sits somewhere
-    the model says isn't the ground at all. Meant to catch flare/rain/branch
-    artifacts before they reach the shape-based rules, not to report a
-    trustworthy height (compare `estimated_height_m`, the older per-row-ruler
-    estimate, still reported separately).
-
-    height_consistency -- coefficient of variation of the RAW implied height
-    (enforce_limits=False) across frames where the base point is on the
-    ground plane. A real rigid subject keeps roughly the same real height
-    frame to frame; a rain streak, swaying branch or flare does not. LOWER is
-    more subject-like -- same convention as `src.features.area_stability`.
-    0.0 with fewer than 2 valid samples (no evidence of instability, not
-    "perfectly consistent").
-
-    depth_progression -- net ground-plane distance travelled, divided by the
-    total distance travelled back and forth. A guard patrolling the fence
-    line changes range steadily (ratio near 1); vegetation or a fixed-point
-    artifact does not translate in depth at all (ratio near 0, or 0.0 if
-    distance never measurably changed). Deliberately independent of the
-    guard's flashlight being visible, unlike `green_light_ratio`.
-
-    depth_range_m -- max minus min ground-plane distance across the clip,
-    in real metres. Separates a subject traversing the view from one milling
-    in place at a single range.
-
-    subject_height_m / subject_width_m / subject_area_m2 / metric_aspect --
-    median real-world size over plausible frames only (excludes anything
-    already counted in implausible_height_fraction). Scale-invariant
-    replacements for `row_normalised_area`/`aspect_ratio`, which conflate a
-    near subject with a far one -- a human stays ~1.6-1.9m and ~3:1 upright
-    regardless of range, an animal does not. Width comes from the ground
-    distance between the bbox's two bottom corners, not a pixel ruler.
-
-    distance_median_m -- median ground-plane distance across the clip.
-
-    speed_mps -- median frame-to-frame ground-plane displacement divided by
-    real elapsed time (uses `fps` and the actual frame-index gap between
-    genuine detections, since recovered/reverse-filled frames in between are
-    excluded). Real walking is ~1.4 m/s, running 3-5 m/s -- unlike
-    `normalised_speed` (body-widths per frame), this is comparable across
-    subjects of different sizes and ranges.
+    The calculation is identical to the former in-extractor pass. Only genuine
+    background-difference boxes are present, and original frame indices retain
+    the real time gaps used by the speed calculation.
     """
     zeros = {
         "implausible_height_fraction": 0.0,
@@ -926,11 +906,13 @@ def _metric_track_features(
         "distance_median_m": 0.0,
         "speed_mps": 0.0,
     }
-    cal = calibrate(zone, frame_width, frame_height)
-    if cal is None:
+    calibration = calibrate(
+        zone, observations.frame_width, observations.frame_height
+    )
+    if calibration is None:
         return {**zeros, "uncalibrated": 1.0}
 
-    genuine = 0
+    genuine = len(observations.frames)
     implausible = 0
     off_plane = 0
     heights: list[float] = []
@@ -939,27 +921,21 @@ def _metric_track_features(
     aspects: list[float] = []
     areas: list[float] = []
     ground_tracks: list[tuple[int, np.ndarray]] = []
-    for detected in considered:
-        if detected.largest is None or detected.recovered or detected.filled_by_reverse:
-            continue
-        genuine += 1
-        x, y, w, h = cv2.boundingRect(detected.largest)
-        base = (x + w / 2.0, float(y + h))
-        ground = cal.ground_point(base)
+    for observed in observations.frames:
+        x0, y0, x1, y1 = observed.bbox
+        base = ((x0 + x1) / 2.0, float(y1))
+        ground = calibration.ground_point(base)
         if ground is None:
             off_plane += 1
             continue
-        ground_tracks.append((detected.index, ground))
-        height = cal.height_m(base, float(y), enforce_limits=False)
+        ground_tracks.append((observed.frame_index, ground))
+        height = calibration.height_m(base, float(y0), enforce_limits=False)
         if height is None or height <= 0 or height > MAX_SUBJECT_HEIGHT_M:
             implausible += 1
             continue
-        left = cal.ground_point((float(x), float(y + h)))
-        right = cal.ground_point((float(x + w), float(y + h)))
+        left = calibration.ground_point((float(x0), float(y1)))
+        right = calibration.ground_point((float(x1), float(y1)))
         width = None if left is None or right is None else float(np.linalg.norm(right - left))
-        # Width is checked as strictly as height: an implausible width means
-        # this frame's whole metric reading is nonsense, so it counts as
-        # implausible rather than quietly contributing a garbage median.
         if width is None or width <= 0 or width > MAX_SUBJECT_WIDTH_M:
             implausible += 1
             continue
@@ -967,7 +943,7 @@ def _metric_track_features(
         widths.append(width)
         aspects.append(height / width)
         areas.append(height * width)
-        distance = cal.distance_m(base)
+        distance = calibration.distance_m(base)
         if distance is not None:
             distances.append(distance)
 
@@ -975,15 +951,16 @@ def _metric_track_features(
         return {**zeros, "uncalibrated": 0.0}
 
     speeds: list[float] = []
-    if fps > 0:
-        for (idx_a, ga), (idx_b, gb) in zip(ground_tracks, ground_tracks[1:], strict=False):
-            dt = (idx_b - idx_a) / fps
-            if dt > 0:
-                speed = float(np.linalg.norm(gb - ga)) / dt
-                # Nothing on this terrain outruns a sprint; a higher reading is
-                # a tracker jump between unrelated blobs, not a fast subject.
-                if speed <= MAX_SUBJECT_SPEED_MPS:
-                    speeds.append(speed)
+    if observations.fps > 0:
+        for (index_a, ground_a), (index_b, ground_b) in zip(
+            ground_tracks, ground_tracks[1:], strict=False
+        ):
+            elapsed = (index_b - index_a) / observations.fps
+            if elapsed <= 0:
+                continue
+            speed = float(np.linalg.norm(ground_b - ground_a)) / elapsed
+            if speed <= MAX_SUBJECT_SPEED_MPS:
+                speeds.append(speed)
 
     return {
         "implausible_height_fraction": implausible / genuine,
@@ -1289,6 +1266,7 @@ def extract_clip_features(
     if geometry_observations is None:
         return None
     geometry_features = geometry_features_from_observations(geometry_observations, zone)
+    metric_observations = metric_observations_from_detection(detection, fps=fps)
     best_width = float(cv2.boundingRect(best_contour)[2])
     color_fraction = sum(color_fractions) / len(color_fractions) if color_fractions else 0.0
 
@@ -1373,7 +1351,7 @@ def extract_clip_features(
         ),
         "scenery_motion_fraction": detection.scenery_motion_fraction,
         "has_reference_background": float(detection.has_reference_background),
-        **_metric_track_features(considered, zone, frame_width, frame_height, fps),
+        **metric_features_from_observations(metric_observations, zone),
     }
 
 

@@ -1477,6 +1477,55 @@ class GeometryObservations:
         )
 
 
+@dataclass(frozen=True)
+class MetricFrameObservation:
+    """A genuine detector box at its original frame index."""
+
+    frame_index: int
+    bbox: tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class MetricObservations:
+    """Compact, JSON-safe evidence needed for ground-plane metric scoring.
+
+    Frame imagery and contour detail are unnecessary for the calibration
+    features: the frame dimensions, genuine contour boxes, their original
+    indices, and the clip frame rate fully determine the existing readings.
+    """
+
+    frame_width: int
+    frame_height: int
+    fps: float
+    frames: tuple[MetricFrameObservation, ...]
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "frame_width": self.frame_width,
+            "frame_height": self.frame_height,
+            "fps": self.fps,
+            "frames": [
+                {"frame_index": observed.frame_index, "bbox": list(observed.bbox)}
+                for observed in self.frames
+            ],
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> MetricObservations:
+        return cls(
+            frame_width=int(payload["frame_width"]),
+            frame_height=int(payload["frame_height"]),
+            fps=float(payload["fps"]),
+            frames=tuple(
+                MetricFrameObservation(
+                    frame_index=int(observed["frame_index"]),
+                    bbox=tuple(int(value) for value in observed["bbox"]),
+                )
+                for observed in payload["frames"]
+            ),
+        )
+
+
 def _hash_file(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as source:

@@ -99,7 +99,7 @@ order (each committed and verified separately -- full test suite green throughou
 11. **Object-linking stage 2 -- per-track person/animal/artifact typing
     (`_multi_object_type_features`), reporting-only. Measured and person/animal REJECTED as
     coded -- do not retry.** Person/animal reuse `GroundCalibration.height_m` per persistently-
-    tracked object (the same primitive `_metric_track_features` already uses for the single
+    tracked object (the same primitive `metric_features_from_observations` uses for the single
     tracked subject); artifact reuses `blob_white_fraction`. First cut (no minimum evidence per
     track) was unusable: since stage 1's tracker mints a new id for every raw candidate with no
     continuity requirement, `multi_object_animal_track_count > 0` fired on 138/158 environment

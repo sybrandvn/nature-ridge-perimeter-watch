@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -2309,7 +2310,7 @@ def test_extract_clip_features_uncalibrated_when_zone_has_no_pickets(monkeypatch
 
 # cam06's real, already-validated geometry (src/ground_calibration.py's tests
 # cover calibrate() correctness in isolation) -- reused here just to get a
-# non-None GroundCalibration, so this test can check _metric_track_features'
+# non-None GroundCalibration, so this test can check metric replay's
 # own aggregation over frames, not the calibration math itself.
 _CALIBRATED_ZONE = CameraZone(
     fence=((0.4532, 0.1427), (0.3171, 0.5688), (0.1809, 0.9948)),
@@ -2330,6 +2331,63 @@ _CALIBRATED_ZONE = CameraZone(
     ),
     metric_calibration=True,
 )
+
+
+def test_compact_metric_observations_replay_calibration_features(monkeypatch):
+    frames = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
+    monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
+    detection = spike.detect_clip("clip.mp4", threshold=18)
+    assert detection is not None
+
+    observations = spike.metric_observations_from_detection(detection, fps=10.0)
+    restored = spike.MetricObservations.from_payload(observations.to_payload())
+    replayed = spike.metric_features_from_observations(restored, _CALIBRATED_ZONE)
+    standard = spike.features_from_detection(
+        detection, _CALIBRATED_ZONE, fps=10.0, threshold=18
+    )
+
+    assert standard is not None
+    assert replayed == {
+        key: standard[key]
+        for key in (
+            "implausible_height_fraction",
+            "off_plane_fraction",
+            "height_consistency",
+            "depth_progression",
+            "depth_range_m",
+            "subject_height_m",
+            "subject_width_m",
+            "subject_area_m2",
+            "metric_aspect",
+            "distance_median_m",
+            "speed_mps",
+            "uncalibrated",
+        )
+    }
+
+
+def test_metric_observations_keep_only_genuine_boxes_and_original_indices():
+    contour = _rect_contour(5, 6, 10, 12)
+    genuine = _fake_frame_detection(3, contour)
+    recovered = replace(genuine, index=4, recovered=True)
+    reverse_filled = replace(genuine, index=8, filled_by_reverse=True)
+    detection = spike.ClipDetection(
+        frames=[genuine, recovered, reverse_filled],
+        background=_blank_frame(),
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=0,
+        total_frames=3,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+    )
+
+    observations = spike.metric_observations_from_detection(detection, fps=7.5)
+
+    assert observations.frames == (
+        spike.MetricFrameObservation(frame_index=3, bbox=(5, 6, 15, 18)),
+    )
+    assert observations.fps == 7.5
 
 
 def test_extract_clip_features_depth_progression_higher_for_steady_travel(monkeypatch, tmp_path):

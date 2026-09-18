@@ -33,7 +33,7 @@ per-track features only trust the first.
 | filled by reverse | the forward pass found nothing here; a backward scan did | `filled_by_reverse=True` |
 | filled by anchor | matched against one fixed best-frame exemplar, not a refreshed template | `filled_by_anchor=True` |
 
-`_metric_track_features` (ground-plane/metric features), `path_length`/`jitter`/`persistence`
+`metric_features_from_observations` (ground-plane/metric features), `path_length`/`jitter`/`persistence`
 (single-track motion features), and the new `multi_object_*` features (2026-09-09) all **only
 count genuine, bg-diffed frames** — a track that's mostly recovered/appearance-matched (typically a
 small, fast, intermittently-detected subject — an animal is the common case) reads as having little
@@ -188,7 +188,7 @@ world, give a second vanishing point; the two together fix focal length and, com
 `fence_height_m`, absolute scale). Superseded the older per-row picket-interpolation ruler in
 `src/zones.py`, which measurably caps around 4.7m with an unphysical discontinuity.
 
-Feeds `_metric_track_features` (`scripts/spike.py`), which is where the actual per-clip features
+Feeds `metric_features_from_observations` (`scripts/spike.py`), which is where the actual per-clip features
 come from — **excludes recovered/reverse-filled frames**, same trap as §0:
 
 | feature | what it measures | wired? |

@@ -30,13 +30,13 @@ fence distance) after a fence/side/depth edit without opening video. The normal 
 that same replay path, and tests round-trip its JSON payload and prove exact agreement with normal
 feature extraction.
 
-This is intentionally not the final raw cache yet: colour/texture, warmup and metric-calibration
-features still require the in-memory imagery/contours, and `zone.ignore` remains a detector input.
-Full tests: 723 passed. Incident/animal regression: all 5 incident events and all 8 animal events
-pass with the existing documented cam10/7632 exception; the labelled warm run remains 29 TP / 22 FP
-/ 18 FN (F1 0.592). The next safe seam is compact metric observations (genuine contour bounding
-boxes plus frame indices), then a cache record can combine those geometry observations with stable
-image-derived scalars.
+This is intentionally not the final raw cache yet: colour/texture and warmup features still require
+the in-memory imagery/contours, and `zone.ignore` remains a detector input. Metric-calibration
+features no longer do: `MetricObservations` stores only genuine contour boxes, original frame
+indices, dimensions and FPS, round-trips as JSON-safe data, and exactly replays all 12 ground-plane
+features after calibration changes. Incident/animal regression remains unchanged. A future cache
+record can combine geometry and metric observations with stable image-derived scalars, but that is
+an optional reprocessing optimization rather than a detection requirement.
 
 **Completed 2026-09-18:** `src.motion.detect_clip` is the public and physical detector entry point;
 debug/zone-rendering callers use it directly. The contour, template-recovery, single-track,
@@ -54,7 +54,7 @@ default or count it as an animal-recall improvement. The next experiment, if pur
 competing reference-derived candidates rather than merely substitute the whole difference mask.
 
 The move retained a fixed trace regression for the former oracle's recovery/scenery path and moved
-detector tests to the owning module. Full suite: 723 passed. The incident/animal fixture still
+detector tests to the owning module. Full suite: 726 passed. The incident/animal fixture still
 passes all 5 incident events and all 8 animal events, including the existing documented cam10/7632
 exception.
 

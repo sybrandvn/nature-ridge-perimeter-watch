@@ -9,6 +9,8 @@ from src.motion import (
     ClipDetection,
     FrameDetection,
     GeometryObservations,
+    MetricFrameObservation,
+    MetricObservations,
     TrackedObject,
     detect_clip,
     extraction_fingerprint,
@@ -67,6 +69,20 @@ def test_geometry_observations_round_trip_as_json_safe_payload():
 
     payload = observed.to_payload()
     assert GeometryObservations.from_payload(payload) == observed
+
+
+def test_metric_observations_round_trip_as_json_safe_payload():
+    observed = MetricObservations(
+        frame_width=320,
+        frame_height=240,
+        fps=12.5,
+        frames=(
+            MetricFrameObservation(frame_index=3, bbox=(10, 20, 30, 40)),
+            MetricFrameObservation(frame_index=7, bbox=(14, 22, 36, 45)),
+        ),
+    )
+
+    assert MetricObservations.from_payload(observed.to_payload()) == observed
 
 
 def test_extraction_fingerprint_covers_video_zone_reference_and_daylight(tmp_path):

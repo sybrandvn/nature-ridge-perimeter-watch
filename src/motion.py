@@ -1,10 +1,9 @@
-"""Versioned persistence for expensive clip feature extraction.
+"""Motion detection, tracking, and versioned feature-cache persistence.
 
-The current extractor still lives in :mod:`scripts.spike`; this module owns the
-stable cache boundary while that large, heavily-tested implementation is moved
-in smaller behaviour-preserving steps. Cached values are the extractor's
-JSON-safe feature mapping, not ``ClipDetection`` (which contains raw NumPy
-frames, masks, and contours).
+This module owns the image-to-``ClipDetection`` pipeline and its tracking
+primitives. Zone-specific feature scoring remains in :mod:`scripts.spike`.
+Cached values are that extractor's JSON-safe feature mapping, not
+``ClipDetection`` (which contains raw NumPy frames, masks, and contours).
 
 Although the database column is named ``motion_fingerprint``, its value here is
 an extraction fingerprint: global motion settings plus every per-clip input
@@ -18,16 +17,26 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from src import db
 from src.config import CameraZone
-from src.features import FLASHLIGHT_CANDIDATE_MIN_RATIO
+from src.features import (
+    FLASHLIGHT_CANDIDATE_MIN_RATIO,
+    apply_photometric_match,
+    flare_frames,
+    flare_settle_index,
+    green_light_ratio,
+    ignore_region_mask,
+    photometric_match,
+    photometric_match_color,
+)
 from src.reference_bg import align
 
 EXTRACTOR_VERSION = "motion-features-v1"
@@ -35,19 +44,652 @@ _NO_MOTION_KEY = "__perimeter_watch_no_motion__"
 _FLAT_PATCH_STD = 1e-3
 _FLAT_PATCH_TOLERANCE = 2.0
 _SCENERY_DRIFT_TOLERANCE = 1.0
+_UNGATED_COST = 1.0e6
 
 
-def detect_clip(*args: Any, **kwargs: Any) -> ClipDetection | None:
-    """Public detector entry point.
+def detect_clip(
+    video_path: str,
+    *,
+    max_area_fraction: float = 0.25,
+    min_blob_area_fraction: float = 0.0005,
+    threshold: int = 18,
+    flare_tolerance: float = 3.0,
+    max_flare_fraction: float = 0.4,
+    max_track_jump_fraction: float = 0.2,
+    max_track_miss_frames: int = 5,
+    template_match_threshold: float = 0.55,
+    flare_match_relax: float = 0.1,
+    track_search_margin_fraction: float = 0.75,
+    min_track_search_margin: float = 6.0,
+    fragment_close_kernel_size: int = 9,
+    max_recovered_streak: int = 12,
+    max_size_change_ratio: float = 4.0,
+    anchor_refine: bool = True,
+    max_anchor_streak: int = 4,
+    min_reacquire_area: float = 20.0,
+    reference_background: np.ndarray | None = None,
+    reference_background_primary: bool = False,
+    max_scenery_streak: int = 2,
+    scenery_correlation: float = 0.94,
+    ignore_polygons: tuple[tuple[tuple[float, float], ...], ...] = (),
+    compensate_warmup: bool = False,
+    prefer_flashlight_candidate: bool = False,
+    multi_track_confirm_frames: int = 1,
+) -> ClipDetection | None:
+    """Run the background-subtraction detector over one clip, keeping per-frame
+    detail. Returns None if the clip has no readable frames.
 
-    The implementation remains in ``scripts.spike._detect_clip`` during its
-    behaviour-preserving extraction, because its tracking helpers are still
-    colocated there.  Keeping callers on this neutral entry point first lets
-    those helpers move in small tested slices without another import churn.
+    `ignore_polygons` (normalised [0, 1] points, `CameraZone.ignore`) are
+    masked out of every frame's motion diff before contour-finding, so a known
+    fixed artifact -- a stationary light left in view, or a lens edge/vignette
+    colour-fringing band -- can never itself become a tracked blob or inflate
+    `blob_count`, regardless of how much it moves/flickers in IR.
+
+    Consecutive-frame differencing was tried first and failed on the real
+    footage: these cameras change IR gain/illuminator state as a global
+    exposure step, and that step is a far bigger inter-frame delta than an
+    actual animal. It hid a porcupine on cam15/15454 entirely. Rather than
+    drop a fixed warmup window -- flare settles anywhere from frame 1 to
+    frame 21 depending on the clip, and can recur mid-clip -- the cutoff is
+    measured per clip from `flare_settle_index` and everything up to it is
+    dropped before the background is modelled. Blobs larger than
+    `max_area_fraction` of the frame are additionally rejected as residual
+    illumination change rather than a subject.
+
+    The per-frame `largest`/`centroid` is not simply "the biggest blob this
+    frame" -- it is a persistent track (see `track_contour`) that prefers
+    continuing the previous frame's identity by bounding-box overlap, then by
+    nearest centroid within `max_track_jump_fraction` of the frame diagonal.
+    This is what keeps a tracked subject from flipping to a second person/
+    animal that happens to have a larger blob in a later frame. The track
+    tolerates up to `max_track_miss_frames` consecutive frames with no
+    matching candidate (e.g. the subject briefly blends into the background)
+    before it is dropped and the next frame re-acquires on the largest blob,
+    same as the original stateless behaviour.
+
+    Within that miss tolerance, a frame with NO plausible background-diff
+    candidate at all is not simply skipped: `reacquire_by_template` searches
+    the raw (non-diffed) frame around the last known position for the last
+    known appearance (a cropped greyscale patch, refreshed on every real
+    detection), so a subject that stops registering against the background
+    model (e.g. it stands still long enough to blend in, or the diff briefly
+    drops below `threshold`) still gets a `FrameDetection.recovered=True` box
+    instead of a gap. This is a template match, not a full-frame search, so it
+    can only find the same subject near where it was last seen: the search
+    window is capped at `track_search_margin_fraction` of the track's own
+    current size (floored at `min_track_search_margin` pixels), not a fixed
+    frame-relative radius, and is biased toward the last observed direction
+    of travel while still covering a full reversal -- otherwise a small or
+    slow-moving subject's box can bounce to an unrelated lookalike patch well
+    outside where it could plausibly have moved in one frame.
+
+    That same forward-only pass can still miss the frames before a track ever
+    gets its first bg-diff hit (e.g. the subject enters slowly, or is small
+    enough that it only starts registering a few frames in) -- there's
+    nothing to reacquire against yet at that point. `_run_track_pass` is run a
+    second time over these frames in reverse, seeded independently, so a
+    track that only "starts" partway through can fill in the earlier frames
+    from the back; wherever the forward pass found nothing, the backward
+    result (marked `FrameDetection.filled_by_reverse=True`) is used instead.
+    That same backward scan is then extended past `considered[0]`, into the
+    raw warmup/flare frames dropped before the cutoff, using only appearance
+    matching against a single fixed anchor crop (there is no background model
+    there to diff against) and a slightly relaxed `template_match_threshold`
+    (by `flare_match_relax`) since those frames are noisier/differently lit --
+    results land in `ClipDetection.dropped_frame_boxes`, kept separate from
+    `frames` since they're still not fed into feature scoring.
+
+    `compensate_warmup=True` (default off) improves on that appearance-only
+    guess for the SAME warmup window, without touching `frames`/`background`/
+    feature scoring at all: each dropped frame is photometrically matched
+    (`src.features.photometric_match`, a per-frame gain/offset fit) onto the
+    already-trustworthy settled `background`, which cancels the IR gain step
+    well enough that a real per-pixel background diff -- the same
+    threshold/morphology/contour pipeline used for every scored frame --
+    becomes meaningful there too, instead of only ever appearance-matching a
+    single fixed crop.
+
+    The fit itself walks backward from the settled frame, not independently
+    per warmup frame: frame `drop-1` (closest to settled) is matched directly
+    against `background` -- a small, well-conditioned gain/offset fit -- and
+    every earlier frame is then matched against its own already-corrected
+    neighbour, one small brightness step at a time, all the way back to frame
+    0. A frame at the start of a steep ramp (e.g. near-black) fitting directly
+    against the far-away settled background is a much larger, less reliable
+    jump than a chain of small steps between adjacent frames that are already
+    similar to each other. The detection target is unchanged either way --
+    every chained frame is still diffed against the real settled `background`
+    for motion, only what each individual fit is computed AGAINST changes.
+
+    That real diff is tracked backward from `considered[0]`'s own established
+    box using the same `_run_track_pass` state machine as the rest of the
+    clip, so it can find a genuinely moving subject the appearance trace
+    would only ever re-confirm by lookalike, and correctly report "nothing
+    there" (a frame that really is just flare, not a subject) instead of
+    forcing a guess. Falls back to the appearance-only box for any frame this
+    real-diff pass can't place (e.g. `considered[0]` itself had no detection
+    to seed from) so coverage never regresses. `ClipDetection.dropped_frame_
+    box_is_photometric` marks which mechanism produced each box.
+    `ClipDetection.dropped_frame_compensated` additionally carries every
+    dropped COLOUR frame corrected the same chained way (per-channel,
+    `src.features.photometric_match_color`) purely for display -- evening out
+    the flare's brightness/colour ramp so a human watching a debug render
+    sees roughly what the settled background looks like, not the raw ramp.
+
+    Kept separate from `extract_clip_features` so overlays and diagnostics can
+    render exactly what scored a clip rather than a lookalike reimplementation.
+
+    A low-contrast subject against a similarly-coloured background (e.g. a
+    brown animal in daylight) often diffs out as several small disconnected
+    fragments rather than one solid blob, so `largest`/`centroid` only ever
+    covers part of it. After the existing MORPH_OPEN (which removes speckle
+    noise), a MORPH_CLOSE with a `fragment_close_kernel_size` kernel bridges
+    small gaps between nearby fragments into one contour before anything else
+    runs -- set it to 0 to disable and fall back to the raw opened mask.
+
+    That close already absorbs essentially all of the recoverable
+    fragmentation. Growing the tracked contour further by absorbing nearby
+    motion that a sliding window of neighbouring frames corroborates was
+    tried and removed: measured over 60 labelled clips, only 2.2% of motion
+    pixels lie within 20px of the tracked box, while 47.3% lie more than 60px
+    away. The box holding a mean 63% of frame motion is therefore not a
+    fragmentation problem -- the rest is vegetation, other subjects and
+    speckle genuinely elsewhere in the scene. The growth bought +1.0% recall
+    for -2.8% precision.
+
+    `ClipDetection.multi_tracks` additionally runs `track_multiple_objects`
+    over the same per-frame candidates, giving every distinct subject in the
+    clip its own persistent id (not just the single `largest` track) -- purely
+    additive diagnostic detail for telling separate subjects apart in an
+    overlay, including when two of them briefly merge into one blob.
+
+    A track sustained for more than `max_recovered_streak` consecutive frames
+    purely by appearance recovery (never reconfirmed by a real background-diff
+    hit) is dropped and re-acquired fresh instead of kept indefinitely.
+    Appearance matching can't distinguish a genuine subject that's briefly
+    blended into the background from a static, high-texture background
+    feature (e.g. a wire or vine) that was mistakenly picked up once -- both
+    trivially keep re-matching their own unchanging template forever. Without
+    this, whichever is anchored first wins permanently, even while a much
+    larger, genuinely moving candidate persists elsewhere in the same frames.
+
+    A candidate is also rejected as a continuation if its area balloons or
+    collapses by more than `max_size_change_ratio` from the track's own last
+    size, both growing and shrinking -- otherwise a real subject's track can
+    silently "hand off" onto a much larger or smaller co-located blob (e.g. a
+    residual-illumination blob shrinking away while the real, much smaller
+    subject happens to sit inside it) and keep going under the same identity,
+    at the wrong size, for the rest of the clip. The same ratio also decides
+    which early frame is trustworthy enough to seed the backward appearance
+    trace into `dropped_frame_boxes`: if `considered[0]`'s own box is itself
+    an implausible outlier against the clip's typical tracked size (e.g. that
+    same residual-illumination blob, before it's had a chance to collapse
+    down to the real subject), the trace seeds instead from the first later
+    frame whose size is plausible, and traces backward through the
+    intervening frames too, not just the true warmup/flare ones.
+
+    A fresh/unconstrained start (no active track, whether that's the very
+    first frame or right after a `max_recovered_streak` force-drop) requires
+    the candidate to clear `min_reacquire_area` -- without this floor, that
+    "pick whatever's largest" fallback can latch onto a single noise-speck/
+    sensor-grain contour a few pixels across just because nothing bigger is
+    present that frame (observed on cam13/4101: a real guard track was
+    followed, after he left frame, by 16 frames confidently tracking a 9-16px
+    speck drifting across the scene). Validated against the smallest known
+    genuine subjects in this corpus (a 4px-area dassie frame, a 34px porcupine
+    frame) at `min_reacquire_area=20` -- both keep tracking unaffected, while
+    cam13/4101's post-exit frames correctly report no detection instead of a
+    confident wrong one.
+
+    `reference_background`, when supplied, additionally removes runs of frozen
+    appearance-recovered frames that match a background built from OTHER clips
+    of the same camera at the same coordinates -- the tracker holding a fence
+    rail or a mounting pole rather than a subject (see `_run_track_pass` and
+    `src.reference_bg`). It is aligned onto this clip's own median by phase
+    correlation first, because cameras drift on their mounts between clips and
+    the comparison is per-pixel. Omit it to disable the check.
+
+    `reference_background_primary=True` is an EXPERIMENTAL recovery path. It
+    uses the aligned cross-clip reference as the scored-frame difference
+    target, rather than this clip's median background. This can reveal a
+    subject that is already present for most of a short clip and was therefore
+    absorbed into its own median. It is off by default and must be measured
+    through ``scripts.backtest --reference-background-primary`` before any
+    production decision: a reference mismatch can also make stationary scene
+    changes look like foreground.
+
+    `prefer_flashlight_candidate=True` (default off) computes `green_light_
+    ratio` for every raw motion candidate in every frame (see `track_contour`)
+    and lets it override the largest-area pick for a track's fresh/
+    unconstrained start whenever a smaller candidate clears `FLASHLIGHT_
+    CANDIDATE_MIN_RATIO`. This exists because "biggest contour wins" has a
+    confirmed failure mode distinct from everything else in this function: a
+    bigger, static-or-drifting bright blob (a sunlit bush, illuminated
+    vegetation outside the fence) can simply outsize the guard's own
+    flashlight in the same frame, and once the wrong contour is `largest`
+    every colour feature downstream describes the wrong thing for the rest of
+    the track (confirmed on cam07/11174 -- a real flashlight sat in its own
+    1785px contour while a 3025px bush contour in the same frame won the
+    old vote). It does not discard any candidate: every contour `cv2.
+    findContours` found is still there and still eligible; this only changes
+    which one an untracked frame picks first. Off by default because it is
+    unmeasured beyond the one confirmed clip -- see the caller (`scripts.
+    backtest`/`extract_clip_features`) for how to sweep it against the full
+    labelled corpus before trusting it corpus-wide, same discipline as every
+    other `detect_clip`-level change in this file's history.
+
+    `multi_track_confirm_frames` (default 1, i.e. off) is `track_multiple_
+    objects`'s `confirm_frames` for the real `multi_tracks` pass below --
+    raising it lets that pass require a new track to be matched several
+    consecutive frames before it is reported at all, so a single-frame
+    speck of noise (a leaf edge, a compression artifact) never mints its
+    own persistent id when tracking EVERY raw `per_frame_candidates`
+    contour (any nonzero area up to `max_area_fraction`) instead of only
+    min-area `per_frame_blobs` -- the concrete fix for "the multi-object
+    tracker cannot see small subjects at all" (docs/detection_improvement_
+    review.md section 3, stage 1), the animal population specifically.
+
+    Measured 2026-09-09 at confirm_frames=3 against the full labelled
+    corpus and REJECTED at that value: it silently suppresses exactly the
+    short-lived flashlight objects `_multi_object_flashlight_features`
+    depends on (a torch beam is often visible for only 1-2 frames before
+    the tracker's own gating drops or re-splits it), regressing 16 guard
+    clips whose `guard_candidate` classification depends on
+    `multi_object_max_flashlight_ratio` -- including cam07/11174, the
+    exact clip that motivated shipping that feature in the first place
+    (its ratio collapsed from 0.429, comfortably over
+    `GREEN_LIGHT_RATIO_MIN`, to 0.0). Defaulting to 1 reproduces the
+    pre-rewrite immediate-report behaviour exactly (every candidate is
+    reported the frame it first appears, same as the old blob-only
+    tracker), so `multi_object_max_flashlight_ratio` is unaffected -- see
+    `docs/detection_improvement_review.md`'s implementation-status section
+    for the full before/after corpus numbers. The candidates-vs-blobs input
+    switch (the actual small-subject fix) still applies regardless of this
+    value; only the noise-suppression half of the stage-1 tracker rewrite
+    is gated behind it, and is left off by default until a real motivating
+    case for it is measured.
+
+    Both passes above refresh their appearance template on every real
+    detection, which is what lets them follow a genuinely changing subject.
+    They can still both come up empty on a frame, so `anchor_refine` adds a
+    final pass: pick the single best-evidenced real detection in the clip
+    (`_anchor_exemplar_index`) and sweep outward from it in both directions
+    matching that one never-updated crop (`_anchor_trace`), filling only the
+    frames still left with no box. Measured on 40 labelled clips this cut
+    boxless frames from 29 to 12 while leaving box-size jitter and centre-path
+    smoothness fractionally better than without it.
+
+    It deliberately does not overwrite boxes that were already recovered by
+    appearance matching, even though those come from a template that can
+    drift. That was tried, on the theory that a fixed exemplar cannot drift,
+    and it was worse on both proxies: size jitter rose from 0.230 to 0.264 and
+    centre-path jerk from 13.2 to 14.3 across 343 rewritten frames. A template
+    refreshed from a nearby frame tracks a subject through gradual change
+    better than one anchored to a distant frame, drift notwithstanding.
     """
-    from scripts.spike import _detect_clip
+    cap = cv2.VideoCapture(video_path)
+    try:
+        frames: list[np.ndarray] = []
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            frames.append(frame)
+    finally:
+        cap.release()
 
-    return _detect_clip(*args, **kwargs)
+    total_frames = len(frames)
+    if total_frames == 0:
+        return None
+
+    all_grays = [
+        cv2.GaussianBlur(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY), (5, 5), 0) for f in frames
+    ]
+    all_medians = [float(np.median(g)) for g in all_grays]
+    drop = flare_settle_index(
+        all_medians, tolerance=flare_tolerance, max_fraction=max_flare_fraction
+    )
+    considered = frames[drop:]
+    grays = all_grays[drop:]
+    medians = all_medians[drop:]
+
+    frame_height, frame_width = considered[0].shape[:2]
+    max_area = max_area_fraction * frame_height * frame_width
+    min_blob_area = min_blob_area_fraction * frame_height * frame_width
+
+    background = np.median(np.stack(grays), axis=0).astype(np.uint8)
+    aligned_ref = _aligned_reference(reference_background, background)
+    detection_background = (
+        aligned_ref if reference_background_primary and aligned_ref is not None else background
+    )
+    kernel = np.ones((3, 3), np.uint8)
+    close_kernel = (
+        np.ones((fragment_close_kernel_size, fragment_close_kernel_size), np.uint8)
+        if fragment_close_kernel_size > 0
+        else None
+    )
+
+    flares = flare_frames(medians, tolerance=flare_tolerance)
+    max_jump_distance = max_track_jump_fraction * (frame_width**2 + frame_height**2) ** 0.5
+    ignore_mask = (
+        ignore_region_mask(frame_width, frame_height, ignore_polygons) if ignore_polygons else None
+    )
+
+    masks: list[np.ndarray] = []
+    per_frame_contours: list[list[np.ndarray]] = []
+    per_frame_blobs: list[list[np.ndarray]] = []
+    per_frame_candidates: list[list[np.ndarray]] = []
+    per_frame_suppressed_boxes: list[tuple[int, int, int, int] | None] = []
+    motion_fracs: list[float] = []
+    total_motion_area = 0.0
+    scenery_motion_area = 0.0
+    per_frame_flashlight_scores: list[list[float]] = []
+    for frame_index, gray in enumerate(grays):
+        diff = cv2.absdiff(gray, detection_background)
+        _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        if close_kernel is not None:
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
+        suppressed_box: tuple[int, int, int, int] | None = None
+        if ignore_mask is not None:
+            suppressed = mask.copy()
+            suppressed[~ignore_mask] = 0
+            mask[ignore_mask] = 0
+            if np.any(suppressed):
+                suppressed_contours, _ = cv2.findContours(
+                    suppressed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                if suppressed_contours:
+                    largest_suppressed = max(suppressed_contours, key=cv2.contourArea)
+                    if cv2.contourArea(largest_suppressed) >= min_blob_area:
+                        suppressed_box = cv2.boundingRect(largest_suppressed)
+        per_frame_suppressed_boxes.append(suppressed_box)
+        frame_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        masks.append(mask)
+        per_frame_contours.append(list(frame_contours))
+        per_frame_blobs.append(
+            [c for c in frame_contours if min_blob_area <= cv2.contourArea(c) <= max_area]
+        )
+        per_frame_candidates.append(
+            [c for c in frame_contours if 0 < cv2.contourArea(c) <= max_area]
+        )
+        if prefer_flashlight_candidate:
+            per_frame_flashlight_scores.append(
+                [
+                    green_light_ratio(considered[frame_index], c)
+                    for c in per_frame_candidates[-1]
+                ]
+            )
+        motion_fracs.append(float(np.count_nonzero(mask)) / mask.size)
+        # Scored per blob, not per pixel: a location matching the reference at
+        # the SAME coordinates (built from other clips of this camera) is
+        # something normally there -- foliage or a fence rail shaking in the
+        # wind, not a subject that only ever visits once. See `_run_track_pass`
+        # for why the comparison must use a different clip's background, not
+        # this clip's own (circular, no separation -- measured and rejected).
+        for blob in per_frame_blobs[-1]:
+            area = cv2.contourArea(blob)
+            total_motion_area += area
+            if aligned_ref is not None and _patch_similarity(
+                _bbox_crop(gray, _contour_bbox(blob)), _bbox_crop(aligned_ref, _contour_bbox(blob))
+            ) >= scenery_correlation:
+                scenery_motion_area += area
+
+    track_kwargs = {
+        "max_jump_distance": max_jump_distance,
+        "max_track_miss_frames": max_track_miss_frames,
+        "template_match_threshold": template_match_threshold,
+        "search_margin_fraction": track_search_margin_fraction,
+        "min_search_margin": min_track_search_margin,
+        "max_recovered_streak": max_recovered_streak,
+        "max_size_change_ratio": max_size_change_ratio,
+        "min_reacquire_area": min_reacquire_area,
+        "reference_background": aligned_ref,
+        "max_scenery_streak": max_scenery_streak,
+        "scenery_correlation": scenery_correlation,
+    }
+    flashlight_scores_per_frame = (
+        per_frame_flashlight_scores if prefer_flashlight_candidate else None
+    )
+    forward = _run_track_pass(
+        grays,
+        per_frame_candidates,
+        flashlight_scores_per_frame=flashlight_scores_per_frame,
+        **track_kwargs,
+    )
+    # Tell the backward pass which original frames already had a real subject
+    # established somewhere earlier in actual time -- its own reverse
+    # traversal can't know this on its own (see _run_track_pass docstring).
+    forward_established = False
+    forward_established_by_index: list[bool] = []
+    for contour, _recovered in forward:
+        if contour is not None:
+            forward_established = True
+        forward_established_by_index.append(forward_established)
+    backward = list(
+        reversed(
+            _run_track_pass(
+                list(reversed(grays)),
+                list(reversed(per_frame_candidates)),
+                enforce_min_area=list(reversed(forward_established_by_index)),
+                flashlight_scores_per_frame=(
+                    list(reversed(flashlight_scores_per_frame))
+                    if flashlight_scores_per_frame is not None
+                    else None
+                ),
+                **track_kwargs,
+            )
+        )
+    )
+    multi_tracks = track_multiple_objects(
+        per_frame_candidates,
+        max_jump_distance=max_jump_distance,
+        max_track_miss_frames=max_track_miss_frames,
+        size_margin_fraction=track_search_margin_fraction,
+        min_size_margin=min_track_search_margin,
+        frames_bgr=considered,
+        max_merge_streak=max_recovered_streak,
+        confirm_frames=multi_track_confirm_frames,
+    )
+
+    detections: list[FrameDetection] = []
+    for frame_index, frame in enumerate(considered):
+        contour, recovered = forward[frame_index]
+        filled_by_reverse = False
+        if contour is None:
+            back_contour, back_recovered = backward[frame_index]
+            if back_contour is not None:
+                contour, recovered, filled_by_reverse = back_contour, back_recovered, True
+        detections.append(
+            FrameDetection(
+                index=frame_index,
+                frame=frame,
+                mask=masks[frame_index],
+                all_contours=per_frame_contours[frame_index],
+                blobs=per_frame_blobs[frame_index],
+                largest=contour,
+                centroid=None if contour is None else contour_centroid(contour),
+                motion_pixel_fraction=motion_fracs[frame_index],
+                median_grey=medians[frame_index],
+                recovered=recovered,
+                filled_by_reverse=filled_by_reverse,
+                is_flare=flares[frame_index],
+                suppressed_light_box=per_frame_suppressed_boxes[frame_index],
+            )
+        )
+
+    # Fill frames that both directional passes left with no box at all, by
+    # matching one fixed exemplar of the clip's best frame outward in both
+    # directions. Frames that already have a box are never touched -- see the
+    # note in the docstring about overwriting appearance-recovered ones.
+    if anchor_refine:
+        anchor_index = _anchor_exemplar_index(detections)
+        if anchor_index is not None:
+            ax0, ay0, ax1, ay1 = _contour_bbox(detections[anchor_index].largest)
+            anchor_template = grays[anchor_index][ay0:ay1, ax0:ax1]
+            if anchor_template.size > 0:
+                anchor_boxes = _anchor_trace(
+                    grays,
+                    anchor_index,
+                    (ax0, ay0, ax1, ay1),
+                    anchor_template,
+                    search_margin=max_jump_distance,
+                    match_threshold=template_match_threshold,
+                    max_streak=max_anchor_streak,
+                    search_margin_fraction=track_search_margin_fraction,
+                    min_search_margin=min_track_search_margin,
+                )
+                for frame_index, box in enumerate(anchor_boxes):
+                    if box is None or detections[frame_index].largest is not None:
+                        continue
+                    anchor_contour = _bbox_to_rect_contour(box)
+                    detections[frame_index] = replace(
+                        detections[frame_index],
+                        largest=anchor_contour,
+                        centroid=contour_centroid(anchor_contour),
+                        recovered=True,
+                        filled_by_anchor=True,
+                    )
+
+    dropped_frame_boxes: list[tuple[int, int, int, int] | None] = [None] * drop
+    seed_index = 0
+    tracked_areas = sorted(
+        _bbox_area(_contour_bbox(fd.largest)) for fd in detections if fd.largest is not None
+    )
+    if tracked_areas:
+        typical_area = tracked_areas[len(tracked_areas) // 2]
+        for i, fd in enumerate(detections):
+            if fd.largest is None:
+                continue
+            if _size_change_plausible(
+                typical_area, _bbox_area(_contour_bbox(fd.largest)), max_size_change_ratio
+            ):
+                seed_index = i
+                break
+    if (drop > 0 or seed_index > 0) and detections[seed_index].largest is not None:
+        x0, y0, x1, y1 = _contour_bbox(detections[seed_index].largest)
+        seed_template = grays[seed_index][y0:y1, x0:x1]
+        if seed_template.size > 0:
+            traced = _reverse_template_trace(
+                list(reversed(all_grays[:drop] + grays[:seed_index])),
+                (x0, y0, x1, y1),
+                seed_template,
+                search_margin=max_jump_distance,
+                match_threshold=max(0.0, template_match_threshold - flare_match_relax),
+                search_margin_fraction=track_search_margin_fraction,
+                min_search_margin=min_track_search_margin,
+            )
+            traced = list(reversed(traced))
+            dropped_frame_boxes = traced[:drop]
+            # A seed_index above 0 means considered[0]..considered[seed_index-1]
+            # were themselves implausibly-sized outliers (see docstring); the
+            # same backward trace covers them too, so replace their detection
+            # with the traced (properly-sized) box instead of leaving the
+            # original oversized/undersized one in place.
+            for offset, box in enumerate(traced[drop:]):
+                if box is None:
+                    continue
+                bbox_contour = _bbox_to_rect_contour(box)
+                detections[offset] = replace(
+                    detections[offset],
+                    largest=bbox_contour,
+                    centroid=contour_centroid(bbox_contour),
+                    recovered=True,
+                    filled_by_reverse=True,
+                )
+
+    dropped_frame_box_is_photometric = [False] * drop
+    dropped_frame_compensated: list[np.ndarray] = []
+    if compensate_warmup and drop > 0:
+        # Walk backward from the settled frame, which we trust, rather than
+        # fitting each warmup frame independently against it -- frame drop-1 is
+        # already close to settled (a small, well-conditioned gain/offset fit),
+        # and each earlier frame is fit against its own already-corrected
+        # neighbour, one small step at a time, instead of every frame separately
+        # trying to jump straight from wherever the ramp caught it to the final
+        # settled brightness in one fit. The diff against `background` for
+        # motion detection is unchanged -- chaining only changes what each
+        # frame's gain/offset FIT is computed against, not the detection target.
+        background_bgr = np.median(np.stack(considered), axis=0).astype(np.uint8)
+        reference_bgr = background_bgr
+        compensated_bgr_reversed = []
+        for i in range(drop - 1, -1, -1):
+            comp_bgr = photometric_match_color(frames[i], reference_bgr)
+            compensated_bgr_reversed.append(comp_bgr)
+            reference_bgr = comp_bgr
+        dropped_frame_compensated = list(reversed(compensated_bgr_reversed))
+
+        reference_gray = background
+        compensated_grays_reversed = []
+        for i in range(drop - 1, -1, -1):
+            gain, offset = photometric_match(all_grays[i], reference_gray)
+            comp_gray = apply_photometric_match(all_grays[i], gain, offset)
+            compensated_grays_reversed.append(comp_gray)
+            reference_gray = comp_gray
+        compensated_grays = list(reversed(compensated_grays_reversed))
+
+        dropped_candidates: list[list[np.ndarray]] = []
+        for comp_gray in compensated_grays:
+            diff = cv2.absdiff(comp_gray, background)
+            _, dmask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+            dmask = cv2.morphologyEx(dmask, cv2.MORPH_OPEN, kernel)
+            if close_kernel is not None:
+                dmask = cv2.morphologyEx(dmask, cv2.MORPH_CLOSE, close_kernel)
+            if ignore_mask is not None:
+                dmask[ignore_mask] = 0
+            dcontours, _ = cv2.findContours(dmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            dropped_candidates.append([c for c in dcontours if 0 < cv2.contourArea(c) <= max_area])
+        # Seed from considered[0]'s own established box when there is one, so the
+        # trace picks up the SAME subject rather than whatever else clears the
+        # candidate gate first. When considered[0] itself has no detection (the
+        # scored track never establishes at all, e.g. a slow-dwelling subject --
+        # see cam06/21520 in repo memory), there is nothing to anchor continuity
+        # to; run unseeded instead of giving up, so a real per-pixel diff still
+        # gets a chance to find and track a subject purely within the warmup
+        # window on its own merits.
+        has_seed = detections[0].largest is not None
+        seed_grays = [grays[0], *reversed(compensated_grays)] if has_seed else list(
+            reversed(compensated_grays)
+        )
+        seed_candidates = (
+            [per_frame_candidates[0], *reversed(dropped_candidates)]
+            if has_seed
+            else list(reversed(dropped_candidates))
+        )
+        seed_results = _run_track_pass(seed_grays, seed_candidates, **track_kwargs)
+        # With a seed, result[0] is grays[0] itself (already tracked, kept only
+        # for continuity) -- drop it. Either way the rest are the dropped frames
+        # in reverse-chronological order (drop-1 down to 0).
+        traced = seed_results[1:] if has_seed else seed_results
+        traced_boxes = list(
+            reversed(
+                [_contour_bbox(contour) if contour is not None else None for contour, _r in traced]
+            )
+        )
+        for i, box in enumerate(traced_boxes):
+            if box is None:
+                continue
+            dropped_frame_boxes[i] = box
+            dropped_frame_box_is_photometric[i] = True
+
+
+    return ClipDetection(
+        frames=detections,
+        background=background,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        warmup_dropped=drop,
+        total_frames=total_frames,
+        dropped_frames=frames[:drop],
+        dropped_frame_boxes=dropped_frame_boxes,
+        dropped_frame_box_is_photometric=dropped_frame_box_is_photometric,
+        dropped_frame_compensated=dropped_frame_compensated,
+        multi_tracks=multi_tracks,
+        scenery_motion_fraction=(
+            scenery_motion_area / total_motion_area if total_motion_area > 0 else 0.0
+        ),
+        has_reference_background=aligned_ref is not None,
+    )
 
 
 def largest_contour(mask: np.ndarray, *, max_area: float | None = None) -> np.ndarray | None:
@@ -386,6 +1028,206 @@ def _run_track_pass(
                 if crop.size > 0:
                     template = crop
         results.append((contour, recovered))
+    return results
+
+
+def _bbox_histogram(
+    frame_bgr: np.ndarray, bbox: tuple[float, float, float, float]
+) -> np.ndarray | None:
+    """Return a normalized HSV histogram for a non-empty bounding-box crop."""
+    x0, y0, x1, y1 = (int(round(value)) for value in bbox)
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(frame_bgr.shape[1], x1), min(frame_bgr.shape[0], y1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    crop = frame_bgr[y0:y1, x0:x1]
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    histogram = cv2.calcHist([hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
+    cv2.normalize(histogram, histogram, alpha=1.0, norm_type=cv2.NORM_L1)
+    return histogram
+
+
+def _histogram_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """Return the bounded Bhattacharyya distance between two histograms."""
+    return float(cv2.compareHist(a, b, cv2.HISTCMP_BHATTACHARYYA))
+
+
+def track_multiple_objects(
+    candidates_per_frame: list[list[np.ndarray]],
+    *,
+    max_jump_distance: float,
+    max_track_miss_frames: int,
+    size_margin_fraction: float = 0.75,
+    min_size_margin: float = 6.0,
+    frames_bgr: list[np.ndarray] | None = None,
+    appearance_weight: float = 0.25,
+    max_merge_streak: int = 30,
+    confirm_frames: int = 1,
+) -> list[list[TrackedObject]]:
+    """Assign stable IDs to all candidate contours across a clip.
+
+    Assignment uses a globally optimal Hungarian solve over velocity-predicted
+    boxes, with an optional HSV appearance tie-breaker. Overlapping tracks can
+    survive a temporary merged blob, and new tracks may require consecutive
+    confirmation before they are emitted.
+    """
+    next_id = 0
+    tracks: dict[int, dict[str, Any]] = {}
+    results: list[list[TrackedObject]] = []
+
+    for frame_index, candidates in enumerate(candidates_per_frame):
+        boxes = [_contour_bbox(candidate) for candidate in candidates]
+        frame_bgr = (
+            frames_bgr[frame_index]
+            if frames_bgr is not None and frame_index < len(frames_bgr)
+            else None
+        )
+        track_ids = list(tracks)
+        predicted: dict[int, tuple[float, float, float, float]] = {}
+        for track_id in track_ids:
+            track = tracks[track_id]
+            velocity_x, velocity_y = track.get("velocity", (0.0, 0.0))
+            x0, y0, x1, y1 = track["bbox"]
+            predicted[track_id] = (
+                x0 + velocity_x,
+                y0 + velocity_y,
+                x1 + velocity_x,
+                y1 + velocity_y,
+            )
+
+        primary_for_track: dict[int, int] = {}
+        group_for_candidate: dict[int, list[int]] = {}
+        if track_ids and boxes:
+            cost = np.full((len(track_ids), len(boxes)), _UNGATED_COST, dtype=float)
+            for row, track_id in enumerate(track_ids):
+                predicted_bbox = predicted[track_id]
+                allowed = min(
+                    max_jump_distance,
+                    _size_relative_margin(
+                        predicted_bbox,
+                        margin_fraction=size_margin_fraction,
+                        min_margin=min_size_margin,
+                    ),
+                )
+                predicted_center = _bbox_center(predicted_bbox)
+                track_histogram = tracks[track_id].get("hist")
+                for column, box in enumerate(boxes):
+                    iou = _bbox_iou(predicted_bbox, box)
+                    if iou > 0:
+                        geometric_cost = 1.0 - iou
+                    else:
+                        center_x, center_y = _bbox_center(box)
+                        distance = (
+                            (center_x - predicted_center[0]) ** 2
+                            + (center_y - predicted_center[1]) ** 2
+                        ) ** 0.5
+                        if distance > allowed:
+                            continue
+                        geometric_cost = 1.0 + distance / allowed if allowed > 0 else 1.0
+                    appearance_cost = 0.0
+                    if frame_bgr is not None and track_histogram is not None:
+                        candidate_histogram = _bbox_histogram(frame_bgr, box)
+                        if candidate_histogram is not None:
+                            appearance_cost = _histogram_distance(
+                                track_histogram, candidate_histogram
+                            )
+                    cost[row, column] = geometric_cost + appearance_weight * appearance_cost
+
+            row_indices, column_indices = linear_sum_assignment(cost)
+            for row, column in zip(row_indices, column_indices, strict=True):
+                if cost[row, column] >= _UNGATED_COST:
+                    continue
+                track_id = track_ids[row]
+                primary_for_track[track_id] = column
+                group_for_candidate.setdefault(column, []).append(track_id)
+
+        for track_id in track_ids:
+            if track_id in primary_for_track or not boxes:
+                continue
+            predicted_bbox = predicted[track_id]
+            ious = [_bbox_iou(predicted_bbox, box) for box in boxes]
+            best_index = max(range(len(boxes)), key=lambda index: ious[index])
+            if ious[best_index] > 0 and best_index in group_for_candidate:
+                group_for_candidate[best_index].append(track_id)
+
+        frame_tracks: list[TrackedObject] = []
+        matched_ids: set[int] = set()
+        for candidate_index, track_group in group_for_candidate.items():
+            bbox = boxes[candidate_index]
+            if len(track_group) == 1:
+                track_id = track_group[0]
+                old_center = _bbox_center(tracks[track_id]["bbox"])
+                new_center = _bbox_center(bbox)
+                tracks[track_id]["velocity"] = (
+                    new_center[0] - old_center[0],
+                    new_center[1] - old_center[1],
+                )
+                tracks[track_id]["bbox"] = bbox
+                tracks[track_id]["miss"] = 0
+                tracks[track_id]["merge_streak"] = 0
+                tracks[track_id]["pending"] = tracks[track_id].get("pending", 0) + 1
+                if frame_bgr is not None:
+                    histogram = _bbox_histogram(frame_bgr, bbox)
+                    if histogram is not None:
+                        tracks[track_id]["hist"] = histogram
+                matched_ids.add(track_id)
+                if tracks[track_id]["pending"] >= confirm_frames:
+                    frame_tracks.append(TrackedObject(track_id=track_id, bbox=bbox))
+                continue
+
+            for track_id in track_group:
+                tracks[track_id]["merge_streak"] = tracks[track_id].get("merge_streak", 0) + 1
+                if tracks[track_id]["merge_streak"] > max_merge_streak:
+                    del tracks[track_id]
+                    matched_ids.add(track_id)
+                    continue
+                velocity_x, velocity_y = tracks[track_id].get("velocity", (0.0, 0.0))
+                x0, y0, x1, y1 = tracks[track_id]["bbox"]
+                tracks[track_id]["bbox"] = (
+                    x0 + velocity_x,
+                    y0 + velocity_y,
+                    x1 + velocity_x,
+                    y1 + velocity_y,
+                )
+                tracks[track_id]["miss"] = 0
+                matched_ids.add(track_id)
+                merged_ids = tuple(sorted(set(track_group) - {track_id}))
+                if tracks[track_id]["pending"] >= confirm_frames:
+                    frame_tracks.append(
+                        TrackedObject(
+                            track_id=track_id,
+                            bbox=tracks[track_id]["bbox"],
+                            merged_ids=merged_ids,
+                        )
+                    )
+
+        for track_id in list(tracks):
+            if track_id in matched_ids:
+                continue
+            tracks[track_id]["miss"] += 1
+            if tracks[track_id]["miss"] > max_track_miss_frames:
+                del tracks[track_id]
+
+        claimed_candidate_indices = set(group_for_candidate)
+        for candidate_index, box in enumerate(boxes):
+            if candidate_index in claimed_candidate_indices:
+                continue
+            track_id = next_id
+            next_id += 1
+            tracks[track_id] = {
+                "bbox": box,
+                "miss": 0,
+                "merge_streak": 0,
+                "pending": 1,
+            }
+            if frame_bgr is not None:
+                histogram = _bbox_histogram(frame_bgr, box)
+                if histogram is not None:
+                    tracks[track_id]["hist"] = histogram
+            if confirm_frames <= 1:
+                frame_tracks.append(TrackedObject(track_id=track_id, bbox=box))
+
+        results.append(frame_tracks)
     return results
 
 

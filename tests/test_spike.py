@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from scripts import spike
-from src import db
+from src import db, motion
 from src.config import Camera, CamerasConfig, CameraZone
 
 _ZONE = CameraZone(fence=((0.0, 0.5), (1.0, 0.5)), outside="left", depth_cutoff=0.0, ignore=())
@@ -42,13 +42,13 @@ class FakeCapture:
 
 def test_largest_contour_returns_none_for_empty_mask():
     mask = np.zeros((20, 20), dtype=np.uint8)
-    assert spike.largest_contour(mask) is None
+    assert motion.largest_contour(mask) is None
 
 
 def test_largest_contour_finds_blob():
     mask = np.zeros((20, 20), dtype=np.uint8)
     mask[5:10, 5:10] = 255
-    contour = spike.largest_contour(mask)
+    contour = motion.largest_contour(mask)
     assert contour is not None
     assert cv2.contourArea(contour) > 0
 
@@ -57,8 +57,8 @@ def test_largest_contour_rejects_blob_over_max_area():
     mask = np.zeros((40, 40), dtype=np.uint8)
     mask[0:35, 0:35] = 255  # whole-frame illumination change
     mask[37:39, 37:39] = 255  # small real subject
-    unfiltered = spike.largest_contour(mask)
-    filtered = spike.largest_contour(mask, max_area=100)
+    unfiltered = motion.largest_contour(mask)
+    filtered = motion.largest_contour(mask, max_area=100)
     assert cv2.contourArea(unfiltered) > 100
     assert filtered is not None
     assert cv2.contourArea(filtered) <= 100
@@ -67,14 +67,14 @@ def test_largest_contour_rejects_blob_over_max_area():
 def test_largest_contour_returns_none_when_all_blobs_over_max_area():
     mask = np.zeros((40, 40), dtype=np.uint8)
     mask[0:35, 0:35] = 255
-    assert spike.largest_contour(mask, max_area=100) is None
+    assert motion.largest_contour(mask, max_area=100) is None
 
 
 def test_contour_centroid_of_square():
     mask = np.zeros((20, 20), dtype=np.uint8)
     mask[4:10, 4:10] = 255
-    contour = spike.largest_contour(mask)
-    centroid = spike.contour_centroid(contour)
+    contour = motion.largest_contour(mask)
+    centroid = motion.contour_centroid(contour)
     assert centroid == pytest.approx((6.5, 6.5), abs=1.0)
 
 
@@ -87,19 +87,19 @@ def test_normalized_contour_points_scales_to_unit_range():
 def _square_contour(x: int, y: int, size: int) -> np.ndarray:
     mask = np.zeros((y + size + 5, x + size + 5), dtype=np.uint8)
     mask[y : y + size, x : x + size] = 255
-    return spike.largest_contour(mask)
+    return motion.largest_contour(mask)
 
 
 def _rect_contour(x: int, y: int, w: int, h: int) -> np.ndarray:
     mask = np.zeros((y + h + 5, x + w + 5), dtype=np.uint8)
     mask[y : y + h, x : x + w] = 255
-    return spike.largest_contour(mask)
+    return motion.largest_contour(mask)
 
 
 def test_track_contour_returns_largest_when_no_active_track():
     small = _square_contour(0, 0, 4)
     big = _square_contour(40, 40, 10)
-    assert spike.track_contour([small, big], None, max_jump_distance=100) is big
+    assert motion.track_contour([small, big], None, max_jump_distance=100) is big
 
 
 def test_track_contour_prefers_overlap_over_size():
@@ -112,7 +112,7 @@ def test_track_contour_prefers_overlap_over_size():
     track_bbox = (5, 5, 15, 15)
     overlapping_small = _square_contour(5, 5, 4)
     far_big = _square_contour(40, 40, 10)
-    result = spike.track_contour(
+    result = motion.track_contour(
         [overlapping_small, far_big],
         track_bbox,
         max_jump_distance=100,
@@ -129,7 +129,7 @@ def test_track_contour_falls_back_to_nearest_centroid_without_overlap():
     track_bbox = (5, 5, 15, 15)
     nearby = _square_contour(20, 20, 4)
     far = _square_contour(80, 80, 4)
-    result = spike.track_contour(
+    result = motion.track_contour(
         [nearby, far],
         track_bbox,
         max_jump_distance=50,
@@ -147,12 +147,12 @@ def test_track_contour_returns_none_when_track_is_lost_rather_than_reacquiring_b
     track_bbox = (5, 5, 15, 15)
     small = _square_contour(100, 100, 4)
     big = _square_contour(140, 140, 10)
-    result = spike.track_contour([small, big], track_bbox, max_jump_distance=5)
+    result = motion.track_contour([small, big], track_bbox, max_jump_distance=5)
     assert result is None
 
 
 def test_track_contour_returns_none_for_no_candidates():
-    assert spike.track_contour([], (0, 0, 10, 10), max_jump_distance=10) is None
+    assert motion.track_contour([], (0, 0, 10, 10), max_jump_distance=10) is None
 
 
 def test_track_contour_flashlight_candidate_overrides_an_unrelated_active_track():
@@ -166,7 +166,7 @@ def test_track_contour_flashlight_candidate_overrides_an_unrelated_active_track(
     track_bbox = (5, 5, 15, 15)  # an established, unrelated track
     far_unlit = _square_contour(200, 200, 4)  # fails distance, no flashlight evidence
     far_lit = _square_contour(140, 140, 6)  # also fails distance, but is lit
-    result = spike.track_contour(
+    result = motion.track_contour(
         [far_unlit, far_lit],
         track_bbox,
         max_jump_distance=5,
@@ -181,7 +181,7 @@ def test_track_contour_flashlight_override_does_not_fire_below_the_bar():
     track_bbox = (5, 5, 15, 15)
     small = _square_contour(100, 100, 4)
     big = _square_contour(140, 140, 10)
-    result = spike.track_contour(
+    result = motion.track_contour(
         [small, big],
         track_bbox,
         max_jump_distance=5,
@@ -198,7 +198,7 @@ def test_track_contour_flashlight_override_never_fires_when_a_normal_continuatio
     track_bbox = (5, 5, 15, 15)
     overlapping = _square_contour(5, 5, 4)
     far_lit = _square_contour(200, 200, 10)
-    result = spike.track_contour(
+    result = motion.track_contour(
         [overlapping, far_lit],
         track_bbox,
         max_jump_distance=100,
@@ -213,7 +213,7 @@ def test_track_contour_flashlight_override_respects_min_reacquire_area():
     # "new" detection either -- same floor as the fresh-pick override.
     track_bbox = (5, 5, 15, 15)
     speck = _square_contour(140, 140, 3)  # area 9, below the floor
-    result = spike.track_contour(
+    result = motion.track_contour(
         [speck],
         track_bbox,
         max_jump_distance=5,
@@ -232,7 +232,7 @@ def test_track_contour_size_relative_cap_beats_generous_max_jump_distance():
     track_bbox = (5, 5, 9, 9)
     nearby = _square_contour(20, 20, 4)  # ~21px from the track centre
     big = _square_contour(100, 100, 10)
-    result = spike.track_contour([nearby, big], track_bbox, max_jump_distance=50)
+    result = motion.track_contour([nearby, big], track_bbox, max_jump_distance=50)
     assert result is None
 
 
@@ -246,7 +246,7 @@ def test_track_contour_rejects_overlapping_candidate_with_implausible_size_chang
     # blob under the same identity.
     track_bbox = (0, 0, 20, 20)  # area 400
     tiny_overlap = _square_contour(0, 0, 2)  # area 4, ratio 100x -- way outside cap
-    result = spike.track_contour(
+    result = motion.track_contour(
         [tiny_overlap], track_bbox, max_jump_distance=50, max_size_change_ratio=4.0
     )
     assert result is None
@@ -259,7 +259,7 @@ def test_track_contour_accepts_overlapping_candidate_within_size_change_cap():
     # still be accepted as a continuation.
     track_bbox = (0, 0, 20, 20)  # area 400
     modest_shrink = _square_contour(0, 0, 12)  # area 144, ratio ~2.8x -- within cap
-    result = spike.track_contour(
+    result = motion.track_contour(
         [modest_shrink], track_bbox, max_jump_distance=50, max_size_change_ratio=4.0
     )
     assert result is modest_shrink
@@ -272,7 +272,7 @@ def test_track_contour_fresh_start_rejects_candidates_below_min_reacquire_area()
     # (re)acquisition with nothing established yet to compare against.
     speck = _square_contour(10, 10, 3)  # area 9
     other_speck = _square_contour(50, 50, 4)  # area 16
-    result = spike.track_contour(
+    result = motion.track_contour(
         [speck, other_speck], None, max_jump_distance=100, min_reacquire_area=20.0
     )
     assert result is None
@@ -281,7 +281,7 @@ def test_track_contour_fresh_start_rejects_candidates_below_min_reacquire_area()
 def test_track_contour_fresh_start_still_picks_largest_candidate_clearing_the_floor():
     speck = _square_contour(10, 10, 3)  # area 9, below floor
     real = _square_contour(50, 50, 10)  # area 100, clears floor
-    result = spike.track_contour(
+    result = motion.track_contour(
         [speck, real], None, max_jump_distance=100, min_reacquire_area=20.0
     )
     assert result is real
@@ -292,9 +292,9 @@ def test_track_contour_min_reacquire_area_defaults_on_for_fresh_starts():
     # it explicitly -- a lone noise-speck candidate with no active track is a
     # miss, not a pick, unless a caller explicitly opts out with 0.0.
     speck = _square_contour(10, 10, 3)  # area 9
-    assert spike.track_contour([speck], None, max_jump_distance=100) is None
+    assert motion.track_contour([speck], None, max_jump_distance=100) is None
     assert (
-        spike.track_contour([speck], None, max_jump_distance=100, min_reacquire_area=0.0)
+        motion.track_contour([speck], None, max_jump_distance=100, min_reacquire_area=0.0)
         is speck
     )
 
@@ -307,7 +307,7 @@ def test_track_contour_prefers_flashlight_candidate_over_larger_blob():
     # of the largest candidate overall.
     bush = _square_contour(0, 0, 60)  # area 3600, no green
     flashlight = _square_contour(100, 100, 10)  # area 100, green
-    result = spike.track_contour(
+    result = motion.track_contour(
         [bush, flashlight],
         None,
         max_jump_distance=1000,
@@ -321,7 +321,7 @@ def test_track_contour_flashlight_preference_still_prefers_size_among_lit_candid
     # between them, exactly as it would with no colour evidence at all.
     small_lit = _square_contour(0, 0, 10)
     big_lit = _square_contour(100, 100, 20)
-    result = spike.track_contour(
+    result = motion.track_contour(
         [small_lit, big_lit],
         None,
         max_jump_distance=1000,
@@ -335,7 +335,7 @@ def test_track_contour_flashlight_preference_falls_back_to_size_when_nothing_lit
     # colour-blind default (largest wins), not like a miss.
     small = _square_contour(0, 0, 10)
     big = _square_contour(100, 100, 20)
-    result = spike.track_contour(
+    result = motion.track_contour(
         [small, big],
         None,
         max_jump_distance=1000,
@@ -349,7 +349,7 @@ def test_track_contour_flashlight_scores_none_keeps_area_only_behaviour():
     # -- this is what makes prefer_flashlight_candidate=False a true no-op.
     small = _square_contour(0, 0, 10)
     big = _square_contour(100, 100, 20)
-    assert spike.track_contour([small, big], None, max_jump_distance=1000) is big
+    assert motion.track_contour([small, big], None, max_jump_distance=1000) is big
 
 
 def test_track_contour_flashlight_preference_respects_min_reacquire_area_floor():
@@ -357,7 +357,7 @@ def test_track_contour_flashlight_preference_respects_min_reacquire_area_floor()
     # eligible at all -- colour evidence only chooses among candidates that
     # already cleared the size floor, it never waives it.
     speck = _square_contour(10, 10, 3)  # area 9, below floor
-    result = spike.track_contour(
+    result = motion.track_contour(
         [speck],
         None,
         max_jump_distance=1000,
@@ -373,7 +373,7 @@ def test_track_multiple_objects_assigns_stable_ids_to_two_independent_subjects()
     frame0 = [_square_contour(10, 10, 4), _square_contour(60, 10, 4)]
     frame1 = [_square_contour(12, 10, 4), _square_contour(58, 10, 4)]
     frame2 = [_square_contour(14, 10, 4), _square_contour(56, 10, 4)]
-    results = spike.track_multiple_objects(
+    results = motion.track_multiple_objects(
         [frame0, frame1, frame2], max_jump_distance=50, max_track_miss_frames=2
     )
     ids_by_frame = [{t.track_id for t in frame} for frame in results]
@@ -384,7 +384,7 @@ def test_track_multiple_objects_assigns_stable_ids_to_two_independent_subjects()
 def test_track_multiple_objects_spawns_new_id_for_later_unmatched_candidate():
     frame0 = [_square_contour(10, 10, 4)]
     frame1 = [_square_contour(12, 10, 4), _square_contour(80, 80, 4)]
-    results = spike.track_multiple_objects(
+    results = motion.track_multiple_objects(
         [frame0, frame1], max_jump_distance=50, max_track_miss_frames=2
     )
     assert {t.track_id for t in results[0]} == {0}
@@ -401,7 +401,7 @@ def test_track_multiple_objects_confirm_frames_suppresses_single_frame_noise():
     subject2 = _square_contour(14, 10, 4)
     speck = _square_contour(80, 80, 2)  # appears once, never again
 
-    results = spike.track_multiple_objects(
+    results = motion.track_multiple_objects(
         [[subject0], [subject1, speck], [subject2]],
         max_jump_distance=50,
         max_track_miss_frames=2,
@@ -420,7 +420,7 @@ def test_track_multiple_objects_drops_track_after_miss_tolerance():
     empty: list[np.ndarray] = []
     # Reappearing well after the miss tolerance should be a fresh id, not a
     # continuation of the dropped one.
-    results = spike.track_multiple_objects(
+    results = motion.track_multiple_objects(
         [frame0, empty, empty, empty, frame0], max_jump_distance=50, max_track_miss_frames=1
     )
     assert {t.track_id for t in results[0]} == {0}
@@ -436,7 +436,7 @@ def test_track_multiple_objects_keeps_both_ids_alive_through_a_merge_and_resplit
     frame1 = [_square_contour(12, 10, 4), _square_contour(28, 10, 4)]
     merged = [_square_contour(12, 10, 20)]  # spans both subjects' last boxes
     frame3 = [_square_contour(16, 10, 4), _square_contour(24, 10, 4)]
-    results = spike.track_multiple_objects(
+    results = motion.track_multiple_objects(
         [frame0, frame1, merged, frame3], max_jump_distance=50, max_track_miss_frames=2
     )
 
@@ -448,7 +448,7 @@ def test_track_multiple_objects_keeps_both_ids_alive_through_a_merge_and_resplit
     split_frame = results[3]
     assert {t.track_id for t in split_frame} == {0, 1}
     split_by_id = {t.track_id: t.bbox for t in split_frame}
-    left_box, right_box = spike._contour_bbox(frame3[0]), spike._contour_bbox(frame3[1])
+    left_box, right_box = motion._contour_bbox(frame3[0]), motion._contour_bbox(frame3[1])
     # id 0 was on the left before the merge and should reattach to the left
     # candidate after the split, not the right one.
     assert split_by_id[0] == left_box
@@ -473,7 +473,7 @@ def test_track_multiple_objects_hungarian_beats_independent_greedy_pick():
     cand1 = _square_contour(10, 27, 10)  # center (15, 32) -- ~7.0 from track1 only
     # (track0-cand1 distance is ~12.2, well past the gate below.)
 
-    results = spike.track_multiple_objects(
+    results = motion.track_multiple_objects(
         [[track0, track1], [cand0, cand1]], max_jump_distance=50, max_track_miss_frames=2
     )
 
@@ -481,8 +481,8 @@ def test_track_multiple_objects_hungarian_beats_independent_greedy_pick():
     assert {t.track_id for t in frame1} == {0, 1}
     assert all(t.merged_ids == () for t in frame1)
     by_id = {t.track_id: t.bbox for t in frame1}
-    assert by_id[0] == spike._contour_bbox(cand0)
-    assert by_id[1] == spike._contour_bbox(cand1)
+    assert by_id[0] == motion._contour_bbox(cand0)
+    assert by_id[1] == motion._contour_bbox(cand1)
 
 
 def test_track_multiple_objects_appearance_breaks_a_geometric_tie():
@@ -501,23 +501,23 @@ def test_track_multiple_objects_appearance_breaks_a_geometric_tie():
     cand_blue = _square_contour(8, 2, 20)  # center (18, 12)
 
     frame0_img = np.zeros((45, 45, 3), dtype=np.uint8)
-    ax0, ay0, ax1, ay1 = spike._contour_bbox(track_a)
+    ax0, ay0, ax1, ay1 = motion._contour_bbox(track_a)
     frame0_img[ay0:ay1, ax0:ax1] = (255, 0, 0)  # BGR blue
-    bx0, by0, bx1, by1 = spike._contour_bbox(track_b)
+    bx0, by0, bx1, by1 = motion._contour_bbox(track_b)
     frame0_img[by0:by1, bx0:bx1] = (0, 0, 255)  # BGR red
 
     frame1_img = np.zeros((45, 45, 3), dtype=np.uint8)
-    rx0, ry0, rx1, ry1 = spike._contour_bbox(cand_red)
+    rx0, ry0, rx1, ry1 = motion._contour_bbox(cand_red)
     frame1_img[ry0:ry1, rx0:rx1] = (0, 0, 255)
-    blx0, bly0, blx1, bly1 = spike._contour_bbox(cand_blue)
+    blx0, bly0, blx1, bly1 = motion._contour_bbox(cand_blue)
     frame1_img[bly0:bly1, blx0:blx1] = (255, 0, 0)
 
-    no_appearance = spike.track_multiple_objects(
+    no_appearance = motion.track_multiple_objects(
         [[track_a, track_b], [cand_red, cand_blue]],
         max_jump_distance=50,
         max_track_miss_frames=2,
     )
-    with_appearance = spike.track_multiple_objects(
+    with_appearance = motion.track_multiple_objects(
         [[track_a, track_b], [cand_red, cand_blue]],
         max_jump_distance=50,
         max_track_miss_frames=2,
@@ -529,11 +529,11 @@ def test_track_multiple_objects_appearance_breaks_a_geometric_tie():
     # colour-correct pairing -- confirms this scenario actually exercises
     # the tie-break rather than trivially matching either way.
     no_appearance_by_id = {t.track_id: t.bbox for t in no_appearance[1]}
-    assert no_appearance_by_id[0] != spike._contour_bbox(cand_blue)
+    assert no_appearance_by_id[0] != motion._contour_bbox(cand_blue)
 
     by_id = {t.track_id: t.bbox for t in with_appearance[1]}
-    assert by_id[0] == spike._contour_bbox(cand_blue)  # track A (blue) -> blue candidate
-    assert by_id[1] == spike._contour_bbox(cand_red)  # track B (red) -> red candidate
+    assert by_id[0] == motion._contour_bbox(cand_blue)  # track A (blue) -> blue candidate
+    assert by_id[1] == motion._contour_bbox(cand_red)  # track B (red) -> red candidate
 
 
 def test_track_multiple_objects_caps_indefinite_merge_dead_reckoning():
@@ -546,7 +546,7 @@ def test_track_multiple_objects_caps_indefinite_merge_dead_reckoning():
     merged = _square_contour(12, 10, 20)  # spans both, every frame from here on
     frames = [frame0, frame1] + [[merged]] * 4
 
-    results = spike.track_multiple_objects(
+    results = motion.track_multiple_objects(
         frames, max_jump_distance=50, max_track_miss_frames=2, max_merge_streak=3
     )
 
@@ -579,7 +579,7 @@ def test_reacquire_by_template_finds_shifted_low_contrast_patch():
     frame = np.zeros((40, 40), dtype=np.uint8)
     _draw_textured_patch(frame, 15, 12, 15, 8)  # low contrast, shifted by (5, 2)
 
-    match = spike.reacquire_by_template(
+    match = motion.reacquire_by_template(
         frame, template, last_bbox=(10, 10, 18, 18), search_margin=15, match_threshold=0.5
     )
 
@@ -593,7 +593,7 @@ def test_reacquire_by_template_returns_none_when_nothing_matches():
     template = np.zeros((8, 8), dtype=np.uint8)
     template[2:6, 2:6] = 200
 
-    match = spike.reacquire_by_template(
+    match = motion.reacquire_by_template(
         frame, template, last_bbox=(10, 10, 18, 18), search_margin=15, match_threshold=0.9
     )
 
@@ -607,7 +607,7 @@ def test_reacquire_by_template_returns_none_when_search_window_too_small():
 
     # Near the corner with almost no margin -- the clipped window ends up
     # smaller than the template itself.
-    match = spike.reacquire_by_template(
+    match = motion.reacquire_by_template(
         frame, template, last_bbox=(8, 8, 10, 10), search_margin=1, match_threshold=0.1
     )
 
@@ -624,7 +624,7 @@ def test_reacquire_by_template_ignores_far_patch_without_velocity():
     frame = np.zeros((60, 60), dtype=np.uint8)
     _draw_textured_patch(frame, 32, 10, 15, 8)  # shifted +22 in x
 
-    match = spike.reacquire_by_template(
+    match = motion.reacquire_by_template(
         frame, template, last_bbox=(10, 10, 18, 18), search_margin=5, match_threshold=0.5
     )
 
@@ -642,7 +642,7 @@ def test_reacquire_by_template_velocity_extends_search_in_direction_of_travel():
     frame = np.zeros((60, 60), dtype=np.uint8)
     _draw_textured_patch(frame, 32, 10, 15, 8)  # shifted +22 in x
 
-    match = spike.reacquire_by_template(
+    match = motion.reacquire_by_template(
         frame,
         template,
         last_bbox=(10, 10, 18, 18),
@@ -667,7 +667,7 @@ def test_reacquire_by_template_velocity_still_finds_reversal_near_last_position(
     frame = np.zeros((60, 60), dtype=np.uint8)
     _draw_textured_patch(frame, 7, 10, 15, 8)  # shifted -3 in x, opposite the velocity
 
-    match = spike.reacquire_by_template(
+    match = motion.reacquire_by_template(
         frame,
         template,
         last_bbox=(10, 10, 18, 18),
@@ -691,7 +691,7 @@ def _exemplar_detection(index, bbox, *, recovered=False):
         all_contours=[],
         blobs=[],
         largest=contour,
-        centroid=spike.contour_centroid(contour),
+        centroid=motion.contour_centroid(contour),
         motion_pixel_fraction=0.0,
         median_grey=0.0,
         is_flare=False,
@@ -708,7 +708,7 @@ def test_anchor_exemplar_prefers_median_sized_real_detection():
         _exemplar_detection(2, (0, 0, 39, 39)),
     ]
 
-    assert spike._anchor_exemplar_index(detections) == 1
+    assert motion._anchor_exemplar_index(detections) == 1
 
 
 def test_anchor_exemplar_ignores_appearance_recovered_boxes():
@@ -719,13 +719,13 @@ def test_anchor_exemplar_ignores_appearance_recovered_boxes():
         _exemplar_detection(1, (12, 12, 22, 22)),
     ]
 
-    assert spike._anchor_exemplar_index(detections) == 1
+    assert motion._anchor_exemplar_index(detections) == 1
 
 
 def test_anchor_exemplar_returns_none_without_any_real_detection():
     detections = [_exemplar_detection(0, (10, 10, 20, 20), recovered=True)]
 
-    assert spike._anchor_exemplar_index(detections) is None
+    assert motion._anchor_exemplar_index(detections) is None
 
 
 def test_anchor_trace_fills_frames_on_both_sides_of_the_anchor():
@@ -738,7 +738,7 @@ def test_anchor_trace_fills_frames_on_both_sides_of_the_anchor():
         grays.append(frame)
     anchor_template = grays[2][10:18, 14:22]
 
-    boxes = spike._anchor_trace(
+    boxes = motion._anchor_trace(
         grays,
         2,
         (14, 10, 22, 18),
@@ -762,7 +762,7 @@ def test_anchor_trace_stops_at_first_unmatched_frame():
         grays.append(frame)
     anchor_template = grays[1][10:18, 10:18]
 
-    boxes = spike._anchor_trace(
+    boxes = motion._anchor_trace(
         grays, 1, (10, 10, 18, 18), anchor_template, search_margin=6, match_threshold=0.9,
         max_streak=10,
     )
@@ -785,7 +785,7 @@ def test_anchor_trace_stops_after_max_streak_even_while_still_matching():
         grays.append(frame)
     anchor_template = grays[0][10:18, 10:18]
 
-    boxes = spike._anchor_trace(
+    boxes = motion._anchor_trace(
         grays, 0, (10, 10, 18, 18), anchor_template, search_margin=6, match_threshold=0.5,
         max_streak=2,
     )
@@ -826,7 +826,7 @@ def test_run_track_pass_drops_track_stuck_on_static_texture_after_recovered_stre
         [big],
     ]
 
-    results = spike._run_track_pass(
+    results = motion._run_track_pass(
         grays,
         candidates_per_frame,
         max_jump_distance=200,
@@ -846,7 +846,7 @@ def test_run_track_pass_drops_track_stuck_on_static_texture_after_recovered_stre
     # perpetually re-matching the static wire texture.
     last_contour, last_recovered = results[-1]
     assert last_recovered is False
-    assert spike._contour_bbox(last_contour) == spike._contour_bbox(big)
+    assert motion._contour_bbox(last_contour) == motion._contour_bbox(big)
 
 
 def test_run_track_pass_min_reacquire_area_blocks_noise_speck_after_track_drop():
@@ -868,7 +868,7 @@ def test_run_track_pass_min_reacquire_area_blocks_noise_speck_after_track_drop()
     grays = [_gray(i) for i in range(6)]
     candidates_per_frame = [[real], [real], [], [], [speck], [speck]]
 
-    default_results = spike._run_track_pass(
+    default_results = motion._run_track_pass(
         grays,
         candidates_per_frame,
         max_jump_distance=200,
@@ -878,7 +878,7 @@ def test_run_track_pass_min_reacquire_area_blocks_noise_speck_after_track_drop()
     assert default_results[4][0] is None
     assert default_results[5][0] is None
 
-    permissive_results = spike._run_track_pass(
+    permissive_results = motion._run_track_pass(
         grays,
         candidates_per_frame,
         max_jump_distance=200,
@@ -901,7 +901,7 @@ def _scenery_pass(reference, **kwargs):
         return g
 
     grays = [_gray(i) for i in range(6)]
-    return spike._run_track_pass(
+    return motion._run_track_pass(
         grays,
         [[rail]] + [[] for _ in range(5)],
         max_jump_distance=200,
@@ -945,7 +945,7 @@ def test_run_track_pass_scenery_check_is_off_without_a_reference_background():
     assert all(contour is not None for contour, _r in _scenery_pass(None, max_scenery_streak=2))
 
 
-def test_moved_track_pass_matches_legacy_oracle_on_recovery_and_scenery_paths():
+def test_run_track_pass_recovery_and_scenery_trace_is_stable():
     rail = _square_contour(20, 20, 12)
     distant = _square_contour(55, 55, 10)
     reference = np.zeros((80, 80), dtype=np.uint8)
@@ -964,16 +964,20 @@ def test_moved_track_pass_matches_legacy_oracle_on_recovery_and_scenery_paths():
         "max_scenery_streak": 2,
     }
 
-    moved = spike._run_track_pass(grays, candidates, **kwargs)
-    legacy = spike._legacy_run_track_pass(grays, candidates, **kwargs)
-
     def compact(results):
         return [
-            (None if contour is None else spike._contour_bbox(contour), recovered)
+            (None if contour is None else motion._contour_bbox(contour), recovered)
             for contour, recovered in results
         ]
 
-    assert compact(moved) == compact(legacy)
+    assert compact(motion._run_track_pass(grays, candidates, **kwargs)) == [
+        ((20, 20, 32, 32), False),
+        ((20, 20, 32, 32), False),
+        (None, False),
+        (None, False),
+        (None, False),
+        (None, False),
+    ]
 
 
 def test_detect_clip_scenery_motion_fraction_high_when_blobs_match_reference(monkeypatch):
@@ -983,7 +987,7 @@ def test_detect_clip_scenery_motion_fraction_high_when_blobs_match_reference(mon
     # reference has matching texture at all three, standing in for "this
     # camera's typical scenery covers this range of positions" (e.g. a bush
     # swaying in the wind).
-    monkeypatch.setattr(spike, "_aligned_reference", lambda ref, _bg: ref)
+    monkeypatch.setattr(motion, "_aligned_reference", lambda ref, _bg: ref)
     positions = [(10, 10), (30, 30), (50, 10)]
     frames = []
     for x, y in positions:
@@ -1010,7 +1014,7 @@ def test_detect_clip_scenery_motion_fraction_high_when_blobs_match_reference(mon
 def test_detect_clip_scenery_motion_fraction_low_when_blobs_dont_match_reference(monkeypatch):
     # Same moving blob, but the reference has nothing there at any of its
     # positions -- a subject visiting a place with no known static scenery.
-    monkeypatch.setattr(spike, "_aligned_reference", lambda ref, _bg: ref)
+    monkeypatch.setattr(motion, "_aligned_reference", lambda ref, _bg: ref)
     positions = [(10, 10), (30, 30), (50, 10)]
     frames = []
     for x, y in positions:
@@ -1051,7 +1055,7 @@ def test_reference_background_primary_recovers_a_subject_absorbed_by_clip_median
     frames = [frame.copy() for _ in range(5)]
     monkeypatch.setattr(spike.cv2, "VideoCapture", lambda _path: FakeCapture(frames))
     reference = np.zeros(frame.shape[:2], dtype=np.uint8)
-    monkeypatch.setattr(spike, "_aligned_reference", lambda ref, _bg: ref)
+    monkeypatch.setattr(motion, "_aligned_reference", lambda ref, _bg: ref)
 
     standard = spike.detect_clip("clip.mp4", threshold=18, reference_background=reference)
     recovered = spike.detect_clip(
@@ -1068,7 +1072,7 @@ def test_reference_background_primary_recovers_a_subject_absorbed_by_clip_median
 
 
 def test_extract_clip_features_surfaces_scenery_motion_fraction(monkeypatch):
-    monkeypatch.setattr(spike, "_aligned_reference", lambda ref, _bg: ref)
+    monkeypatch.setattr(motion, "_aligned_reference", lambda ref, _bg: ref)
     positions = [(10, 10), (30, 30), (50, 10)]
     frames = []
     for x, y in positions:
@@ -1291,7 +1295,7 @@ def _fake_frame_detection(index: int, contour: np.ndarray) -> "spike.FrameDetect
         all_contours=[contour],
         blobs=[contour],
         largest=contour,
-        centroid=spike.contour_centroid(contour),
+        centroid=motion.contour_centroid(contour),
         motion_pixel_fraction=0.0,
         median_grey=0.0,
         is_flare=False,
@@ -1535,7 +1539,7 @@ def test_detect_clip_reverse_trace_seeds_from_plausible_size_not_frame_zero(monk
 
     assert detection is not None
     assert detection.frames[0].largest is not None
-    x0, y0, x1, y1 = spike._contour_bbox(detection.frames[0].largest)
+    x0, y0, x1, y1 = motion._contour_bbox(detection.frames[0].largest)
     assert max(x1 - x0, y1 - y0) < 20
     assert detection.frames[0].filled_by_reverse is True
 
@@ -1566,7 +1570,7 @@ def test_detect_clip_bridges_fragmented_low_contrast_blob_by_default(monkeypatch
     assert detection is not None
     last = detection.frames[-1]
     assert last.largest is not None
-    x0, _y0, x1, _y1 = spike._contour_bbox(last.largest)
+    x0, _y0, x1, _y1 = motion._contour_bbox(last.largest)
     assert (x1 - x0) >= 17  # spans both 6px patches plus the 5px gap between them
 
 
@@ -2149,7 +2153,7 @@ def test_extract_clip_features_flow_direction_coherence_measures_real_coherent_m
             all_contours=[contour],
             blobs=[contour],
             largest=contour,
-            centroid=spike.contour_centroid(contour),
+            centroid=motion.contour_centroid(contour),
             motion_pixel_fraction=0.0,
             median_grey=0.0,
             is_flare=False,

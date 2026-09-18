@@ -1,4 +1,4 @@
-# Handoff: animal-event regressions fixed; detector extraction still next
+# Handoff: animal-event regressions fixed; detector extraction complete
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-17. **If you are a new agent
 picking this up, search this file for "Handoff for a new agent (2026-09-17, session #19)"
@@ -38,10 +38,11 @@ pass with the existing documented cam10/7632 exception; the labelled warm run re
 boxes plus frame indices), then a cache record can combine those geometry observations with stable
 image-derived scalars.
 
-**In progress 2026-09-17:** `src.motion.detect_clip` is now the public detector entry point;
-debug/zone-rendering callers use it directly. It currently delegates to `scripts.spike._detect_clip`
-while the large tracking-helper cluster moves in behaviour-preserving slices, so this is API
-ownership rather than a completed physical move. `scripts.backtest --reference-background-primary
+**Completed 2026-09-18:** `src.motion.detect_clip` is the public and physical detector entry point;
+debug/zone-rendering callers use it directly. The contour, template-recovery, single-track,
+multi-object, reference/anchor tracing, and clip-orchestration code now lives in `src.motion`.
+The lazy bridge and temporary legacy tracking oracle have been removed, leaving `scripts.spike`
+responsible for feature scoring and reports. `scripts.backtest --reference-background-primary
 --no-record` is a separate, uncached experimental mode: it differences scored frames against an
 aligned cross-clip reference to test recovery of subjects absorbed by a short clip's own median.
 It remains off by default and must be judged on the labelled corpus before becoming a detector
@@ -52,25 +53,10 @@ recovers foreground without yet selecting/describing the animal reliably; do not
 default or count it as an animal-recall improvement. The next experiment, if pursued, must compare
 competing reference-derived candidates rather than merely substitute the whole difference mask.
 
-**Progress, next physical slice:** `src.motion` now owns contour selection, contour centroids and
-the corner-form bounding-box primitives (area, IoU, centre, size plausibility and relative search
-margin). `scripts.spike` re-exports them for compatibility while `track_contour` and the larger
-tracking passes still use them. The next slice also moved template reacquisition and recovered-box
-contour construction to `src.motion`; the high-level single/multi-object tracking passes remain in
-`scripts.spike`. `track_contour`, the single-subject continuation policy (overlap, size-scaled
-distance, area plausibility and flashlight override), now also lives in `src.motion`; the next
-substantial extraction is `_run_track_pass`, which owns the state-machine sequencing around it.
-That pass is now active from `src.motion` too, along with its patch-similarity/scenery guard; the
-previous `scripts.spike` body is retained temporarily as a private parity oracle until its active
-equivalent has a clip-level comparison harness. That harness now exercises recovery plus the
-reference-scenery guard against the legacy body. Full tests now have 724 passing and the incident/
-animal regression check remains green after the move.
-
-**Progress 2026-09-18:** reference alignment, reverse warmup tracing, anchor selection and
-bidirectional anchor tracing now live only in `src.motion`; their `scripts.spike` definitions were
-removed and compatibility is maintained through imports. Remaining physical moves are the
-multi-object tracker and `_detect_clip` orchestration body, followed by deletion of the temporary
-single-track legacy oracle.
+The move retained a fixed trace regression for the former oracle's recovery/scenery path and moved
+detector tests to the owning module. Full suite: 723 passed. The incident/animal fixture still
+passes all 5 incident events and all 8 animal events, including the existing documented cam10/7632
+exception.
 
 ## Handoff for a new agent (2026-09-16, session #18)
 

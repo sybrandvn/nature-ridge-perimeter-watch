@@ -10,41 +10,24 @@ from src.motion import (
     FrameDetection,
     GeometryObservations,
     TrackedObject,
-    _aligned_reference,
-    _anchor_exemplar_index,
-    _anchor_trace,
-    _reverse_template_trace,
-    _run_track_pass,
-    contour_centroid,
+    detect_clip,
     extraction_fingerprint,
     get_cached_features,
-    largest_contour,
     put_cached_features,
-    reacquire_by_template,
-    track_contour,
 )
 
 _ZONE = CameraZone(fence=((0.0, 0.5), (1.0, 0.5)), outside="left", depth_cutoff=0.1, ignore=())
 
 
-def test_detector_dtos_live_in_motion_and_spike_reexports_them():
-    # This is the first detector/feature split seam. Existing callers remain
-    # source-compatible through scripts.spike while detector-owned data now
-    # has one neutral home for a later serialisable raw-track payload.
+def test_detector_dtos_and_entry_point_live_in_motion():
+    # Feature extraction keeps the shared DTOs and detector entry point as
+    # compatibility imports; detector primitives themselves live only in motion.
     from scripts import spike
 
     assert spike.TrackedObject is TrackedObject
     assert spike.FrameDetection is FrameDetection
     assert spike.ClipDetection is ClipDetection
-    assert spike.largest_contour is largest_contour
-    assert spike.contour_centroid is contour_centroid
-    assert spike.reacquire_by_template is reacquire_by_template
-    assert spike.track_contour is track_contour
-    assert spike._run_track_pass is _run_track_pass
-    assert spike._aligned_reference is _aligned_reference
-    assert spike._reverse_template_trace is _reverse_template_trace
-    assert spike._anchor_exemplar_index is _anchor_exemplar_index
-    assert spike._anchor_trace is _anchor_trace
+    assert spike.detect_clip is detect_clip
 
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     observed = FrameDetection(
@@ -70,16 +53,6 @@ def test_detector_dtos_live_in_motion_and_spike_reexports_them():
         dropped_frame_boxes=[],
     )
     assert clip.frames[0].frame is frame
-
-
-def test_motion_detect_clip_dispatches_to_the_private_compatibility_body(monkeypatch):
-    from scripts import spike
-    from src import motion
-
-    sentinel = object()
-    monkeypatch.setattr(spike, "_detect_clip", lambda *args, **kwargs: sentinel)
-
-    assert motion.detect_clip("clip.mp4", threshold=18) is sentinel
 
 
 def test_geometry_observations_round_trip_as_json_safe_payload():

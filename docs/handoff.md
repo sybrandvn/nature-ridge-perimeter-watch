@@ -93,6 +93,13 @@ private `_detection`/`_fps` backdoor and inverted call direction are gone. The o
 non-reusable geometry input is `zone.ignore`, because it is intentionally applied during detection;
 fence/side/depth/calibration are consumed at scoring time.
 
+**Progress, scorer decomposition:** the mixed per-frame loop in `features_from_detection()` is now
+isolated in `_summarize_detection_features()` and returns a typed `_DetectionFeatureSummary`.
+Configured/automatic light exclusion is independently handled by `_feature_exclude_mask()`.
+The public scorer now composes those observations with geometry, warmup, multi-object and metric
+feature groups; thresholds and feature values are unchanged. Full suite: 727 passed, and all
+incident/animal fixture events remain green with the documented cam10/7632 exception.
+
 ## Handoff for a new agent (2026-09-13, session #17)
 
 Picked up plan step 22, `motion.py` caching. Clean baseline: ruff green and 688 tests passing.

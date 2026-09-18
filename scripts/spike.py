@@ -32,6 +32,7 @@ import argparse
 import csv
 import sys
 from collections.abc import Iterator
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -978,6 +979,196 @@ def metric_features_from_observations(
     }
 
 
+@dataclass(frozen=True)
+class _DetectionFeatureSummary:
+    """Zone-filtered, per-frame evidence consumed by feature assembly."""
+
+    best_contour: np.ndarray
+    best_frame: np.ndarray
+    genuine_centroids: tuple[tuple[float, float], ...]
+    genuine_blob_areas: tuple[float, ...]
+    genuine_detected_indices: tuple[int, ...]
+    genuine_frames_detected: int
+    non_genuine_frames: int
+    flow_coherence_values: tuple[float, ...]
+    whole_frame_green_ratios: tuple[float, ...]
+    color_fraction: float
+    warmup_flashlight_ratio: float
+    motion_pixel_fraction: float
+    motion_pixel_fraction_median: float
+    blob_count: int
+    blob_count_median: float
+    white_fraction: float
+    frames_with_box: int
+    flashlight_bbox_frames: int
+
+
+def _feature_exclude_mask(
+    detection: ClipDetection, zone: CameraZone
+) -> np.ndarray | None:
+    """Combine configured ignore regions with automatically stable lights."""
+    frame_width, frame_height = detection.frame_width, detection.frame_height
+    exclude_mask = (
+        ignore_region_mask(frame_width, frame_height, zone.ignore) if zone.ignore else None
+    )
+    # Carve every tracked box out of automatic light detection so a guard who
+    # dwells with a steady torch is not classified as a fixed camera artifact.
+    tracked_region = np.zeros((frame_height, frame_width), dtype=bool)
+    for detected in detection.frames:
+        if detected.largest is None:
+            continue
+        x, y, width, height = cv2.boundingRect(detected.largest)
+        padding = 4
+        x0, y0 = max(0, x - padding), max(0, y - padding)
+        x1 = min(frame_width, x + width + padding)
+        y1 = min(frame_height, y + height + padding)
+        tracked_region[y0:y1, x0:x1] = True
+    automatic = detect_stationary_light_mask(
+        [detected.frame for detected in detection.frames],
+        exclude_region=tracked_region,
+    )
+    if np.any(automatic):
+        return automatic if exclude_mask is None else (exclude_mask | automatic)
+    return exclude_mask
+
+
+def _summarize_detection_features(
+    detection: ClipDetection,
+    *,
+    exclude_mask: np.ndarray | None,
+    daylight_color_fraction: float,
+    daylight_hint: bool | None,
+) -> _DetectionFeatureSummary | None:
+    """Reduce frame imagery and contours to the scalars used during scoring."""
+    genuine_centroids: list[tuple[float, float]] = []
+    genuine_blob_areas: list[float] = []
+    genuine_detected_indices: list[int] = []
+    genuine_frames_detected = 0
+    non_genuine_frames = 0
+    flow_coherence_values: list[float] = []
+    previous_genuine_index: int | None = None
+    previous_genuine_gray: np.ndarray | None = None
+    previous_genuine_contour: np.ndarray | None = None
+    whole_frame_green_ratios: list[float] = []
+    color_fractions: list[float] = []
+    best_contour: np.ndarray | None = None
+    best_frame: np.ndarray | None = None
+    best_area = -1.0
+    best_contour_any: np.ndarray | None = None
+    best_frame_any: np.ndarray | None = None
+    best_area_any = -1.0
+    whole_frame = _whole_frame_contour(detection.frame_width, detection.frame_height)
+    motion_pixel_fraction = 0.0
+    blob_count = 0
+    white_fraction = 0.0
+    frames_with_box = 0
+    flashlight_bbox_frames = 0
+
+    warmup_flashlight_ratio = 0.0
+    if detection.dropped_frames:
+        warmup_colour = [
+            color_saturation_fraction(frame) for frame in detection.dropped_frames
+        ]
+        warmup_daylight = (
+            sum(warmup_colour) / len(warmup_colour) > daylight_color_fraction
+            and daylight_hint is not False
+        )
+        if not warmup_daylight:
+            warmup_flashlight_ratio = max(
+                green_light_ratio(frame, whole_frame, exclude_mask=exclude_mask)
+                for frame in detection.dropped_frames
+            )
+
+    for detected in detection.frames:
+        whole_frame_green_ratios.append(
+            green_light_ratio(detected.frame, whole_frame, exclude_mask=exclude_mask)
+        )
+        color_fractions.append(color_saturation_fraction(detected.frame))
+        motion_pixel_fraction = max(
+            motion_pixel_fraction, detected.motion_pixel_fraction
+        )
+        blob_count = max(blob_count, len(detected.blobs))
+        if detected.recovered or detected.filled_by_reverse:
+            non_genuine_frames += 1
+        contour = detected.largest
+        if contour is None:
+            continue
+        white_fraction = max(
+            white_fraction, blob_white_fraction(detected.frame, contour)
+        )
+        frames_with_box += 1
+        if (
+            flashlight_bbox_overlap(
+                detected.frame,
+                cv2.boundingRect(contour),
+                exclude_mask=exclude_mask,
+            )
+            > FLASHLIGHT_SUBJECT_THRESHOLD
+        ):
+            flashlight_bbox_frames += 1
+        area = cv2.contourArea(contour)
+        if area > best_area_any:
+            best_area_any = area
+            best_contour_any = contour
+            best_frame_any = detected.frame
+        if not _frame_is_merged(detection, detected.index) and area > best_area:
+            best_area = area
+            best_contour = contour
+            best_frame = detected.frame
+        if (
+            detected.centroid is None
+            or detected.recovered
+            or detected.filled_by_reverse
+        ):
+            continue
+        genuine_frames_detected += 1
+        genuine_detected_indices.append(detected.index)
+        genuine_blob_areas.append(area)
+        genuine_centroids.append(detected.centroid)
+        current_gray = cv2.cvtColor(detected.frame, cv2.COLOR_BGR2GRAY)
+        if previous_genuine_index == detected.index - 1:
+            coherence = optical_flow_direction_coherence(
+                previous_genuine_gray, current_gray, previous_genuine_contour
+            )
+            if coherence is not None:
+                flow_coherence_values.append(coherence)
+        previous_genuine_index = detected.index
+        previous_genuine_gray = current_gray
+        previous_genuine_contour = contour
+
+    if best_contour is None or best_frame is None:
+        best_contour, best_frame = best_contour_any, best_frame_any
+    if best_contour is None or best_frame is None:
+        return None
+
+    return _DetectionFeatureSummary(
+        best_contour=best_contour,
+        best_frame=best_frame,
+        genuine_centroids=tuple(genuine_centroids),
+        genuine_blob_areas=tuple(genuine_blob_areas),
+        genuine_detected_indices=tuple(genuine_detected_indices),
+        genuine_frames_detected=genuine_frames_detected,
+        non_genuine_frames=non_genuine_frames,
+        flow_coherence_values=tuple(flow_coherence_values),
+        whole_frame_green_ratios=tuple(whole_frame_green_ratios),
+        color_fraction=(
+            sum(color_fractions) / len(color_fractions) if color_fractions else 0.0
+        ),
+        warmup_flashlight_ratio=warmup_flashlight_ratio,
+        motion_pixel_fraction=motion_pixel_fraction,
+        motion_pixel_fraction_median=_median(
+            [detected.motion_pixel_fraction for detected in detection.frames]
+        ),
+        blob_count=blob_count,
+        blob_count_median=_median(
+            [float(len(detected.blobs)) for detected in detection.frames]
+        ),
+        white_fraction=white_fraction,
+        frames_with_box=frames_with_box,
+        flashlight_bbox_frames=flashlight_bbox_frames,
+    )
+
+
 def extract_clip_features(
     video_path: str,
     zone: CameraZone,
@@ -1130,159 +1321,17 @@ def features_from_detection(
     """
     frame_width, frame_height = detection.frame_width, detection.frame_height
     considered = detection.frames
-    ignore_mask = (
-        ignore_region_mask(frame_width, frame_height, zone.ignore) if zone.ignore else None
+    ignore_mask = _feature_exclude_mask(detection, zone)
+    summary = _summarize_detection_features(
+        detection,
+        exclude_mask=ignore_mask,
+        daylight_color_fraction=daylight_color_fraction,
+        daylight_hint=daylight_hint,
     )
-    # Auto-detected stationary lights (see `detect_stationary_light_mask`) supplement
-    # any hand-traced `zone.ignore` polygon -- combined into one exclude_mask so a new
-    # fixed light on a camera doesn't need its own polygon before it stops reading as
-    # the guard's flashlight. `tracked_region` (every frame's own tracked box, however
-    # it was found) is carved out first so a guard who dwells in one spot with the
-    # flashlight held steady doesn't get auto-classified as a fixed light and excluded
-    # from their own flashlight scoring.
-    tracked_region = np.zeros((frame_height, frame_width), dtype=bool)
-    for detected in considered:
-        if detected.largest is None:
-            continue
-        x, y, w, h = cv2.boundingRect(detected.largest)
-        pad = 4
-        x0, y0 = max(0, x - pad), max(0, y - pad)
-        x1, y1 = min(frame_width, x + w + pad), min(frame_height, y + h + pad)
-        tracked_region[y0:y1, x0:x1] = True
-    auto_light_mask = detect_stationary_light_mask(
-        [d.frame for d in considered], exclude_region=tracked_region
-    )
-    if np.any(auto_light_mask):
-        ignore_mask = auto_light_mask if ignore_mask is None else (ignore_mask | auto_light_mask)
-
-    centroids: list[tuple[float, float]] = []
-    # Genuine bg-diff hits only (excludes recovered/filled_by_reverse frames) --
-    # motion statistics computed over inferred/template-dragged boxes measure the
-    # tracker's willingness to hallucinate a continuation, not real subject
-    # behaviour (see the daylight-gate/provenance retrospective in repo memory).
-    genuine_centroids: list[tuple[float, float]] = []
-    genuine_blob_areas: list[float] = []
-    genuine_detected_indices: list[int] = []
-    genuine_frames_detected = 0
-    non_genuine_frames = 0
-    # optical_flow_direction_coherence, computed between consecutive GENUINE
-    # frames only (a real bg-diff hit at frame i and again at i+1 -- an
-    # arbitrary gap, or a recovered/filled box, tells nothing about how the
-    # blob's own internal texture actually moved between two real
-    # observations). See src.features.optical_flow_direction_coherence's own
-    # docstring for what this measures and why it's a genuinely new axis.
-    flow_coherence_values: list[float] = []
-    prev_genuine_index: int | None = None
-    prev_genuine_gray: np.ndarray | None = None
-    prev_genuine_contour: np.ndarray | None = None
-    whole_frame_green_ratios: list[float] = []
-    color_fractions: list[float] = []
-    best_contour: np.ndarray | None = None
-    best_frame: np.ndarray | None = None
-    best_area = -1.0
-    # Fallback when every detected frame is merged (see below) -- better to
-    # describe a merged silhouette than to have no shape features at all.
-    best_contour_any: np.ndarray | None = None
-    best_frame_any: np.ndarray | None = None
-    best_area_any = -1.0
-    whole_frame = _whole_frame_contour(frame_width, frame_height)
-    motion_pixel_fraction = 0.0
-    blob_count = 0
-    white_fraction = 0.0
-    frames_with_box = 0
-    flashlight_bbox_frames = 0
-
-    # The guard's flashlight is often visible ONLY in the frames dropped for IR
-    # flare: they walk out of shot before the gain settles, so every scored
-    # frame afterwards contains just whatever moved next (a vine, a bush, a
-    # camera artifact on the last frame). Measured 2026-09-06 on the clips the
-    # user reviewed, the warmup green signal ran 76-97x the scored signal on
-    # exactly those guard clips. Scoring the dropped frames for the flashlight
-    # recovers the guard evidence without letting the flare-corrupted frames
-    # anywhere near the motion features.
-    warmup_flashlight_ratio = 0.0
-    if detection.dropped_frames:
-        warmup_colour = [color_saturation_fraction(f) for f in detection.dropped_frames]
-        warmup_daylight = (
-            sum(warmup_colour) / len(warmup_colour) > daylight_color_fraction
-            and daylight_hint is not False
-        )
-        if not warmup_daylight:
-            warmup_flashlight_ratio = max(
-                green_light_ratio(f, whole_frame, exclude_mask=ignore_mask)
-                for f in detection.dropped_frames
-            )
-
-    for detected in considered:
-        whole_frame_green_ratios.append(
-            green_light_ratio(detected.frame, whole_frame, exclude_mask=ignore_mask)
-        )
-        color_fractions.append(color_saturation_fraction(detected.frame))
-        # Peak-frame readings, not an average -- a storm/wind frame with motion
-        # scattered across many small blobs (bushes, branches) reads very
-        # differently from a single compact subject even at the same threshold.
-        motion_pixel_fraction = max(motion_pixel_fraction, detected.motion_pixel_fraction)
-        blob_count = max(blob_count, len(detected.blobs))
-        if detected.recovered or detected.filled_by_reverse:
-            non_genuine_frames += 1
-        contour = detected.largest
-        if contour is not None:
-            # A bright vegetation/web obstruction against the lens genuinely
-            # overexposes the sensor (see blob_white_fraction's docstring) --
-            # checked on every frame with a box regardless of provenance,
-            # same reasoning as motion_pixel_fraction/blob_count above: a peak
-            # reading, since the obstruction only needs to appear once.
-            white_fraction = max(white_fraction, blob_white_fraction(detected.frame, contour))
-        if contour is None:
-            continue
-        frames_with_box += 1
-        if (
-            flashlight_bbox_overlap(
-                detected.frame, cv2.boundingRect(contour), exclude_mask=ignore_mask
-            )
-            > FLASHLIGHT_SUBJECT_THRESHOLD
-        ):
-            flashlight_bbox_frames += 1
-        area = cv2.contourArea(contour)
-        # Shape features describe the subject at its clearest, not whichever
-        # frame happened to be last -- tracks often end on a fading speck. Any
-        # provenance is eligible here: a recovered/reverse-filled box still
-        # carries a real, previously-measured silhouette worth describing.
-        # A frame where the multi-object tracker sees two+ subjects sharing one
-        # blob (e.g. two people merged) describes a group silhouette, not a
-        # single subject -- excluded from the "clearest frame" pick unless
-        # every detected frame is merged, in which case it's the only option.
-        if area > best_area_any:
-            best_area_any = area
-            best_contour_any = contour
-            best_frame_any = detected.frame
-        if not _frame_is_merged(detection, detected.index) and area > best_area:
-            best_area = area
-            best_contour = contour
-            best_frame = detected.frame
-        if detected.centroid is not None:
-            centroids.append(detected.centroid)
-            if not detected.recovered and not detected.filled_by_reverse:
-                genuine_frames_detected += 1
-                genuine_detected_indices.append(detected.index)
-                genuine_blob_areas.append(area)
-                genuine_centroids.append(detected.centroid)
-                curr_gray = cv2.cvtColor(detected.frame, cv2.COLOR_BGR2GRAY)
-                if prev_genuine_index == detected.index - 1:
-                    coherence = optical_flow_direction_coherence(
-                        prev_genuine_gray, curr_gray, prev_genuine_contour
-                    )
-                    if coherence is not None:
-                        flow_coherence_values.append(coherence)
-                prev_genuine_index = detected.index
-                prev_genuine_gray = curr_gray
-                prev_genuine_contour = contour
-
-    if best_contour is None or best_frame is None:
-        best_contour, best_frame = best_contour_any, best_frame_any
-
-    if best_contour is None or best_frame is None:
+    if summary is None:
         return None
+    best_contour = summary.best_contour
+    best_frame = summary.best_frame
 
     ref_row = reference_row if reference_row is not None else float(frame_height)
     geometry_observations = geometry_observations_from_detection(detection)
@@ -1294,18 +1343,17 @@ def features_from_detection(
     geometry_features = geometry_features_from_observations(geometry_observations, zone)
     metric_observations = metric_observations_from_detection(detection, fps=fps)
     best_width = float(cv2.boundingRect(best_contour)[2])
-    color_fraction = sum(color_fractions) / len(color_fractions) if color_fractions else 0.0
 
     return {
         **geometry_features,
         "aspect_ratio": aspect_ratio(best_contour),
         "solidity": solidity(best_contour),
         "saturation_ratio": saturation_ratio(best_frame, best_contour),
-        "color_fraction": color_fraction,
+        "color_fraction": summary.color_fraction,
         "green_light_ratio": green_light_ratio(
             best_frame, best_contour, exclude_mask=ignore_mask
         ),
-        "green_light_flicker": green_light_flicker(whole_frame_green_ratios),
+        "green_light_flicker": green_light_flicker(summary.whole_frame_green_ratios),
         # Peak flashlight-hue fraction of the WHOLE frame, the scored-frame
         # counterpart of warmup_flashlight_ratio. green_light_ratio only looks
         # inside the tracked contour, so it reads 0.0 whenever the tracker is
@@ -1320,9 +1368,11 @@ def features_from_detection(
         # the current rule set it buys one event. Both numbers would have to
         # improve before it earns a place above the geometry rule.
         "whole_frame_green_ratio": (
-            max(whole_frame_green_ratios) if whole_frame_green_ratios else 0.0
+            max(summary.whole_frame_green_ratios)
+            if summary.whole_frame_green_ratios
+            else 0.0
         ),
-        "warmup_flashlight_ratio": warmup_flashlight_ratio,
+        "warmup_flashlight_ratio": summary.warmup_flashlight_ratio,
         **_warmup_motion_features(
             detection,
             zone,
@@ -1335,32 +1385,36 @@ def features_from_detection(
         ),
         **_multi_object_type_features(detection, zone, frame_width, frame_height),
         "flashlight_subject_fraction": (
-            0.0 if not frames_with_box else flashlight_bbox_frames / frames_with_box
+            0.0
+            if not summary.frames_with_box
+            else summary.flashlight_bbox_frames / summary.frames_with_box
         ),
         "row_normalised_area": row_normalised_area(best_contour, ref_row),
         "edge_density": edge_density(best_frame, best_contour),
-        "blob_white_fraction": white_fraction,
+        "blob_white_fraction": summary.white_fraction,
         "long_flare_frames": float(detection.warmup_dropped),
         # Whole-clip transition, so it spans the dropped warmup frames AND the
         # scored ones -- the flash itself is often inside the flare window.
         "post_flash_red_shift": post_flash_red_shift(
             list(detection.dropped_frames) + [d.frame for d in considered]
         ),
-        "path_length": path_length(genuine_centroids),
-        "jitter": jitter(genuine_centroids),
-        "persistence": persistence(genuine_frames_detected, len(considered)),
-        "motion_pixel_fraction": motion_pixel_fraction,
-        "blob_count": float(blob_count),
+        "path_length": path_length(summary.genuine_centroids),
+        "jitter": jitter(summary.genuine_centroids),
+        "persistence": persistence(summary.genuine_frames_detected, len(considered)),
+        "motion_pixel_fraction": summary.motion_pixel_fraction,
+        "blob_count": float(summary.blob_count),
         # Median counterparts of the two peak readings above. The peak is what a
         # storm needs, but it also fires on a single flare-settle frame at the
         # start of an otherwise quiet clip (cam04/10887 reads [16, 5, 5, 4, 3...]);
         # the median only rises when the scattered motion actually persists.
-        "motion_pixel_fraction_median": _median([d.motion_pixel_fraction for d in considered]),
-        "blob_count_median": _median([float(len(d.blobs)) for d in considered]),
-        "longest_detection_run": longest_detection_run(genuine_detected_indices, len(considered)),
-        "area_stability": area_stability(genuine_blob_areas),
-        "normalised_speed": normalised_speed(genuine_centroids, best_width),
-        "heading_change": heading_change(genuine_centroids),
+        "motion_pixel_fraction_median": summary.motion_pixel_fraction_median,
+        "blob_count_median": summary.blob_count_median,
+        "longest_detection_run": longest_detection_run(
+            summary.genuine_detected_indices, len(considered)
+        ),
+        "area_stability": area_stability(summary.genuine_blob_areas),
+        "normalised_speed": normalised_speed(summary.genuine_centroids, best_width),
+        "heading_change": heading_change(summary.genuine_centroids),
         # Median, not mean, over the frame-pair coherence values -- a single
         # bad optical-flow read (a genuine miss, a compression artefact)
         # shouldn't swing the whole clip's reading the way it would in a
@@ -1369,11 +1423,15 @@ def features_from_detection(
         # with enough texture to measure" -- see optical_flow_direction_
         # coherence's own docstring for why that distinction is real.
         "flow_direction_coherence": (
-            _median(flow_coherence_values) if flow_coherence_values else 0.0
+            _median(summary.flow_coherence_values)
+            if summary.flow_coherence_values
+            else 0.0
         ),
-        "flow_direction_coherence_has_evidence": float(bool(flow_coherence_values)),
+        "flow_direction_coherence_has_evidence": float(
+            bool(summary.flow_coherence_values)
+        ),
         "recovered_fraction": (
-            non_genuine_frames / len(considered) if considered else 0.0
+            summary.non_genuine_frames / len(considered) if considered else 0.0
         ),
         "scenery_motion_fraction": detection.scenery_motion_fraction,
         "has_reference_background": float(detection.has_reference_background),

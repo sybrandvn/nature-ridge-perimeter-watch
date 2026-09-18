@@ -27,6 +27,7 @@ import numpy as np
 
 from src import db
 from src.config import CameraZone
+from src.features import FLASHLIGHT_CANDIDATE_MIN_RATIO
 
 EXTRACTOR_VERSION = "motion-features-v1"
 _NO_MOTION_KEY = "__perimeter_watch_no_motion__"
@@ -153,6 +154,95 @@ def reacquire_by_template(
         window_x0 + match_x + template_width,
         window_y0 + match_y + template_height,
     )
+
+
+def track_contour(
+    candidates: list[np.ndarray],
+    track_bbox: tuple[int, int, int, int] | None,
+    *,
+    max_jump_distance: float,
+    size_margin_fraction: float = 0.75,
+    min_size_margin: float = 6.0,
+    max_size_change_ratio: float = 4.0,
+    min_reacquire_area: float = 20.0,
+    flashlight_scores: list[float] | None = None,
+) -> np.ndarray | None:
+    """Select the contour that plausibly continues a single tracked subject.
+
+    A continuing subject must overlap, or stay within a box-size-scaled search
+    margin, and cannot abruptly balloon or collapse in area.  A failed
+    continuation is a miss, not a jump to the frame's largest blob: the
+    caller's appearance-recovery policy gets the next chance to recover it.
+    A fresh/reacquired subject must clear ``min_reacquire_area`` so a forced
+    reset cannot silently follow sensor speckle. Optional flashlight scores
+    let a smaller verified torch beat an unrelated larger bush, including when
+    it appears independently while another track is active.
+    """
+    if not candidates:
+        return None
+    if track_bbox is None:
+        eligible = [
+            index
+            for index, contour in enumerate(candidates)
+            if cv2.contourArea(contour) >= min_reacquire_area
+        ]
+        if not eligible:
+            return None
+        if flashlight_scores is not None:
+            flashlight_candidates = [
+                index
+                for index in eligible
+                if flashlight_scores[index] > FLASHLIGHT_CANDIDATE_MIN_RATIO
+            ]
+            if flashlight_candidates:
+                eligible = flashlight_candidates
+        return candidates[max(eligible, key=lambda index: cv2.contourArea(candidates[index]))]
+
+    boxes = [_contour_bbox(contour) for contour in candidates]
+    track_area = _bbox_area(track_bbox)
+    size_ok = [
+        _size_change_plausible(track_area, _bbox_area(box), max_size_change_ratio)
+        for box in boxes
+    ]
+    overlaps = [
+        _bbox_iou(track_bbox, box) if plausible else 0.0
+        for box, plausible in zip(boxes, size_ok, strict=True)
+    ]
+    best_overlap = max(range(len(candidates)), key=lambda index: overlaps[index])
+    if overlaps[best_overlap] > 0:
+        return candidates[best_overlap]
+
+    track_center = _bbox_center(track_bbox)
+    distances = [
+        ((center_x - track_center[0]) ** 2 + (center_y - track_center[1]) ** 2) ** 0.5
+        if plausible
+        else float("inf")
+        for plausible, (center_x, center_y) in zip(
+            size_ok, (_bbox_center(box) for box in boxes), strict=True
+        )
+    ]
+    closest = min(range(len(candidates)), key=lambda index: distances[index])
+    allowed_distance = min(
+        max_jump_distance,
+        _size_relative_margin(
+            track_bbox, margin_fraction=size_margin_fraction, min_margin=min_size_margin
+        ),
+    )
+    if distances[closest] <= allowed_distance:
+        return candidates[closest]
+
+    if flashlight_scores is not None:
+        flashlight_candidates = [
+            index
+            for index, score in enumerate(flashlight_scores)
+            if score > FLASHLIGHT_CANDIDATE_MIN_RATIO
+            and cv2.contourArea(candidates[index]) >= min_reacquire_area
+        ]
+        if flashlight_candidates:
+            return candidates[
+                max(flashlight_candidates, key=lambda index: cv2.contourArea(candidates[index]))
+            ]
+    return None
 
 
 @dataclass(frozen=True)

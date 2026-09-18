@@ -16,6 +16,7 @@ from src.motion import (
     largest_contour,
     put_cached_features,
     reacquire_by_template,
+    track_contour,
 )
 
 _ZONE = CameraZone(fence=((0.0, 0.5), (1.0, 0.5)), outside="left", depth_cutoff=0.1, ignore=())
@@ -33,6 +34,7 @@ def test_detector_dtos_live_in_motion_and_spike_reexports_them():
     assert spike.largest_contour is largest_contour
     assert spike.contour_centroid is contour_centroid
     assert spike.reacquire_by_template is reacquire_by_template
+    assert spike.track_contour is track_contour
 
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     observed = FrameDetection(

@@ -57,8 +57,10 @@ the corner-form bounding-box primitives (area, IoU, centre, size plausibility an
 margin). `scripts.spike` re-exports them for compatibility while `track_contour` and the larger
 tracking passes still use them. The next slice also moved template reacquisition and recovered-box
 contour construction to `src.motion`; the high-level single/multi-object tracking passes remain in
-`scripts.spike`. Full tests remain 723 passing and the incident/animal regression check remains
-green after the move.
+`scripts.spike`. `track_contour`, the single-subject continuation policy (overlap, size-scaled
+distance, area plausibility and flashlight override), now also lives in `src.motion`; the next
+substantial extraction is `_run_track_pass`, which owns the state-machine sequencing around it.
+Full tests remain 723 passing and the incident/animal regression check remains green after the move.
 
 ## Handoff for a new agent (2026-09-16, session #18)
 

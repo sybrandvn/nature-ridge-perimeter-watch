@@ -633,8 +633,13 @@ class ClassificationThresholds:
     outside_pixel_fraction_min: float
     median_fence_distance_min: float
     median_fence_distance_max: float
+    corroborated_median_fence_distance_max: float
+    corroborated_multi_object_fraction_min: float
     color_fraction_min: float
     row_normalised_area_max: float
+    far_outside_subject_height_min: float
+    far_outside_subject_height_max: float
+    far_outside_edge_density_max: float
     near_fence_distance_min: float
     near_fence_blob_count_max: float
     straddle_pixel_fraction_min: float
@@ -676,8 +681,19 @@ _CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
     "outside_pixel_fraction_min": ("outside", "pixel_fraction_min"),
     "median_fence_distance_min": ("outside", "median_fence_distance_min"),
     "median_fence_distance_max": ("outside", "median_fence_distance_max"),
+    "corroborated_median_fence_distance_max": (
+        "outside",
+        "corroborated_median_fence_distance_max",
+    ),
+    "corroborated_multi_object_fraction_min": (
+        "outside",
+        "corroborated_multi_object_fraction_min",
+    ),
     "color_fraction_min": ("outside", "color_fraction_min"),
     "row_normalised_area_max": ("animal", "row_normalised_area_max"),
+    "far_outside_subject_height_min": ("animal", "far_outside_subject_height_min"),
+    "far_outside_subject_height_max": ("animal", "far_outside_subject_height_max"),
+    "far_outside_edge_density_max": ("animal", "far_outside_edge_density_max"),
     "near_fence_distance_min": ("animal", "near_fence_distance_min"),
     "near_fence_blob_count_max": ("animal", "near_fence_blob_count_max"),
     "straddle_pixel_fraction_min": ("animal", "straddle_pixel_fraction_min"),

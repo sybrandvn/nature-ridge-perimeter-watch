@@ -2337,6 +2337,8 @@ def test_compact_geometry_observations_replay_fence_features(monkeypatch):
         for key in (
             "outside_pixel_fraction",
             "zone_classifiable_fraction",
+            "outside_area_fraction",
+            "zone_classifiable_area_fraction",
             "outside_frame_fraction",
             "multi_object_outside_fraction_weighted",
             "multi_object_dominant_outside_fraction",
@@ -2345,6 +2347,31 @@ def test_compact_geometry_observations_replay_fence_features(monkeypatch):
             "median_fence_distance",
         )
     }
+
+
+def test_rasterized_zone_fraction_is_independent_of_contour_vertex_density():
+    zone = CameraZone(
+        fence=((0.5, 0.0), (0.5, 1.0)),
+        outside="right",
+        depth_cutoff=0.0,
+        ignore=(),
+    )
+    rectangle = ((0.4, 0.2), (0.4, 0.8), (0.9, 0.8), (0.9, 0.2))
+    same_rectangle = (
+        (0.4, 0.2),
+        (0.4, 0.8),
+        (0.9, 0.8),
+        (0.9, 0.6),
+        (0.9, 0.4),
+        (0.9, 0.2),
+    )
+
+    original = scoring.rasterized_zone_fractions(rectangle, 100, 100, zone)
+    resampled = scoring.rasterized_zone_fractions(same_rectangle, 100, 100, zone)
+
+    assert original == resampled
+    assert original[0] == pytest.approx(40 / 51)
+    assert original[1] == 1.0
 
 
 def test_extract_clip_features_uncalibrated_when_zone_has_no_pickets(monkeypatch, tmp_path):

@@ -642,6 +642,10 @@ def test_flare_settle_index_is_zero_for_a_clip_that_never_flares():
     assert flare_settle_index([44] * 10) == 0
 
 
+def test_flare_settle_index_does_not_treat_a_late_flash_as_warmup():
+    assert flare_settle_index([30.0] * 18 + [60.0] * 2) == 0
+
+
 def test_flare_settle_index_never_discards_more_than_max_fraction():
     # A short clip that ramps most of the way through must still keep footage:
     # the cameras are motion-triggered, so the subject is already in frame.

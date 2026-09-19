@@ -59,11 +59,15 @@ from src.motion import (
     MetricFrameObservation,
     MetricObservations,
     TrackedObject,
+    _bbox_iou,
     _bbox_to_rect_contour,
+    _contour_bbox,
     detect_clip,
 )
 from src.zones import (
+    _fence_x_at_y,
     classify_zone,
+    effective_fence,
     median_fence_distance,
     outside_pixel_fraction,
     track_crosses_fence,
@@ -83,6 +87,59 @@ def normalized_contour_points(contour: np.ndarray, frame_width: int, frame_heigh
     return [(float(x) / frame_width, float(y) / frame_height) for [[x, y]] in contour]
 
 
+def rasterized_zone_fractions(
+    points: tuple[tuple[float, float], ...] | list[tuple[float, float]],
+    frame_width: int,
+    frame_height: int,
+    zone: CameraZone,
+) -> tuple[float, float]:
+    """Return (outside, classifiable) fractions over the filled silhouette.
+
+    The legacy ``outside_pixel_fraction`` samples contour vertices, so merely
+    changing OpenCV's contour encoding can change its value. This additive
+    measurement rasterizes the polygon and weights every occupied pixel
+    equally. It remains reporting-only until corpus measurements justify
+    replacing a tuned legacy classifier input.
+    """
+    fence = effective_fence(zone)
+    if not points or fence is None or zone.outside is None:
+        return 0.0, 0.0
+    contour = np.array(
+        [
+            [
+                [
+                    int(round(x * frame_width)),
+                    int(round(y * frame_height)),
+                ]
+            ]
+            for x, y in points
+        ],
+        dtype=np.int32,
+    )
+    contour[:, 0, 0] = np.clip(contour[:, 0, 0], 0, frame_width - 1)
+    contour[:, 0, 1] = np.clip(contour[:, 0, 1], 0, frame_height - 1)
+    silhouette = np.zeros((frame_height, frame_width), dtype=np.uint8)
+    cv2.drawContours(silhouette, [contour], -1, 1, thickness=-1)
+    ys, xs = np.nonzero(silhouette)
+    total = len(xs)
+    if total == 0:
+        return 0.0, 0.0
+
+    classifiable = ys.astype(float) / frame_height >= zone.depth_cutoff
+    if zone.ignore:
+        classifiable &= ~ignore_region_mask(frame_width, frame_height, zone.ignore)[ys, xs]
+    if not np.any(classifiable):
+        return 0.0, 0.0
+
+    xs_valid = xs[classifiable]
+    ys_valid = ys[classifiable]
+    fence_x = np.array(
+        [_fence_x_at_y(float(y) / frame_height, fence) * frame_width for y in ys_valid]
+    )
+    outside = xs_valid > fence_x if zone.outside == "right" else xs_valid < fence_x
+    return float(np.mean(outside)), float(np.count_nonzero(classifiable) / total)
+
+
 def _whole_frame_contour(frame_width: int, frame_height: int) -> np.ndarray:
     w, h = frame_width - 1, frame_height - 1
     return np.array([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]], dtype=np.int32)
@@ -96,9 +153,18 @@ def _frame_is_merged(detection: ClipDetection, frame_index: int) -> bool:
     """True if the multi-object tracker sees two or more subjects sharing one
     blob in this frame (`TrackedObject.merged_ids` non-empty) -- that frame's
     largest contour describes a merged group silhouette, not one subject."""
-    if frame_index >= len(detection.multi_tracks):
+    if frame_index >= len(detection.multi_tracks) or frame_index >= len(detection.frames):
         return False
-    return any(t.merged_ids for t in detection.multi_tracks[frame_index])
+    contour = detection.frames[frame_index].largest
+    if contour is None:
+        return False
+    contour_bbox = _contour_bbox(contour)
+    overlapping = [
+        track
+        for track in detection.multi_tracks[frame_index]
+        if _bbox_iou(contour_bbox, track.bbox) > 0.0
+    ]
+    return any(track.merged_ids for track in overlapping)
 
 
 def _warmup_motion_features(
@@ -168,6 +234,7 @@ def _warmup_motion_features(
         "warmup_outside_fraction": 0.0,
         "warmup_dynamic_frame_fraction": 0.0,
         "warmup_dynamic_outside_fraction": 0.0,
+        "warmup_dynamic_classifiable_fraction": 0.0,
     }
     dropped = detection.dropped_frames
     if len(dropped) < 2:
@@ -256,6 +323,9 @@ def _warmup_motion_features(
             / len(dynamic_classifiable)
             if dynamic_classifiable
             else 0.0
+        ),
+        "warmup_dynamic_classifiable_fraction": (
+            len(dynamic_classifiable) / dynamic_hits if dynamic_hits > 0 else 0.0
         ),
     }
 
@@ -524,9 +594,14 @@ def geometry_features_from_observations(
         outside_pixel_fraction(contour, zone) > 0.5 for contour in classified
     )
     outside_fraction = outside_pixel_fraction(points, zone)
+    outside_area_fraction, classifiable_area_fraction = rasterized_zone_fractions(
+        points, observations.frame_width, observations.frame_height, zone
+    )
     return {
         "outside_pixel_fraction": outside_fraction,
         "zone_classifiable_fraction": zone_classifiable_fraction(points, zone),
+        "outside_area_fraction": outside_area_fraction,
+        "zone_classifiable_area_fraction": classifiable_area_fraction,
         "outside_frame_fraction": outside_frames / len(classified) if classified else 0.0,
         **_multi_object_outside_features_from_tracks(
             observations.multi_tracks,
@@ -538,6 +613,27 @@ def geometry_features_from_observations(
         "fence_crossed": float(track_crosses_fence(observations.centroid_track, zone)),
         "median_fence_distance": median_fence_distance(observations.centroid_track, zone),
     }
+
+
+def multi_object_flashlight_scores(
+    detection: ClipDetection,
+    *,
+    exclude_mask: np.ndarray | None = None,
+) -> dict[int, float]:
+    """Return each persistent track's peak rectangular flashlight ratio."""
+    scores: dict[int, float] = {}
+    for frame_index, frame_tracks in enumerate(detection.multi_tracks):
+        if frame_index >= len(detection.frames):
+            continue
+        frame_bgr = detection.frames[frame_index].frame
+        for obj in frame_tracks:
+            ratio = green_light_ratio(
+                frame_bgr,
+                _bbox_to_rect_contour(obj.bbox),
+                exclude_mask=exclude_mask,
+            )
+            scores[obj.track_id] = max(scores.get(obj.track_id, 0.0), ratio)
+    return scores
 
 
 def _multi_object_flashlight_features(
@@ -589,9 +685,10 @@ def _multi_object_flashlight_features(
     guard and this repo's `uncalibrated`/`has_reference_background` flags
     already use.
 
-    Reporting-only, like `_multi_object_outside_features` before it -- not
-    read by classify() without its own measurement pass first, same
-    discipline every detect_clip-level addition in this repo follows.
+    This began reporting-only, then its full-corpus measurement showed no
+    protected-class regression and it became the ``multi_object_flashlight``
+    guard rule. The dominant non-flashlight outside fields remain reporting
+    evidence and do not override that measured rule.
     """
     zeros = {
         "multi_object_flashlight_track_count": 0.0,
@@ -602,24 +699,16 @@ def _multi_object_flashlight_features(
     if not detection.multi_tracks:
         return zeros
 
-    flashlight_scores: dict[int, float] = {}
+    flashlight_scores = multi_object_flashlight_scores(
+        detection, exclude_mask=exclude_mask
+    )
     verdicts: dict[int, list[bool]] = {}
     areas: dict[int, float] = {}
-    for frame_index, frame_tracks in enumerate(detection.multi_tracks):
-        frame_bgr = (
-            detection.frames[frame_index].frame if frame_index < len(detection.frames) else None
-        )
+    for frame_tracks in detection.multi_tracks:
         for obj in frame_tracks:
             # obj.bbox is corner form (x0, y0, x1, y1) -- see the note in
             # _multi_object_outside_features above.
             x0, y0, x1, y1 = obj.bbox
-            if frame_bgr is not None:
-                ratio = green_light_ratio(
-                    frame_bgr, _bbox_to_rect_contour(obj.bbox), exclude_mask=exclude_mask
-                )
-                flashlight_scores[obj.track_id] = max(
-                    flashlight_scores.get(obj.track_id, 0.0), ratio
-                )
             point = ((x0 + x1) / 2.0 / frame_width, y1 / frame_height)
             verdict = classify_zone(point, zone)
             if verdict in ("outside", "inside"):
@@ -960,10 +1049,14 @@ class _DetectionFeatureSummary:
     flashlight_bbox_frames: int
 
 
-def _feature_exclude_mask(
+def feature_exclude_mask(
     detection: ClipDetection, zone: CameraZone
 ) -> np.ndarray | None:
-    """Combine configured ignore regions with automatically stable lights."""
+    """Combine configured ignore regions with automatically stable lights.
+
+    This is public so diagnostic renderers can use the exact exclusion mask
+    used by feature extraction instead of maintaining a visual approximation.
+    """
     frame_width, frame_height = detection.frame_width, detection.frame_height
     exclude_mask = (
         ignore_region_mask(frame_width, frame_height, zone.ignore) if zone.ignore else None
@@ -989,6 +1082,38 @@ def _feature_exclude_mask(
     return exclude_mask
 
 
+def warmup_flashlight_diagnostics(
+    detection: ClipDetection,
+    *,
+    exclude_mask: np.ndarray | None,
+    daylight_color_fraction: float,
+    daylight_hint: bool | None,
+) -> tuple[bool, tuple[float, ...]]:
+    """Return the warmup daylight gate and each raw frame's light ratio.
+
+    Keeping this calculation shared with the debug renderer ensures that its
+    warmup outlines, gate explanation and displayed ratios describe the exact
+    frames and thresholds used by ``warmup_flashlight_ratio``.
+    """
+    if not detection.dropped_frames:
+        return False, ()
+    warmup_colour = [
+        color_saturation_fraction(frame) for frame in detection.dropped_frames
+    ]
+    daylight_gated = (
+        sum(warmup_colour) / len(warmup_colour) > daylight_color_fraction
+        and daylight_hint is not False
+    )
+    whole_frame = _whole_frame_contour(
+        detection.frame_width, detection.frame_height
+    )
+    ratios = tuple(
+        green_light_ratio(frame, whole_frame, exclude_mask=exclude_mask)
+        for frame in detection.dropped_frames
+    )
+    return daylight_gated, ratios
+
+
 def _warmup_flashlight_feature(
     detection: ClipDetection,
     *,
@@ -997,24 +1122,15 @@ def _warmup_flashlight_feature(
     daylight_hint: bool | None,
 ) -> float:
     """Measure flashlight colour without requiring a settled-frame track."""
-    if not detection.dropped_frames:
+    daylight_gated, ratios = warmup_flashlight_diagnostics(
+        detection,
+        exclude_mask=exclude_mask,
+        daylight_color_fraction=daylight_color_fraction,
+        daylight_hint=daylight_hint,
+    )
+    if daylight_gated or not ratios:
         return 0.0
-    warmup_colour = [
-        color_saturation_fraction(frame) for frame in detection.dropped_frames
-    ]
-    warmup_daylight = (
-        sum(warmup_colour) / len(warmup_colour) > daylight_color_fraction
-        and daylight_hint is not False
-    )
-    if warmup_daylight:
-        return 0.0
-    whole_frame = _whole_frame_contour(
-        detection.frame_width, detection.frame_height
-    )
-    return max(
-        green_light_ratio(frame, whole_frame, exclude_mask=exclude_mask)
-        for frame in detection.dropped_frames
-    )
+    return max(ratios)
 
 
 def _summarize_detection_features(
@@ -1454,7 +1570,7 @@ def features_from_detection(
     an ignore polygon still requires detection. Fence, side, depth and metric
     calibration changes can be re-scored from the same detection object.
     """
-    ignore_mask = _feature_exclude_mask(detection, zone)
+    ignore_mask = feature_exclude_mask(detection, zone)
     summary = _summarize_detection_features(
         detection,
         exclude_mask=ignore_mask,
@@ -1478,6 +1594,8 @@ def features_from_detection(
             "green_light_ratio": 0.0,
             "green_light_flicker": 0.0,
             "outside_pixel_fraction": 0.0,
+            "outside_area_fraction": 0.0,
+            "zone_classifiable_area_fraction": 0.0,
             "median_fence_distance": 0.0,
             "color_fraction": 0.0,
             "blob_count": 0.0,

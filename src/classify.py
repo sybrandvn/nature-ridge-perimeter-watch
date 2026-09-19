@@ -459,6 +459,7 @@ def _alert_suppression(
         >= thresholds.camera_artifact_black_white_balance_min
         and features.get("warmup_dynamic_frame_fraction", 0.0)
         >= thresholds.warmup_dynamic_frame_fraction_min
+        and features.get("warmup_dynamic_classifiable_fraction", 0.0) > 0.0
         and features.get("warmup_dynamic_outside_fraction", 1.0)
         <= thresholds.warmup_dynamic_outside_fraction_max
     ):
@@ -470,6 +471,9 @@ def _alert_suppression(
                 "blob_black_white_balance": black_white_balance,
                 "warmup_dynamic_frame_fraction": features.get(
                     "warmup_dynamic_frame_fraction", 0.0
+                ),
+                "warmup_dynamic_classifiable_fraction": features.get(
+                    "warmup_dynamic_classifiable_fraction", 0.0
                 ),
                 "warmup_dynamic_outside_fraction": features.get(
                     "warmup_dynamic_outside_fraction", 1.0
@@ -501,7 +505,8 @@ def classify_detailed(
     `warmup_flashlight`, `warmup_dynamic_inside`,
     `warmup_only_unclassified`, `multi_object_flashlight`, `blob_count_peak`,
     `blob_count_sustained`, `inside_elevated_animal`, `implausible_height`,
-    `near_fence_animal`, `fence_straddle_no_colour`, `blinding_blob_white`,
+    `near_fence_animal`, `fence_straddle_no_colour`, `far_outside_animal`,
+    `far_outside_multitrack`, `blinding_blob_white`,
     `motion_pixel_sustained`, `animal_row_area`,
     `insufficient_detection_evidence`, `outside_colour`,
     `outside_no_colour`, `warmup_inside_terminal_artifact`,
@@ -538,6 +543,7 @@ def classify_detailed(
         features.get("scored_motion_present", 1.0) == 0.0
         and features.get("warmup_dynamic_frame_fraction", 0.0)
         >= thresholds.warmup_dynamic_frame_fraction_min
+        and features.get("warmup_dynamic_classifiable_fraction", 0.0) > 0.0
         and features.get("warmup_dynamic_outside_fraction", 1.0)
         <= thresholds.warmup_dynamic_outside_fraction_max
     ):
@@ -548,6 +554,9 @@ def classify_detailed(
                 "scored_motion_present": features.get("scored_motion_present", 1.0),
                 "warmup_dynamic_frame_fraction": features.get(
                     "warmup_dynamic_frame_fraction", 0.0
+                ),
+                "warmup_dynamic_classifiable_fraction": features.get(
+                    "warmup_dynamic_classifiable_fraction", 0.0
                 ),
                 "warmup_dynamic_outside_fraction": features.get(
                     "warmup_dynamic_outside_fraction", 1.0
@@ -615,6 +624,54 @@ def classify_detailed(
                 "blob_count": features["blob_count"],
                 "color_fraction": features["color_fraction"],
                 "is_daylight": features.get("is_daylight", False),
+            },
+        )
+    if (
+        features["outside_pixel_fraction"] > thresholds.outside_pixel_fraction_min
+        and features["median_fence_distance"] >= thresholds.median_fence_distance_max
+        and features["median_fence_distance"]
+        < thresholds.corroborated_median_fence_distance_max
+        and features["color_fraction"] <= thresholds.color_fraction_min
+        and features.get("multi_object_count", 0.0) > 1.0
+        and features.get("multi_object_outside_fraction_weighted", 0.0)
+        > thresholds.corroborated_multi_object_fraction_min
+        and features.get("multi_object_dominant_outside_fraction", 0.0)
+        > thresholds.outside_pixel_fraction_min
+        and not (
+            features.get("uncalibrated", 1.0) == 0.0
+            and features.get("implausible_height_fraction", 0.0)
+            > thresholds.implausible_height_fraction_min
+        )
+        and features["blob_count"] < thresholds.blob_count_peak_min
+        and features.get("blob_white_fraction", 0.0) < thresholds.blob_white_fraction_min
+        and features.get("motion_pixel_fraction_median", 0.0)
+        <= thresholds.motion_pixel_fraction_median_min
+    ):
+        if suppressed := _alert_suppression(features, thresholds):
+            return suppressed
+        return ClassificationResult(
+            "incident_candidate",
+            "far_outside_multitrack",
+            {
+                "outside_pixel_fraction": features["outside_pixel_fraction"],
+                "median_fence_distance": features["median_fence_distance"],
+                "color_fraction": features["color_fraction"],
+                "multi_object_count": features.get("multi_object_count", 0.0),
+                "multi_object_outside_fraction_weighted": features.get(
+                    "multi_object_outside_fraction_weighted", 0.0
+                ),
+                "multi_object_dominant_outside_fraction": features.get(
+                    "multi_object_dominant_outside_fraction", 0.0
+                ),
+                "uncalibrated": features.get("uncalibrated", 1.0),
+                "implausible_height_fraction": features.get(
+                    "implausible_height_fraction", 0.0
+                ),
+                "blob_count": features["blob_count"],
+                "blob_white_fraction": features.get("blob_white_fraction", 0.0),
+                "motion_pixel_fraction_median": features.get(
+                    "motion_pixel_fraction_median", 0.0
+                ),
             },
         )
     if (
@@ -703,6 +760,48 @@ def classify_detailed(
                     "motion_pixel_fraction_median", 0.0
                 ),
                 "scenery_motion_fraction": features.get("scenery_motion_fraction", 0.0),
+            },
+        )
+    # The generic distance ceiling rejects far-away scenery. Metric-calibrated
+    # cameras can make the narrower positive statement that a compact outside
+    # subject has a plausible small-animal height. The measured band recovers
+    # the two previously missed cam12 animal events with no labelled negative
+    # match; daylight, colour and low internal edge density exclude foliage.
+    if (
+        features["outside_pixel_fraction"] > thresholds.outside_pixel_fraction_min
+        and features["median_fence_distance"] >= thresholds.median_fence_distance_max
+        and features.get("uncalibrated", 1.0) == 0.0
+        and thresholds.far_outside_subject_height_min
+        <= (features.get("subject_height_m") or 0.0)
+        <= thresholds.far_outside_subject_height_max
+        and features.get("is_daylight", False)
+        and features["color_fraction"] > thresholds.color_fraction_min
+        and features.get("row_normalised_area", 0.0) <= thresholds.row_normalised_area_max
+        and features.get("edge_density", 1.0) <= thresholds.far_outside_edge_density_max
+        and features["blob_count"] <= thresholds.near_fence_blob_count_max
+        and features.get("blob_white_fraction", 0.0) < thresholds.blob_white_fraction_min
+        and features.get("motion_pixel_fraction_median", 0.0)
+        <= thresholds.motion_pixel_fraction_median_min
+    ):
+        if suppressed := _alert_suppression(features, thresholds):
+            return suppressed
+        return ClassificationResult(
+            "animal_candidate",
+            "far_outside_animal",
+            {
+                "outside_pixel_fraction": features["outside_pixel_fraction"],
+                "median_fence_distance": features["median_fence_distance"],
+                "uncalibrated": features.get("uncalibrated", 1.0),
+                "subject_height_m": features.get("subject_height_m") or 0.0,
+                "is_daylight": features.get("is_daylight", False),
+                "color_fraction": features["color_fraction"],
+                "row_normalised_area": features.get("row_normalised_area", 0.0),
+                "edge_density": features.get("edge_density", 1.0),
+                "blob_count": features["blob_count"],
+                "blob_white_fraction": features.get("blob_white_fraction", 0.0),
+                "motion_pixel_fraction_median": features.get(
+                    "motion_pixel_fraction_median", 0.0
+                ),
             },
         )
     if (

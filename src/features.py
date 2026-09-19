@@ -730,12 +730,51 @@ def flare_settle_index(
     motion-triggered, so the subject is often already moving during the ramp,
     and on a short clip dropping the ramp can mean dropping the whole event.
     """
-    flagged = flare_frames(frame_medians, tolerance=tolerance)
-    settle = 0
-    for i, is_flare in enumerate(flagged):
-        if is_flare:
-            settle = i + 1
-    return min(settle, int(len(frame_medians) * max_fraction))
+    n = len(frame_medians)
+    if n < 2:
+        return 0
+    changes = [
+        abs(frame_medians[index + 1] - frame_medians[index]) > tolerance
+        for index in range(n - 1)
+    ]
+    try:
+        first_change = changes.index(True)
+    except ValueError:
+        return 0
+
+    # Warmup is an opening phenomenon. A clip that has already supplied three
+    # stable transitions before its first exposure jump has settled; treating
+    # a later torch/lighting change as startup used to discard a clean prefix.
+    opening_grace_transitions = 2
+    opening_level = float(np.median(frame_medians[: first_change + 1]))
+    starts_near_black = opening_level <= tolerance * 2.0
+    if first_change > opening_grace_transitions and not starts_near_black:
+        return 0
+
+    if starts_near_black:
+        # A delayed transition out of a near-black prefix is still camera
+        # startup, and a later return to black belongs to the same unstable
+        # exposure sequence. This is the common shape of the incident clips:
+        # retaining the blank plateau makes the tracker lock onto an onside
+        # artifact before the outside subject becomes visible.
+        last_change = max(index for index, changed in enumerate(changes) if changed)
+        return min(last_change + 2, int(n * max_fraction))
+
+    last_change = first_change
+    stable_run = 0
+    stable_transitions_to_settle = 3
+    for index in range(first_change + 1, len(changes)):
+        if changes[index]:
+            last_change = index
+            stable_run = 0
+        else:
+            stable_run += 1
+            if stable_run >= stable_transitions_to_settle:
+                break
+
+    # A change between frames i and i+1 contaminates both, so scoring begins
+    # at i+2. Preserve the existing maximum-discard safety cap.
+    return min(last_change + 2, int(n * max_fraction))
 
 
 def photometric_match(source: np.ndarray, reference: np.ndarray) -> tuple[float, float]:

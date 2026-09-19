@@ -59,11 +59,41 @@ def test_classify_guard_candidate_on_warmup_only_inside_motion():
             scored_motion_present=0.0,
             warmup_dynamic_frame_fraction=0.9,
             warmup_dynamic_outside_fraction=0.0,
+            warmup_dynamic_classifiable_fraction=1.0,
         )
     )
 
     assert result.category == "guard_candidate"
     assert result.reason == "warmup_dynamic_inside"
+
+
+def test_unvalidated_outside_coexistence_does_not_override_flashlight():
+    result = classify_detailed(
+        _features(
+            outside_pixel_fraction=0.9,
+            zone_classifiable_fraction=1.0,
+            median_fence_distance=0.2,
+            multi_object_max_flashlight_ratio=0.1,
+            multi_object_dominant_excl_flashlight_has_evidence=1.0,
+            multi_object_dominant_excl_flashlight_outside_fraction=1.0,
+        )
+    )
+
+    assert result.category == "guard_candidate"
+    assert result.reason == "multi_object_flashlight"
+
+
+def test_separate_flashlight_still_identifies_guard_when_other_object_is_inside():
+    result = classify_detailed(
+        _features(
+            multi_object_max_flashlight_ratio=0.1,
+            multi_object_dominant_excl_flashlight_has_evidence=1.0,
+            multi_object_dominant_excl_flashlight_outside_fraction=0.0,
+        )
+    )
+
+    assert result.category == "guard_candidate"
+    assert result.reason == "multi_object_flashlight"
 
 
 def test_warmup_dynamic_inside_does_not_steal_scored_subject():
@@ -76,6 +106,20 @@ def test_warmup_dynamic_inside_does_not_steal_scored_subject():
     )
 
     assert classify(features) == "incident_candidate"
+
+
+def test_warmup_dynamic_inside_requires_classifiable_geometry():
+    result = classify_detailed(
+        _features(
+            scored_motion_present=0.0,
+            warmup_dynamic_frame_fraction=0.9,
+            warmup_dynamic_outside_fraction=0.0,
+            warmup_dynamic_classifiable_fraction=0.0,
+        )
+    )
+
+    assert result.category == "unclassified"
+    assert result.reason == "warmup_only_unclassified"
 
 
 def test_other_warmup_only_motion_remains_unclassified():
@@ -548,6 +592,66 @@ def test_classify_animal_incident_geometry_upper_bounded():
     assert classify(features) != "animal_candidate"
 
 
+def test_classify_far_outside_metric_animal():
+    result = classify_detailed(
+        _features(
+            outside_pixel_fraction=1.0,
+            zone_classifiable_fraction=1.0,
+            median_fence_distance=0.48,
+            uncalibrated=0.0,
+            subject_height_m=0.41,
+            is_daylight=True,
+            color_fraction=0.42,
+            row_normalised_area=800.0,
+            edge_density=0.0,
+            blob_count=1.0,
+            blob_white_fraction=0.0,
+            motion_pixel_fraction_median=0.001,
+        )
+    )
+
+    assert result.category == "animal_candidate"
+    assert result.reason == "far_outside_animal"
+
+
+def test_classify_far_outside_rejects_scenery_sized_metric_blob():
+    features = _features(
+        outside_pixel_fraction=1.0,
+        zone_classifiable_fraction=1.0,
+        median_fence_distance=0.48,
+        uncalibrated=0.0,
+        subject_height_m=0.2,
+        is_daylight=True,
+        color_fraction=0.42,
+        row_normalised_area=800.0,
+        edge_density=0.0,
+        blob_count=1.0,
+        blob_white_fraction=0.0,
+        motion_pixel_fraction_median=0.001,
+    )
+
+    assert classify_detailed(features).reason == "no_rule_matched"
+
+
+def test_classify_far_outside_multitrack_incident():
+    result = classify_detailed(
+        _features(
+            outside_pixel_fraction=1.0,
+            median_fence_distance=0.42,
+            color_fraction=0.03,
+            multi_object_count=21.0,
+            multi_object_outside_fraction_weighted=0.97,
+            multi_object_dominant_outside_fraction=1.0,
+            blob_count=4.0,
+            blob_white_fraction=0.0,
+            motion_pixel_fraction_median=0.0,
+        )
+    )
+
+    assert result.category == "incident_candidate"
+    assert result.reason == "far_outside_multitrack"
+
+
 def test_classify_animal_incident_geometry_upper_bound_boundary():
     # The highest incident in the labelled corpus is 0.353 -- comfortably
     # under the 0.40 bound, with real margin either side of it.
@@ -796,6 +900,7 @@ def test_classify_terminal_reverse_artifact_threshold_is_wired():
         blob_black_white_balance=0.188,
         warmup_dynamic_frame_fraction=0.9,
         warmup_dynamic_outside_fraction=0.0,
+        warmup_dynamic_classifiable_fraction=1.0,
     )
     assert classify(features) == "guard_candidate"
     assert (
@@ -1273,6 +1378,7 @@ def test_reason_warmup_inside_terminal_artifact():
         blob_black_white_balance=0.188,
         warmup_dynamic_frame_fraction=0.9,
         warmup_dynamic_outside_fraction=0.0,
+        warmup_dynamic_classifiable_fraction=1.0,
     )
     result = classify_detailed(features)
     assert result.category == "guard_candidate" == classify(features)
@@ -1281,6 +1387,7 @@ def test_reason_warmup_inside_terminal_artifact():
         "terminal_reverse_seed": 1.0,
         "blob_black_white_balance": 0.188,
         "warmup_dynamic_frame_fraction": 0.9,
+        "warmup_dynamic_classifiable_fraction": 1.0,
         "warmup_dynamic_outside_fraction": 0.0,
     }
 

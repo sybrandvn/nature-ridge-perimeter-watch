@@ -39,7 +39,7 @@ from src.features import (
 )
 from src.reference_bg import align
 
-EXTRACTOR_VERSION = "motion-features-v6"
+EXTRACTOR_VERSION = "motion-features-v7"
 _NO_MOTION_KEY = "__perimeter_watch_no_motion__"
 _FLAT_PATCH_STD = 1e-3
 _FLAT_PATCH_TOLERANCE = 2.0
@@ -137,7 +137,8 @@ def detect_clip(
     there to diff against) and a slightly relaxed `template_match_threshold`
     (by `flare_match_relax`) since those frames are noisier/differently lit --
     results land in `ClipDetection.dropped_frame_boxes`, kept separate from
-    `frames` since they're still not fed into feature scoring.
+    `frames` because they do not feed the settled-frame features. Dedicated
+    warmup colour and motion features consume the dropped-frame payloads.
 
     `compensate_warmup=True` (default off) improves on that appearance-only
     guess for the SAME warmup window, without touching `frames`/`background`/
@@ -145,9 +146,9 @@ def detect_clip(
     (`src.features.photometric_match`, a per-frame gain/offset fit) onto the
     already-trustworthy settled `background`, which cancels the IR gain step
     well enough that a real per-pixel background diff -- the same
-    threshold/morphology/contour pipeline used for every scored frame --
-    becomes meaningful there too, instead of only ever appearance-matching a
-    single fixed crop.
+    threshold/morphology/contour pipeline used for every settled frame --
+    becomes meaningful for the dedicated warmup motion features too, instead
+    of only ever appearance-matching a single fixed crop.
 
     The fit itself walks backward from the settled frame, not independently
     per warmup frame: frame `drop-1` (closest to settled) is matched directly
@@ -754,9 +755,14 @@ def contour_centroid(contour: np.ndarray) -> tuple[float, float] | None:
 
 
 def _bbox_to_rect_contour(bbox: tuple[int, int, int, int]) -> np.ndarray:
-    """Synthesize a rectangular contour from a corner-form bounding box."""
+    """Synthesize a contour whose OpenCV bounding box exactly round-trips."""
     x0, y0, x1, y1 = bbox
-    return np.array([[[x0, y0]], [[x1, y0]], [[x1, y1]], [[x0, y1]]], dtype=np.int32)
+    if x1 <= x0 or y1 <= y0:
+        return np.empty((0, 1, 2), dtype=np.int32)
+    return np.array(
+        [[[x0, y0]], [[x1 - 1, y0]], [[x1 - 1, y1 - 1]], [[x0, y1 - 1]]],
+        dtype=np.int32,
+    )
 
 
 def reacquire_by_template(
@@ -771,6 +777,8 @@ def reacquire_by_template(
     """Find a prior subject template in a local, velocity-biased window."""
     template_height, template_width = template.shape[:2]
     if template_height == 0 or template_width == 0:
+        return None
+    if not np.isfinite(template).all():
         return None
     x0, y0, x1, y1 = last_bbox
     center_x, center_y = (x0 + x1) / 2.0, (y0 + y1) / 2.0
@@ -789,10 +797,22 @@ def reacquire_by_template(
     window = gray_frame[window_y0:window_y1, window_x0:window_x1]
     if window.shape[0] < template_height or window.shape[1] < template_width:
         return None
-    result = cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED)
-    _, maximum, _, location = cv2.minMaxLoc(result)
-    if maximum < match_threshold:
+    if not np.isfinite(window).all() or float(window.std()) < _FLAT_PATCH_STD:
         return None
+    if float(template.std()) < _FLAT_PATCH_STD:
+        # Normalised correlation is undefined for a constant template. A
+        # varying search window can still provide intensity evidence for a
+        # flat subject, so use normalised squared error; a flat search window
+        # was rejected above because it provides no localisation evidence.
+        result = cv2.matchTemplate(window, template, cv2.TM_SQDIFF_NORMED)
+        minimum, _, location, _ = cv2.minMaxLoc(result)
+        if not np.isfinite(minimum) or minimum > 1.0 - match_threshold:
+            return None
+    else:
+        result = cv2.matchTemplate(window, template, cv2.TM_CCOEFF_NORMED)
+        _, maximum, _, location = cv2.minMaxLoc(result)
+        if not np.isfinite(maximum) or maximum < match_threshold:
+            return None
     match_x, match_y = location
     return (
         window_x0 + match_x,
@@ -1088,11 +1108,12 @@ def track_multiple_objects(
             track = tracks[track_id]
             velocity_x, velocity_y = track.get("velocity", (0.0, 0.0))
             x0, y0, x1, y1 = track["bbox"]
+            elapsed = track.get("miss", 0) + 1
             predicted[track_id] = (
-                x0 + velocity_x,
-                y0 + velocity_y,
-                x1 + velocity_x,
-                y1 + velocity_y,
+                x0 + velocity_x * elapsed,
+                y0 + velocity_y * elapsed,
+                x1 + velocity_x * elapsed,
+                y1 + velocity_y * elapsed,
             )
 
         primary_for_track: dict[int, int] = {}
@@ -1158,9 +1179,10 @@ def track_multiple_objects(
                 track_id = track_group[0]
                 old_center = _bbox_center(tracks[track_id]["bbox"])
                 new_center = _bbox_center(bbox)
+                elapsed = tracks[track_id].get("miss", 0) + 1
                 tracks[track_id]["velocity"] = (
-                    new_center[0] - old_center[0],
-                    new_center[1] - old_center[1],
+                    (new_center[0] - old_center[0]) / elapsed,
+                    (new_center[1] - old_center[1]) / elapsed,
                 )
                 tracks[track_id]["bbox"] = bbox
                 tracks[track_id]["miss"] = 0
@@ -1205,6 +1227,7 @@ def track_multiple_objects(
             if track_id in matched_ids:
                 continue
             tracks[track_id]["miss"] += 1
+            tracks[track_id]["pending"] = 0
             if tracks[track_id]["miss"] > max_track_miss_frames:
                 del tracks[track_id]
 

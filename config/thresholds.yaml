@@ -119,12 +119,27 @@ classification:
     pixel_fraction_min: 0.6
     median_fence_distance_min: 0.1
     median_fence_distance_max: 0.40
+    # A narrow extension for a corrected multi-track bbox case: every tracked
+    # object agrees the subject is outside, while the single-track median sits
+    # just past 0.40. At 0.45 / 0.90 this recovers incident 21524; labelled
+    # negatives in the band either lack multi-object agreement or have the
+    # exact 10+ blob environmental signature (708-clip sweep, 2026-09-19).
+    corroborated_median_fence_distance_max: 0.45
+    corroborated_multi_object_fraction_min: 0.90
     color_fraction_min: 0.15
 
   # classify() docstring, "animal_candidate / incident_candidate". Bounds the
   # animal branch ONLY, deliberately never incident_candidate.
   animal:
     row_normalised_area_max: 3000.0
+    # Calibrated daylight subjects beyond the generic scenery-distance ceiling
+    # still include small, physically plausible animals on cam12. A 0.35-0.90m
+    # height band plus the edge-density ceiling recovers three clips spanning
+    # both previously missed animal events and matches no labelled negative
+    # clip (cold v7 708-clip sweep, 2026-09-19).
+    far_outside_subject_height_min: 0.35
+    far_outside_subject_height_max: 0.90
+    far_outside_edge_density_max: 0.10
     # Daylight animal recovery just short of the standard 0.10 fence-distance
     # floor. The compact-blob ceiling below leaves exactly four labelled animal
     # clips, with no labelled environment alert, through the real rule order.

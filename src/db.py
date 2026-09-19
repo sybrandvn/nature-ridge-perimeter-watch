@@ -1,8 +1,7 @@
 """SQLite persistence: schema init and narrow repository functions.
 
-No migration framework — schema uses CREATE TABLE IF NOT EXISTS plus a single
-schema_version row. If a breaking schema change is ever needed, export labels
-to JSONL first (the durability guarantee), delete the db file, and reimport.
+Schema changes use explicit scripts/migrate_schema_vN.py migrations. New
+databases are initialized directly at the current version.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from typing import Any
 
 from src.errors import DbError
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # What the event was. Shared by every clip in an event (see labels.label below) --
 # a startup/prefix clip that's part of an `incident` event is still `incident`, just
@@ -152,6 +151,61 @@ CREATE TABLE IF NOT EXISTS backtest_results (
     UNIQUE (run_id, channel_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_backtest_results_run ON backtest_results (run_id);
+
+CREATE TABLE IF NOT EXISTS live_messages (
+    channel_id TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('processing', 'processed', 'ignored', 'failed')
+    ),
+    event_key TEXT,
+    error TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (channel_id, message_id)
+);
+
+CREATE TABLE IF NOT EXISTS live_events (
+    event_key TEXT PRIMARY KEY,
+    camera_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'finalized')),
+    deadline_at TEXT NOT NULL,
+    final_category TEXT,
+    final_reason TEXT,
+    representative_channel_id TEXT,
+    representative_message_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_live_events_due ON live_events (status, deadline_at);
+
+CREATE TABLE IF NOT EXISTS live_event_clips (
+    event_key TEXT NOT NULL REFERENCES live_events (event_key),
+    channel_id TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    phase TEXT NOT NULL CHECK (phase IN ('initial', 'complete', 'standalone')),
+    category TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    blinding_foreground INTEGER NOT NULL CHECK (blinding_foreground IN (0, 1)),
+    features_json TEXT,
+    PRIMARY KEY (channel_id, message_id),
+    UNIQUE (event_key, channel_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_live_event_clips_event ON live_event_clips (event_key);
+
+CREATE TABLE IF NOT EXISTS live_deliveries (
+    event_key TEXT NOT NULL REFERENCES live_events (event_key),
+    transport TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'sending', 'delivered', 'failed', 'ambiguous')
+    ),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    last_error TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (event_key, transport)
+);
+CREATE INDEX IF NOT EXISTS idx_live_deliveries_due
+    ON live_deliveries (status, next_attempt_at);
 """
 
 
@@ -177,8 +231,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
     elif row["version"] != SCHEMA_VERSION:
         raise DbError(
             f"Database schema_version {row['version']} does not match code "
-            f"version {SCHEMA_VERSION}. Export labels to JSONL, delete the db "
-            f"file, and reimport (see export_labels_jsonl/import_labels_jsonl)."
+            f"version {SCHEMA_VERSION}. Run the matching scripts/migrate_schema_vN.py "
+            "migration before starting this version."
         )
 
 

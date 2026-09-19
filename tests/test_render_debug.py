@@ -77,6 +77,43 @@ def test_render_clip_frame_count_matches_the_detector(tmp_path, zone):
     assert rendered == len(detection.frames)
 
 
+def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, zone):
+    clip = _write_clip(tmp_path / "in.mp4")
+    real_detect = render_debug.detect_clip
+    real_features = render_debug.features_from_detection
+    real_classify = render_debug.classify_detailed
+    seen = {}
+
+    def capture_detect(*args, **kwargs):
+        seen["ignore_polygons"] = kwargs.get("ignore_polygons")
+        seen["detection"] = real_detect(*args, **kwargs)
+        return seen["detection"]
+
+    def capture_features(detection, *args, **kwargs):
+        seen["scored_detection"] = detection
+        return real_features(detection, *args, **kwargs)
+
+    def capture_classification(features):
+        seen["classified_features"] = features
+        return real_classify(features)
+
+    monkeypatch.setattr(render_debug, "detect_clip", capture_detect)
+    monkeypatch.setattr(render_debug, "features_from_detection", capture_features)
+    monkeypatch.setattr(render_debug, "classify_detailed", capture_classification)
+
+    out = render_clip(
+        clip,
+        zone,
+        out_path=str(tmp_path / "out.mp4"),
+        timestamp="2026-01-01T12:00:00Z",
+    )
+
+    assert out is not None
+    assert seen["scored_detection"] is seen["detection"]
+    assert seen["ignore_polygons"] == zone.ignore
+    assert seen["classified_features"]["is_daylight"] == 1.0
+
+
 def test_draw_light_mask_outlines_green_pixels_when_not_daylight_gated():
     frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
     frame[:] = (0, 255, 0)  # pure green, BGR
@@ -85,12 +122,13 @@ def test_draw_light_mask_outlines_green_pixels_when_not_daylight_gated():
     assert canvas.any()
 
 
-def test_draw_light_mask_is_suppressed_when_daylight_gated():
+def test_draw_light_mask_marks_but_does_not_return_a_daylight_gated_candidate():
     frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
     frame[:] = (0, 255, 0)  # pure green, BGR -- would draw if not gated
     canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
-    _draw_light_mask(canvas, frame, daylight_gated=True)
-    assert not canvas.any()
+    moving = _draw_light_mask(canvas, frame, daylight_gated=True)
+    assert canvas.any()
+    assert not moving.any()
 
 
 def test_widen_year_shows_the_century_on_a_caption_timestamp():
@@ -123,6 +161,21 @@ def test_draw_light_mask_returns_empty_moving_mask_when_daylight_gated():
     frame[:] = (0, 255, 0)
     moving = _draw_light_mask(canvas=np.zeros_like(frame), frame=frame, daylight_gated=True)
     assert not moving.any()
+
+
+def test_draw_light_mask_outlines_every_blob_and_reports_the_count(monkeypatch):
+    frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (3, 15), (6, 18), (0, 255, 0), thickness=-1)
+    cv2.rectangle(frame, (40, 25), (43, 28), (0, 255, 0), thickness=-1)
+    labels = []
+    monkeypatch.setattr(render_debug, "_text", lambda _img, text, *_a, **_k: labels.append(text))
+
+    canvas = np.zeros_like(frame)
+    _draw_light_mask(canvas, frame, daylight_gated=False)
+
+    assert labels == ["FLASHLIGHT PIXELS (2 blobs)"]
+    assert tuple(int(c) for c in canvas[15, 3]) == render_debug.COLOR_LIGHT
+    assert tuple(int(c) for c in canvas[25, 40]) == render_debug.COLOR_LIGHT
 
 
 def test_draw_dashed_rect_draws_fewer_pixels_than_a_solid_rectangle():
@@ -165,6 +218,41 @@ def test_draw_multi_tracks_marks_a_real_flashlight_object_distinctly():
     subject_color = render_debug._track_color(1)
     assert tuple(int(c) for c in canvas[30, 50]) == subject_color
     assert subject_color != render_debug.COLOR_LIGHT
+
+
+def test_draw_multi_tracks_uses_the_scorers_two_percent_light_threshold():
+    # Nine green pixels in a 20x20 track are 2.25%: enough for the
+    # multi-object feature, but far below the single-track bbox-overlap rule's
+    # 50%. The renderer must follow the former for multi-object labels.
+    frame = np.full((HEIGHT, WIDTH, 3), 90, dtype=np.uint8)
+    cv2.rectangle(frame, (2, 2), (4, 4), (40, 255, 40), thickness=-1)
+    track = TrackedObject(track_id=0, bbox=(2, 2, 22, 22))
+    canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+    _draw_multi_tracks(
+        canvas, [track], scale=1, multi_track_history={}, frame_bgr=frame
+    )
+
+    assert tuple(int(c) for c in canvas[2, 10]) == render_debug.COLOR_LIGHT
+
+
+def test_draw_multi_tracks_keeps_a_peak_scoring_flashlight_track_marked():
+    # Production passes whole-clip peak scores. A faint later frame must keep
+    # the same persistent flashlight identity that caused classification.
+    frame = np.full((HEIGHT, WIDTH, 3), 90, dtype=np.uint8)
+    track = TrackedObject(track_id=4, bbox=(2, 2, 22, 22))
+    canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+    _draw_multi_tracks(
+        canvas,
+        [track],
+        scale=1,
+        multi_track_history={},
+        frame_bgr=frame,
+        flashlight_scores={4: 0.08},
+    )
+
+    assert tuple(int(c) for c in canvas[2, 10]) == render_debug.COLOR_LIGHT
 
 
 def test_draw_multi_tracks_skips_the_flashlight_check_without_a_frame():
@@ -274,7 +362,7 @@ def test_detect_clip_reports_no_flare_on_steady_illumination(tmp_path, zone):
 def test_detect_clip_computes_the_cutoff_per_clip_not_a_fixed_window(tmp_path, zone):
     # A clip that flares should drop those frames; a clip that never flares
     # should drop none -- neither is a hardcoded frame count.
-    flaring = detect_clip(_write_clip(tmp_path / "flare.mp4", frames=12, flare_at=6))
+    flaring = detect_clip(_write_clip(tmp_path / "flare.mp4", frames=12, flare_at=2))
     steady = detect_clip(_write_clip(tmp_path / "steady.mp4", frames=12))
 
     assert flaring is not None and steady is not None
@@ -283,10 +371,9 @@ def test_detect_clip_computes_the_cutoff_per_clip_not_a_fixed_window(tmp_path, z
 
 
 def test_render_clip_includes_dropped_warmup_frames_in_output(tmp_path, zone):
-    # The pre-cutoff frames are excluded from scoring but should still be
-    # visible in the rendered video (marked, not silently discarded) so flare-
-    # cutoff accuracy can be judged by eye.
-    clip = _write_clip(tmp_path / "flare.mp4", frames=14, flare_at=6)
+    # The pre-cutoff frames are excluded from settled-background scoring but
+    # feed dedicated warmup features and must be visible for audit.
+    clip = _write_clip(tmp_path / "flare.mp4", frames=14, flare_at=2)
     detection = detect_clip(clip)
     assert detection is not None
     assert detection.warmup_dropped > 0
@@ -300,6 +387,43 @@ def test_render_clip_includes_dropped_warmup_frames_in_output(tmp_path, zone):
     finally:
         cap.release()
     assert rendered == detection.warmup_dropped + len(detection.frames)
+
+
+def test_render_clip_draws_flashlight_from_each_raw_warmup_frame(
+    monkeypatch, tmp_path, zone
+):
+    clip = _write_clip(tmp_path / "flare.mp4", frames=14, flare_at=2)
+    real_detect = render_debug.detect_clip
+    real_draw = render_debug._draw_light_mask
+    seen = {"calls": []}
+
+    def capture_detect(*args, **kwargs):
+        seen["detection"] = real_detect(*args, **kwargs)
+        return seen["detection"]
+
+    def capture_draw(canvas, frame, **kwargs):
+        seen["calls"].append((frame.copy(), kwargs["daylight_gated"]))
+        return real_draw(canvas, frame, **kwargs)
+
+    monkeypatch.setattr(render_debug, "detect_clip", capture_detect)
+    monkeypatch.setattr(render_debug, "_draw_light_mask", capture_draw)
+
+    render_clip(clip, zone, out_path=str(tmp_path / "out.mp4"))
+
+    detection = seen["detection"]
+    warmup_calls = seen["calls"][: detection.warmup_dropped]
+    expected_gate, _ratios = render_debug.warmup_flashlight_diagnostics(
+        detection,
+        exclude_mask=render_debug.feature_exclude_mask(detection, zone),
+        daylight_color_fraction=0.15,
+        daylight_hint=None,
+    )
+    assert len(warmup_calls) == detection.warmup_dropped
+    assert all(call[1] is expected_gate for call in warmup_calls)
+    assert all(
+        np.array_equal(call[0], raw)
+        for call, raw in zip(warmup_calls, detection.dropped_frames, strict=True)
+    )
 
 
 def test_prefer_longest_per_event_keeps_only_the_longer_sibling(tmp_path):

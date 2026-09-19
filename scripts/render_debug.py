@@ -13,12 +13,12 @@ Drawn per frame:
   - a fading trail: past bounding boxes plus the joined centroid path
   - an IR FLARE banner on frames where the global gain stepped
   - the pre-cutoff warmup frames themselves, first, with an amber banner --
-    these are excluded from the background model and never scored, but are
-    now visible so flare-cutoff accuracy can be judged by eye
+    these are excluded from the settled background model, while their raw
+    flashlight pixels and corrected-frame motion still feed warmup features
   - a HUD of live per-frame values and the clip's final feature vector
 
-Detection comes from `src.motion.detect_clip`, the same function that feeds
-`extract_clip_features`, so what is drawn is what scored the clip. The tuning
+Detection comes from `src.motion.detect_clip` and its exact result is passed to
+`features_from_detection`, so what is drawn is what scored the clip. The tuning
 flags default to the spike's own values and the HUD marks them when overridden.
 
 When selecting clips by `--label`/`--message-id`/`--message-ids-file`, clips
@@ -60,25 +60,35 @@ from src import db  # noqa: E402
 from src.classify import classify_detailed  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
+    FLASHLIGHT_CANDIDATE_MIN_RATIO,
     FLASHLIGHT_SUBJECT_THRESHOLD,
     daylight_hint,
-    detect_stationary_light_mask,
     flashlight_bbox_overlap,
     green_light_mask,
-    ignore_region_mask,
+    green_light_ratio,
     is_daylight,
     is_twilight,
     sane_fps,
 )
 from src.ground_calibration import GroundCalibration, calibrate  # noqa: E402
-from src.motion import ClipDetection, TrackedObject, detect_clip  # noqa: E402
+from src.motion import (  # noqa: E402
+    ClipDetection,
+    TrackedObject,
+    _bbox_to_rect_contour,
+    detect_clip,
+)
 from src.reference_bg import (  # noqa: E402
     era_of,
     load_manifest,
     load_reference_image,
     reference_for,
 )
-from src.scoring import extract_clip_features  # noqa: E402
+from src.scoring import (  # noqa: E402
+    feature_exclude_mask,
+    features_from_detection,
+    multi_object_flashlight_scores,
+    warmup_flashlight_diagnostics,
+)
 from src.video_encode import Mp4Writer  # noqa: E402
 from src.zones import (  # noqa: E402
     _fence_x_at_y,
@@ -121,6 +131,7 @@ COLOR_IGNORE = (110, 110, 110)
 COLOR_FLARE = (0, 90, 255)
 COLOR_WARMUP = (0, 200, 255)
 COLOR_LIGHT = (0, 255, 140)
+COLOR_GATED_LIGHT = (80, 180, 255)
 COLOR_STATIONARY_LIGHT = (0, 140, 0)
 HUD_BG = (24, 24, 24)
 TRAIL_LENGTH = 12
@@ -329,17 +340,10 @@ def _draw_light_mask(
     which one they're looking at. Returns the moving-light mask (raw frame
     resolution) so the caller can check the tracked box against it.
 
-    Suppressed on a daylight/dusk-colour clip (`daylight_gated`), same as
-    `green_light_ratio`/`green_light_flicker` are zeroed in
-    `extract_clip_features` -- real ambient colour (green foliage covering
-    much of the frame) reads the same as the guard's flashlight to a raw hue
-    mask, and drawing it anyway made every green-toned daylight clip look
-    like it was full of flashlight detections that were never actually
-    scored.
+    ``daylight_gated`` remains available for warmup-only diagnostics. Scored
+    frames pass False because their flashlight features are intentionally
+    evaluated in daylight too; keeping the overlay visible preserves parity.
     """
-    empty = np.zeros(frame.shape[:2], dtype=bool)
-    if daylight_gated:
-        return empty
     stationary, moving = _light_masks(frame, ignore_mask)
     if np.any(stationary):
         # Dashed box, not a solid contour outline -- marked as a known fixed
@@ -351,13 +355,15 @@ def _draw_light_mask(
             interpolation=cv2.INTER_NEAREST,
         )
         contours, _ = cv2.findContours(mask_scaled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        x, y, w, h = cv2.boundingRect(np.concatenate(contours))
-        _draw_dashed_rect(
-            canvas, (x, y), (x + w, y + h), COLOR_STATIONARY_LIGHT, thickness=1
-        )
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            _draw_dashed_rect(
+                canvas, (x, y), (x + w, y + h), COLOR_STATIONARY_LIGHT, thickness=1
+            )
+        x, y, _w, _h = cv2.boundingRect(np.concatenate(contours))
         _text(
             canvas,
-            "STATIONARY LIGHT",
+            f"STATIONARY LIGHT PIXELS ({len(contours)} blobs)",
             (x, max(11, y - 4)),
             color=COLOR_STATIONARY_LIGHT,
             scale=0.35,
@@ -369,10 +375,18 @@ def _draw_light_mask(
             interpolation=cv2.INTER_NEAREST,
         )
         contours, _ = cv2.findContours(mask_scaled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(canvas, contours, -1, COLOR_LIGHT, 1)
-        x, y, w, h = cv2.boundingRect(np.concatenate(contours))
-        _text(canvas, "FLASHLIGHT", (x, max(11, y - 4)), color=COLOR_LIGHT, scale=0.35)
-    return moving
+        moving_color = COLOR_GATED_LIGHT if daylight_gated else COLOR_LIGHT
+        moving_label = (
+            f"FLASHLIGHT-COLOR PIXELS ({len(contours)} blobs, DAYLIGHT-GATED)"
+            if daylight_gated
+            else f"FLASHLIGHT PIXELS ({len(contours)} blobs)"
+        )
+        cv2.drawContours(canvas, contours, -1, moving_color, 1)
+        x, y, _w, _h = cv2.boundingRect(np.concatenate(contours))
+        _text(canvas, moving_label, (x, max(11, y - 4)), color=moving_color, scale=0.35)
+    # A gated candidate remains visible for audit, but the empty return value
+    # makes it explicit that the feature scorer treated it as no flashlight.
+    return np.zeros_like(moving) if daylight_gated else moving
 
 
 def _draw_trail(canvas: np.ndarray, history: list[tuple[np.ndarray, tuple[float, float]]]) -> None:
@@ -420,6 +434,7 @@ def _draw_multi_tracks(
     frame_bgr: np.ndarray | None = None,
     exclude_mask: np.ndarray | None = None,
     daylight_gated: bool = False,
+    flashlight_scores: dict[int, float] | None = None,
 ) -> None:
     """Outline every persistently-identified subject from
     `ClipDetection.multi_tracks` in its own stable colour, plus a short fading
@@ -431,15 +446,15 @@ def _draw_multi_tracks(
     feature-scoring track (still the operator's primary reference) stays on
     top and unobscured.
 
-    Added 2026-09-09: each object is ALSO checked for flashlight-ness, the
-    same `flashlight_bbox_overlap > FLASHLIGHT_SUBJECT_THRESHOLD` test the
-    single tracked box already uses below -- previously only that ONE object
+    Each object is also checked with the same rectangular-contour
+    ``green_light_ratio > FLASHLIGHT_CANDIDATE_MIN_RATIO`` test used by
+    ``multi_object_flashlight`` scoring -- previously only the single object
     was ever checked, so a real flashlight sitting in a DIFFERENT persistent
     track (the classify() rule `multi_object_flashlight` now catches, e.g.
     cam07/11174) never showed up as a flashlight in the render at all, even
-    though the classifier's own reason code said it was. `frame_bgr=None`
-    (the default, and every pre-existing caller/test) skips the check
-    entirely and draws exactly as before -- purely additive.
+    though the classifier's own reason code said it was. Production passes
+    the scorer's whole-clip peak mapping so the identity persists; callers
+    without that mapping can still perform the local check with `frame_bgr`.
     """
     for track in tracks:
         x0, y0, x1, y1 = (int(round(c)) for c in track.bbox)
@@ -447,14 +462,17 @@ def _draw_multi_tracks(
         # _multi_object_outside_features for why this matters. Merged tracks
         # can be dead-reckoned at fractional-pixel positions; OpenCV drawing
         # and NumPy mask slicing both require integer pixel coordinates.
-        is_flashlight = (
-            frame_bgr is not None
-            and not daylight_gated
-            and flashlight_bbox_overlap(
-                frame_bgr, (x0, y0, x1 - x0, y1 - y0), exclude_mask=exclude_mask
+        if flashlight_scores is not None:
+            flashlight_score = flashlight_scores.get(track.track_id, 0.0)
+        elif frame_bgr is not None and not daylight_gated:
+            flashlight_score = green_light_ratio(
+                frame_bgr,
+                _bbox_to_rect_contour((x0, y0, x1, y1)),
+                exclude_mask=exclude_mask,
             )
-            > FLASHLIGHT_SUBJECT_THRESHOLD
-        )
+        else:
+            flashlight_score = 0.0
+        is_flashlight = flashlight_score > FLASHLIGHT_CANDIDATE_MIN_RATIO
         color = COLOR_LIGHT if is_flashlight else _track_color(track.track_id)
         x0, y0, x1, y1 = (c * scale for c in (x0, y0, x1, y1))
         centroid = (int((x0 + x1) / 2), int((y0 + y1) / 2))
@@ -473,7 +491,7 @@ def _draw_multi_tracks(
         if track.merged_ids:
             label += "+" + "+".join(f"#{i}" for i in track.merged_ids)
         if is_flashlight:
-            label += " FLASHLIGHT"
+            label += f" FLASHLIGHT peak={flashlight_score:.3f}"
         _text(canvas, label, (x0, min(canvas.shape[0] - 2, y1 + 12)), color=color, scale=0.35)
 
 
@@ -531,6 +549,7 @@ def render_clip(
         threshold=threshold,
         flare_tolerance=flare_tolerance,
         max_flare_fraction=max_flare_fraction,
+        ignore_polygons=zone.ignore,
         reference_background=reference_background,
         compensate_warmup=True,
         prefer_flashlight_candidate=prefer_flashlight_candidate,
@@ -538,21 +557,22 @@ def render_clip(
     if detection is None:
         return None
 
-    features = extract_clip_features(
-        video_path,
+    capture = cv2.VideoCapture(video_path)
+    source_fps = sane_fps(capture.get(cv2.CAP_PROP_FPS))
+    capture.release()
+    timestamp_daylight = is_daylight(timestamp) if timestamp is not None else None
+    timestamp_daylight_hint = daylight_hint(timestamp)
+    features = features_from_detection(
+        detection,
         zone,
-        max_area_fraction=max_area_fraction,
-        min_blob_area_fraction=min_blob_area_fraction,
+        fps=source_fps,
         threshold=threshold,
-        flare_tolerance=flare_tolerance,
-        max_flare_fraction=max_flare_fraction,
-        reference_background=reference_background,
-        daylight_hint=daylight_hint(timestamp),
-        prefer_flashlight_candidate=prefer_flashlight_candidate,
+        daylight_hint=timestamp_daylight_hint,
     )
+    if features is not None and timestamp_daylight is not None:
+        features["is_daylight"] = float(timestamp_daylight)
     classification = classify_detailed(features)
 
-    source_fps = sane_fps(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS))
     width, height = detection.frame_width * scale, detection.frame_height * scale
     # None unless this camera opted in via `metric_calibration` in cameras.yaml.
     calib = calibrate(zone, detection.frame_width, detection.frame_height)
@@ -580,32 +600,19 @@ def render_clip(
     # green (all well under the 0.05 guard-candidate threshold) that the overlay drew
     # anyway, since neither the colour gate nor the strict day/night split caught them.
     sun_daylight = timestamp is not None and (is_daylight(timestamp) or is_twilight(timestamp))
-    daylight_gated = sun_daylight or (features is not None and features["color_fraction"] > 0.15)
-    ignore_mask = (
-        ignore_region_mask(detection.frame_width, detection.frame_height, zone.ignore)
-        if zone.ignore
-        else None
+    # Scored-frame flashlight features are evaluated in daylight; only the
+    # whole-frame warmup statistic has the colour/daylight veto.
+    daylight_gated = False
+    ignore_mask = feature_exclude_mask(detection, zone)
+    warmup_daylight_gated, warmup_light_ratios = warmup_flashlight_diagnostics(
+        detection,
+        exclude_mask=ignore_mask,
+        daylight_color_fraction=0.15,
+        daylight_hint=timestamp_daylight_hint,
     )
-    # Auto-detected stationary lights, same reasoning/mask combination as
-    # `extract_clip_features` -- so a fixed light with no hand-traced
-    # `zone.ignore` polygon still renders as STATIONARY LIGHT rather than
-    # FLASHLIGHT, and the render never disagrees with what was scored.
-    tracked_region = np.zeros((detection.frame_height, detection.frame_width), dtype=bool)
-    for detected in detection.frames:
-        if detected.largest is None:
-            continue
-        x, y, w, h = cv2.boundingRect(detected.largest)
-        pad = 4
-        x0, y0 = max(0, x - pad), max(0, y - pad)
-        x1, y1 = min(detection.frame_width, x + w + pad), min(
-            detection.frame_height, y + h + pad
-        )
-        tracked_region[y0:y1, x0:x1] = True
-    auto_light_mask = detect_stationary_light_mask(
-        [d.frame for d in detection.frames], exclude_region=tracked_region
+    flashlight_scores = multi_object_flashlight_scores(
+        detection, exclude_mask=ignore_mask
     )
-    if np.any(auto_light_mask):
-        ignore_mask = auto_light_mask if ignore_mask is None else (ignore_mask | auto_light_mask)
 
     writer = Mp4Writer(out_path, fps=source_fps, width=width, height=height + hud_height)
 
@@ -632,10 +639,19 @@ def render_clip(
         )
         canvas = cv2.resize(source_frame, (width, height), interpolation=cv2.INTER_CUBIC)
         _apply_zone(canvas, tint, ink)
+        # The warmup feature intentionally reads raw dropped frames. Draw that
+        # raw mask even when the human-friendly view is photometrically
+        # corrected, so visible evidence and the feature input stay aligned.
+        _draw_light_mask(
+            canvas,
+            raw_frame,
+            daylight_gated=warmup_daylight_gated,
+            ignore_mask=ignore_mask,
+        )
         cv2.rectangle(canvas, (0, 0), (width - 1, height - 1), COLOR_WARMUP, 4)
         _text(
             canvas,
-            "IR WARMUP - dropped before background model, not scored",
+            "IR WARMUP - raw flashlight + corrected motion features scored",
             (10, 40),
             color=COLOR_WARMUP,
             scale=0.5,
@@ -686,12 +702,17 @@ def render_clip(
             ),
             (
                 "status",
-                "gain/illuminator settling -- excluded from background model & features"
+                "excluded from settled background; warmup features remain active"
                 + (
                     f"; ~{correction_pct:.0f}% corrected to the settled background"
                     if detection.dropped_frame_compensated
                     else ""
                 ),
+            ),
+            (
+                "raw flashlight ratio",
+                f"{warmup_light_ratios[warm_index]:.5f}"
+                + ("  GATED (daylight colour)" if warmup_daylight_gated else "  ACTIVE"),
             ),
         ]
         _draw_hud(panel, lines=live, origin_y=height)
@@ -739,6 +760,7 @@ def render_clip(
                     frame_bgr=detected.frame,
                     exclude_mask=ignore_mask,
                     daylight_gated=daylight_gated,
+                    flashlight_scores=flashlight_scores,
                 )
 
             instant_speed = None
@@ -871,7 +893,8 @@ def render_clip(
                 (
                     "frame",
                     f"{detected.index + 1}/{len(detection.frames)} scored"
-                    f"  ({detection.warmup_dropped} warmup frames shown first, above, not scored)",
+                    f"  ({detection.warmup_dropped} warmup frames shown first; "
+                    "warmup features scored)",
                 ),
                 ("median grey", grey),
                 (
@@ -990,14 +1013,9 @@ def render_clip(
                     ),
                     ("clip blob_count", f"{features.get('blob_count', 0.0):.0f}"),
                     (
-                        "clip color_fraction (green gated?)",
+                        "clip color / sun daylight",
                         f"{features.get('color_fraction', 0.0):.2f}"
-                        + (
-                            " YES"
-                            if daylight_gated
-                            else " no"
-                        )
-                        + (" (sun)" if sun_daylight else ""),
+                        + (" / yes" if sun_daylight else " / no"),
                     ),
                 ]
             if overrides:

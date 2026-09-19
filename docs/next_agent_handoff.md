@@ -2,6 +2,14 @@
 
 Updated 2026-09-19 on branch `feat/phase2-refactor`.
 
+Independent code review, later the same day:
+[code_effectiveness_review_2026-09-19.md](code_effectiveness_review_2026-09-19.md).
+Read it before implementing the resolver below. It reproduces validation, renderer,
+warmup, geometry and tracking defects; measures all labelled sibling events; and
+shows why longest-only and blanket guard-overrides lose protected or explicitly
+approved alerts. Its implementation follow-up records the completed detector fixes,
+the rejected coexistence override, and the new cold-corpus measurements.
+
 ## Scope
 
 Complete the remaining application: event policy, live Telegram ingestion, alert delivery, and
@@ -13,19 +21,21 @@ but do not promote the existing backtest or debug scripts into the service.
 
 ## Current state
 
-- Working tree was clean when this handoff was written.
+- The 2026-09-19 detection-review implementation is currently uncommitted; inspect
+  the working-tree diff before starting the production service.
 - Recent detector commits:
   - `3155f2d` — keep camera artifacts orthogonal to alerts.
   - `e33ee6d` — recover warmup-only guard evidence.
   - `f3702aa` — repository cleanup and Cam12 trace work; its original middle-era dating was
     corrected by `e33ee6d`.
-- `EXTRACTOR_VERSION` is `motion-features-v6`.
-- Full verification: **759 tests pass**, Ruff clean.
-- Labelled backtest: **708 clips**, TP 29 / FP 26 / FN 18 / TN 635, precision 0.527,
-  recall 0.617, F1 0.569.
-- The increase from FP 25 to FP 26 is intentional: cam12/9162 is labelled `unknown`, but the
-  user's latest review says it may contain a small animal as well as a camera artifact, so it is
-  allowed to alert as `animal_candidate`.
+- `EXTRACTOR_VERSION` is `motion-features-v7`.
+- Full verification: **774 tests pass**, Ruff clean.
+- Cold labelled backtest plus final classifier replay: **708 clips**, TP 32 / FP 24 /
+  FN 15 / TN 637, precision 0.571, recall 0.681, F1 0.621 (unknowns counted negative).
+- Protected-event regression: all 5 incident and 20 animal events pass with all 49
+  protected sibling clips present and no exception.
+- cam12/9162 remains `animal_candidate`: it is labelled `unknown`, but the user's
+  review says it may contain a small animal as well as a camera artifact.
 - Telegram foundations already exist: Telethon credentials and source-channel configuration,
   pure message parsing/backfill logic, tested Bot API text delivery, tested ntfy delivery, and a
   manual `scripts/send_test_alert.py`. There is no long-running watcher, media-delivery path,
@@ -185,6 +195,13 @@ also independent of the settled-track summary. Five labelled guards that previou
 
 The no-settled-motion condition is deliberate. Onside warmup activity can coexist with a genuine
 outside subject, so warmup evidence must not globally override a later scored track.
+
+`scripts/render_debug.py` now uses the scorer's exact exclusion mask, warmup daylight gate,
+raw-frame flashlight ratios, and per-track peak flashlight scores. Every qualifying green-light
+component is outlined in warmup and settled frames. Daylight-gated warmup candidates remain visible
+in a distinct colour and are labelled as gated; their returned/scored ratio remains zero. A
+persistent flashlight track stays labelled across its full lifetime after any frame crosses the
+same 0.02 peak threshold used by `multi_object_flashlight` classification.
 
 ### Camera artifacts
 

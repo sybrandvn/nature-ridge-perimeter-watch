@@ -94,11 +94,11 @@ single-track scoped.
 
 ---
 
-## 3. Colour / flashlight (`src/features.py`) — four distinct signals, none per-object
+## 3. Colour / flashlight (`src/features.py`, `src/scoring.py`)
 
 This is worth its own section because the user's own question ("do we always know when an object
-is a flashlight") exposed that these four are easy to conflate and none answer "is object N a
-flashlight."
+is a flashlight") exposed that the pixel, single-track, whole-frame, warmup and persistent-object
+signals are easy to conflate.
 
 | function / feature | scope | what it actually checks | wired? | known blind spot |
 | --- | --- | --- | --- | --- |
@@ -106,13 +106,16 @@ flashlight."
 | `whole_frame_green_ratio` | whole-frame, per-frame peak | hue/saturation across the **entire frame**, not contour-restricted | no — diagnostic only, thin margin against real animal clips (1.8x) | a small beam patch in a large frame can still read low even when visually obvious |
 | `warmup_flashlight_ratio` | warmup, per dropped-frame | same hue check, scored on the frames dropped for IR flare | **yes** — second guard rule | only covers frames *before* the tracked target ever appears |
 | `flashlight_bbox_overlap` → `flashlight_subject_fraction` | single-track, per tracked **bbox** (not contour shape) | fraction of the tracked box's own rectangular pixels reading flashlight-hue, aggregated across tracked frames | no — reporting only; also drives `scripts/render_debug.py`'s "FLASHLIGHT" overlay label | bbox-shaped (coarser than contour-shaped), and again single-track only |
+| `multi_object_flashlight_scores` → `multi_object_max_flashlight_ratio` / `_track_count` | persistent object, peak over its lifetime | applies `green_light_ratio` to every `multi_tracks` bbox independently, preserving the track ID that produced the peak | **yes** — `multi_object_flashlight` guard rule | needs a persistent motion track; warmup-only light is handled by `warmup_flashlight_ratio` instead |
 
-**Answering the literal question**: no signal here, or anywhere else in this codebase, checks
-whether an arbitrary `multi_tracks` object is a flashlight. All four are scoped to either the single
-tracked target or the whole frame. Checking a specific `multi_object_*` dominant object for
-flashlight-ness is unbuilt — `green_light_ratio`'s own signature (`frame_bgr, contour`) already
-accepts *a* contour, so scoring each per-object candidate is a mechanically small extension, not new
-detection work — same category as `_multi_object_outside_features` itself.
+**Answering the literal question now**: every persistent `multi_tracks` object is checked, and the
+debug renderer keeps any peak-scoring track labelled for its full lifetime. It also outlines every
+connected flashlight-colour component, including raw warmup frames; gated daylight candidates stay
+visible but explicitly say they were gated. This remains colour detection rather than semantic
+torch recognition: a white/desaturated glare, a patch smaller than eight pixels, or a configured
+stationary-light region does not count as a moving flashlight. Green-lit foliage and a beam footprint
+can count because the site-specific signal intentionally treats the visible beam and torch head as
+one flashlight cue.
 
 Also present, not flashlight-specific: `color_fraction`, `saturation_ratio`, `color_saturation_fraction`
 — general colour-presence checks (used e.g. to split `animal_candidate` from `incident_candidate` by
@@ -163,7 +166,7 @@ thrown away entirely.
 | `_warmup_motion_features` → `warmup_outside_fraction` | Re-diffs corrected warmup frames against the settled background, tracks the largest changed region, and reads its fence side. The location signal remains reporting/ranker evidence because inside warmup presence overlaps positives. |
 | `_warmup_motion_features` → `warmup_dynamic_frame_fraction`, `warmup_dynamic_outside_fraction` | Diffs adjacent photometrically corrected warmup frames, so a static branch merely lit differently from the settled background does not count as moving. When **no settled/scored motion exists**, strong persistent onside dynamics recover four labelled guards with no animal/incident category change; otherwise these remain evidence only and cannot override a later real subject. |
 | `post_flash_red_shift` | Whole-clip colour-shift signal spanning warmup **and** scored frames — the flash itself is often inside the flare window. |
-| `warmup_flashlight_ratio` | See §3 — hue check on the same corrected warmup frames. |
+| `warmup_flashlight_ratio` | See §3 — hue check on the raw dropped frames. The corrected copies are used by warmup motion features and for easier human viewing, not by flashlight colour scoring. |
 
 ---
 

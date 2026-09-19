@@ -7,6 +7,11 @@ that continuously receives clips and routes classifications; `scripts/` contains
 offline-analysis entry points, not a hidden production service. See [docs/plan.md](docs/plan.md)
 for that remaining application work.
 
+For a new coding agent, start with
+[docs/next_agent_handoff.md](docs/next_agent_handoff.md). It describes the current detector state,
+the next evidence-backed implementation, and the explicit scope boundary: the user is handling
+Docker and Telegram integration.
+
 Two gates decide whether the rest of the pipeline gets built:
 
 1. **Gate 1 — camera order.** The fence camera order is unknown and must be inferred from patrol

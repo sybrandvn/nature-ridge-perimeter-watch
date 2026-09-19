@@ -1,8 +1,8 @@
 # Handoff: animal-event regressions fixed; detector extraction complete
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-19. **If you are a new agent
-picking this up, search this file for "Handoff for a new agent (2026-09-19, session #22)"
-and start there.** (This file's session sections are not in one consistent order: #1-#5 are the
+picking this up, start with `docs/next_agent_handoff.md`, then use session #22 below for the full
+latest-session detail.** (This file's session sections are not in one consistent order: #1-#5 are the
 oldest, kept in their original forward-chronological spot further up; starting from #6, each new
 session's entry is instead inserted directly above its predecessor, so the chain from #6 to the
 latest reads newest-first.) On branch

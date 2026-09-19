@@ -92,6 +92,35 @@ def test_upsert_clip_updates_existing_row(conn):
     assert rows[0]["file_path"] == "data/history/cam01/1.mp4"
 
 
+def test_metadata_only_upsert_preserves_existing_file_path(conn):
+    db.upsert_clip(
+        conn,
+        channel_id=CHANNEL,
+        message_id=1,
+        camera_id="cam01",
+        timestamp="2026-01-01T20:00:00Z",
+        caption="original",
+        file_path="data/history/cam01/1.mp4",
+        source="backfill",
+    )
+
+    db.upsert_clip(
+        conn,
+        channel_id=CHANNEL,
+        message_id=1,
+        camera_id="cam01",
+        timestamp="2026-01-01T20:01:00Z",
+        caption="updated metadata",
+        file_path=None,
+        source="backfill",
+    )
+
+    row = db.get_clip(conn, CHANNEL, 1)
+    assert row["file_path"] == "data/history/cam01/1.mp4"
+    assert row["caption"] == "updated metadata"
+    assert row["timestamp"] == "2026-01-01T20:01:00Z"
+
+
 def test_set_clip_file_path_updates_only_that_field(conn):
     db.upsert_clip(
         conn,

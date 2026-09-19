@@ -228,7 +228,10 @@ def _extract_worker(clip: dict[str, Any]) -> dict[str, Any]:
     }
     camera = _WORKER_CAMERAS.by_id(clip["camera_id"]) if _WORKER_CAMERAS else None
     features = None
-    if camera is not None:
+    extraction_error: str | None = None
+    if camera is None:
+        extraction_error = f"unknown camera: {clip['camera_id']}"
+    else:
         try:
             extra: dict[str, Any] = {}
             reference = reference_background_for(
@@ -242,9 +245,10 @@ def _extract_worker(clip: dict[str, Any]) -> dict[str, Any]:
             features = extract_clip_features(
                 clip["file_path"], camera.zone_at(clip["timestamp"]), **extra
             )
-        except Exception:
-            features = None
+        except Exception as error:
+            extraction_error = f"{type(error).__name__}: {error}"
     row["detected"] = features is not None
+    row["extraction_error"] = extraction_error
     for feat in NUMERIC_FEATURES:
         row[feat] = 0.0 if features is None else float(features.get(feat) or 0.0)
     return row
@@ -263,6 +267,15 @@ def _collect_features_parallel(
             rows.append(row)
             if i % 2000 == 0:
                 print(i, flush=True)
+    errors = [row for row in rows if row["extraction_error"] is not None]
+    if errors:
+        examples = ", ".join(
+            f"{row['camera_id']}/{row['message_id']} ({row['extraction_error']})"
+            for row in errors[:5]
+        )
+        raise RuntimeError(
+            f"feature extraction failed for {len(errors)} clip(s); first failures: {examples}"
+        )
     return rows
 
 

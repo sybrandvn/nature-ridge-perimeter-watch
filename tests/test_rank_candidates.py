@@ -395,3 +395,38 @@ def test_collect_features_uses_injected_extract_fn(tmp_path: Path):
     assert rows[0]["detected"] is True
     assert rows[0]["aspect_ratio"] == 1.0
     assert "daylight_hint" in seen  # the exogenous sun-time signal reaches the extractor
+
+
+def test_extract_worker_reports_extraction_failure(monkeypatch):
+    class _Cameras:
+        def by_id(self, _camera_id):
+            return _Camera()
+
+    class _Camera:
+        id = "cam01"
+        zone = CameraZone(fence=None, outside=None, depth_cutoff=0.0, ignore=())
+
+        def zone_at(self, _timestamp):
+            return self.zone
+
+    def fail_extract(*_args, **_kwargs):
+        raise ValueError("broken video")
+
+    monkeypatch.setattr(rc, "_WORKER_CAMERAS", _Cameras())
+    monkeypatch.setattr(rc, "_WORKER_REFERENCE_ENTRIES", [])
+    monkeypatch.setattr(rc, "extract_clip_features", fail_extract)
+    row = rc._extract_worker(
+        {
+            "channel_id": "chan",
+            "message_id": 7,
+            "camera_id": "cam01",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "caption": None,
+            "file_path": "broken.mp4",
+            "label": None,
+            "startup_state": None,
+        }
+    )
+
+    assert row["detected"] is False
+    assert row["extraction_error"] == "ValueError: broken video"

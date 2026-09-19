@@ -208,7 +208,7 @@ def upsert_clip(
             camera_id = excluded.camera_id,
             timestamp = excluded.timestamp,
             caption = excluded.caption,
-            file_path = excluded.file_path,
+            file_path = COALESCE(excluded.file_path, clips.file_path),
             source = excluded.source
         """,
         (channel_id, message_id, camera_id, timestamp, caption, file_path, source),

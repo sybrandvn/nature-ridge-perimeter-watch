@@ -1,20 +1,20 @@
-# Next-agent handoff: detection and event policy
+# Next-agent handoff: production service, Telegram, Docker, and detection
 
 Updated 2026-09-19 on branch `feat/phase2-refactor`.
 
 ## Scope
 
-Continue the detection, classification, event-policy, and related refactoring work.
+Complete the remaining application: event policy, live Telegram ingestion, alert delivery, and
+Docker deployment. The earlier statement that the user would handle Docker and Telegram was a
+miscommunication; **the next agent owns both**.
 
-The user will handle **Docker and Telegram integration**. Do not build the live Telegram watcher,
-deployment image, container configuration, or notification orchestration unless the user later
-asks for it explicitly. The reusable production logic belongs in `src/`; `scripts/` is for
-offline analysis and operator tooling.
+Keep the reusable production logic in `src/`. Thin process/CLI entry points may live in `scripts/`,
+but do not promote the existing backtest or debug scripts into the service.
 
 ## Current state
 
 - Working tree was clean when this handoff was written.
-- Latest commits:
+- Recent detector commits:
   - `3155f2d` — keep camera artifacts orthogonal to alerts.
   - `e33ee6d` — recover warmup-only guard evidence.
   - `f3702aa` — repository cleanup and Cam12 trace work; its original middle-era dating was
@@ -26,6 +26,10 @@ offline analysis and operator tooling.
 - The increase from FP 25 to FP 26 is intentional: cam12/9162 is labelled `unknown`, but the
   user's latest review says it may contain a small animal as well as a camera artifact, so it is
   allowed to alert as `animal_candidate`.
+- Telegram foundations already exist: Telethon credentials and source-channel configuration,
+  pure message parsing/backfill logic, tested Bot API text delivery, tested ntfy delivery, and a
+  manual `scripts/send_test_alert.py`. There is no long-running watcher, media-delivery path,
+  durable processing/delivery state, or container yet.
 
 Run the normal checks with:
 
@@ -39,10 +43,11 @@ uv run python scripts/backtest.py \
 Use `--no-record` for experiments. Bump `src.motion.EXTRACTOR_VERSION` whenever cached feature
 semantics change; classifier-only changes do not require an extractor bump.
 
-## Next implementation target
+## Required implementation sequence
 
-Measure and implement a **completed-sibling event resolver**, offline and independently of
-Telegram.
+### 1. Measure and implement the completed-sibling event resolver
+
+Do this offline first, then use it as the event-policy core of the live Telegram service.
 
 Many camera events produce a short `(Initial)` preview followed by a longer `(Stopped)` or
 `(Timeout)` clip. The short preview can lose a guard during IR warmup, then classify a later bush,
@@ -71,14 +76,100 @@ policy. Only after that evidence should reusable, transport-independent resoluti
 under `src/`. Keep caption parsing and report generation in `scripts/` unless they are truly part
 of the production-domain API.
 
-Definition of done:
+Resolver definition of done:
 
 - the policy is measured on all labelled sibling events;
 - every protected animal/incident change is manually inspectable;
 - tests cover event order, missing siblings, duplicate Initial clips, and an Initial alert whose
   fuller sibling is guard;
 - the per-clip classifier remains usable unchanged;
-- no Docker or Telegram work is included.
+- the resolver has a small transport-independent API suitable for the live watcher.
+
+### 2. Build the live Telegram watcher
+
+Use Telethon to subscribe to new messages from `SOURCE_CHANNEL`. Reuse `src.message_parsing` and
+the existing camera configuration rather than duplicating caption/camera matching. For each clip:
+
+1. upsert its metadata with `source='live'`;
+2. download media to a stable path under `data/history/<camera>/` using a temporary file followed
+   by an atomic rename;
+3. group sibling messages by the embedded camera-event timestamp;
+4. buffer an Initial preview for the measured/configured sibling window;
+5. run detection, scoring, per-clip classification, maintenance checks, and the event resolver;
+6. dispatch the final outcome once, even across a restart.
+
+Move the reusable embedded event-timestamp/key parsing out of the private
+`scripts.label._event_key` helper into `src`; production code must not import `scripts`. Likewise,
+factor a pure `src` clip-analysis entry point that resolves dated camera geometry/reference data,
+extracts features, returns the detailed classification and maintenance flags, and can be called by
+both the watcher and offline tools. Do not make the watcher import `scripts.backtest`.
+
+Derive the sibling wait window from the observed message-gap distribution instead of guessing it,
+and make it configurable. A missing sibling must eventually flush rather than leave an event
+pending forever. Unknown cameras and malformed/non-video messages must be logged and handled
+without killing the watcher.
+
+Add durable processing state to SQLite for pending events, processed source messages, final event
+decisions, and delivery attempts. The current unique `(channel_id, message_id)` clip key is useful
+but is not enough to guarantee exactly-once event delivery after a crash. Any schema change must
+use an explicit migration following the existing `scripts/migrate_schema_v*.py` pattern; export
+labels before destructive migration work.
+
+The service must support graceful shutdown, structured logs, bounded retries/backoff, recovery of
+pending events after restart, and a health signal that Docker can check. Keep network clients and
+the clock injectable so the behavior is testable without Telegram access or real waiting.
+
+### 3. Complete Telegram and ntfy delivery
+
+`src.telegram_alert.send_telegram_alert` currently sends text only. Extend the transport so an
+animal/incident alert can include the source clip (or a reliably playable H.264 derivative), the
+camera, event time, category, reason, and useful evidence. Preserve a text-only fallback.
+
+Keep routing policy explicit:
+
+- `animal_candidate` and `incident_candidate` go to the urgent alert path;
+- maintenance is orthogonal and may accompany any category;
+- guard/resident/environment results are recorded but do not enter the urgent alert channel;
+- delivery failure never marks an event delivered.
+
+Use idempotency keys/durable delivery rows so a retry cannot post duplicate alerts. Existing
+Telegram and ntfy functions are injectable and unit-tested; extend that pattern for media and
+retry orchestration. `scripts/send_test_alert.py` should become the safe manual end-to-end
+credential/media smoke test, not the live service itself.
+
+### 4. Dockerize the service
+
+Add a production Dockerfile and Compose configuration for the watcher. At minimum:
+
+- run as a non-root user;
+- install from the locked project dependencies;
+- persist `data/`, the SQLite database/WAL files, downloaded history, references, and the Telethon
+  session in mounted storage;
+- receive credentials through environment/secrets, never bake `.env` or a session into the image;
+- provide a healthcheck tied to the watcher's real heartbeat/readiness;
+- use a restart policy and graceful stop period compatible with flushing SQLite and pending state;
+- document the one-time interactive Telethon session bootstrap and subsequent unattended startup;
+- verify that generated/debug/alert video is playable from the container. The project already uses
+  the FFmpeg binary bundled by `imageio-ffmpeg` rather than relying on system OpenCV codecs.
+
+If ntfy runs in a separate container, configure its Compose service hostname; the example
+`http://localhost:80` points back into the watcher container and will not reach a sibling service.
+
+Add container-level tests or smoke checks for startup with fake transports and a temporary mounted
+data directory. Do not require live credentials in the automated test suite.
+
+### Production definition of done
+
+- a new source clip can flow from a fake Telethon event through persistence, sibling resolution,
+  classification, and a fake Telegram/ntfy delivery in an integration test;
+- replaying the same source messages or restarting during delivery produces no duplicate alert;
+- an Initial-only event flushes after the configured deadline;
+- a completed guard sibling prevents the known preview false alerts without losing measured
+  animal/incident events;
+- Docker starts as non-root with persistent state and reports healthy only when the watcher and DB
+  are ready;
+- setup, session bootstrap, normal operation, upgrade, backup, and recovery are documented;
+- the full detector/backtest regression and all unit/integration tests remain green.
 
 ## Detection behavior that is already settled
 
@@ -156,12 +247,17 @@ do not appear in `git status`.
 - `src/motion.py` — detector and cached extraction identity.
 - `src/scoring.py` — feature calculation from a `ClipDetection`.
 - `src/classify.py` — deterministic per-clip classification and reason codes.
+- `src/backfill.py`, `src/message_parsing.py` — reusable Telegram message ingestion/parsing pieces.
+- `src/telegram_alert.py`, `src/ntfy_alert.py` — current tested text transports.
+- `src/db.py` — SQLite schema/repository functions; live event and delivery state is not present.
 - `src/config.py`, `config/thresholds.yaml` — typed classification thresholds.
 - `config/cameras.yaml` — dated geometry and camera configuration.
 - `scripts/backtest.py` — labelled/full-corpus evaluation harness.
 - `scripts/render_debug.py` — visual detector inspection; its HUD shows classification, warmup
   evidence, rectangular artifact evidence, and global shift evidence.
 - `scripts/label.py` — label workflow and the current offline `_event_key` helper.
+- `scripts/send_test_alert.py` — current manual text-transport smoke test.
+- `.env.example` — existing Telegram, Bot API, ntfy, DB, and operating-window settings.
 - `docs/handoff.md` — full historical investigation log. Start with session #22; older sections
   are retained for provenance and sometimes explicitly superseded.
 - `docs/detection_capability_map.md` — feature inventory and scope.

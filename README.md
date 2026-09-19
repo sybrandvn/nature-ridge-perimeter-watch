@@ -9,8 +9,8 @@ for that remaining application work.
 
 For a new coding agent, start with
 [docs/next_agent_handoff.md](docs/next_agent_handoff.md). It describes the current detector state,
-the next evidence-backed implementation, and the explicit scope boundary: the user is handling
-Docker and Telegram integration.
+the next evidence-backed event-policy work, and the remaining live Telegram and Docker
+implementation that the agent owns.
 
 Two gates decide whether the rest of the pipeline gets built:
 

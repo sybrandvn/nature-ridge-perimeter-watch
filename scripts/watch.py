@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 
 from src import db
+from src.bot import BotQueries, build_query_bot
 from src.config import (
     load_app_config,
     load_cameras_config,
@@ -67,6 +68,36 @@ async def run(argv: list[str] | None = None) -> None:  # pragma: no cover - real
         logger.error("ambiguous_deliveries_require_review", extra={"count": ambiguous})
     write_heartbeat(config.watcher_heartbeat_path)
 
+    query_application = None
+    query_initialized = False
+    if config.telegram_bot_token:
+        try:
+            query_application = build_query_bot(
+                BotQueries(conn=conn, config=config, cameras=cameras),
+                config.telegram_bot_token,
+            )
+            await query_application.initialize()
+            query_initialized = True
+            await query_application.bot.set_my_commands(
+                query_application.bot_data["commands"]
+            )
+            await query_application.start()
+            if query_application.updater is None:
+                raise RuntimeError("Telegram query bot has no polling updater")
+            await query_application.updater.start_polling()
+            logger.info(
+                "query_bot_started",
+                extra={
+                    "trustee_count": len(config.bot_trustee_ids),
+                    "security_count": len(config.bot_security_ids),
+                },
+            )
+        except Exception:
+            logger.exception("query_bot_start_failed")
+            if query_application is not None and query_initialized:
+                await query_application.shutdown()
+            query_application = None
+
     async def on_message(event):
         await watcher.handle_message(event.message)
 
@@ -86,6 +117,11 @@ async def run(argv: list[str] | None = None) -> None:  # pragma: no cover - real
     finally:
         maintenance.cancel()
         await asyncio.gather(maintenance, return_exceptions=True)
+        if query_application is not None:
+            if query_application.updater is not None:
+                await query_application.updater.stop()
+            await query_application.stop()
+            await query_application.shutdown()
         conn.close()
 
 

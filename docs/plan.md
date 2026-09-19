@@ -531,17 +531,17 @@ closed: its identity covers every current extraction input and corpus output was
 34. Commit per passing phase on a feature branch; no auto-merge.
 
 ### Phase 5: Trustee query bot (after calibration)
-35. Role-based access from a Telegram user-ID allowlist: `trustee` (full), `security`
+35. [done] Role-based access from a Telegram user-ID allowlist: `trustee` (full), `security`
     (restricted). Enforced server-side in every handler — hiding a menu button is not access
     control. Unknown IDs refused and logged.
-36. Commands: `/about`, `/tonight`, `/health`, `/animals`, `/map` for both roles; `/patrols`
+36. [done] Commands: `/about`, `/tonight`, `/health`, `/animals`, `/map` for both roles; `/patrols`
     trustee only (passes per night, times, cameras covered, coverage gaps).
-37. Camera health surfaces parsed `system_events` primarily, with schedule-aware silence detection
+37. [done] Camera health surfaces parsed `system_events` primarily, with schedule-aware silence detection
     as a backstop for a camera that dies without notifying. Silence outside the operating window
     is never a fault.
-38. The map is an approximate schematic — numbered positions along a line, no accurate
+38. [done] The map is an approximate schematic — numbered positions along a line, no accurate
     coordinates or coverage arcs — because anything retrievable in Telegram can be forwarded.
-39. Analytics carry confidence caveats; patrol counts lean on sequence detection rather than
+39. [done] Analytics carry confidence caveats; patrol counts lean on sequence detection rather than
     single-clip classification.
 
 ## Sensitivity note

@@ -212,6 +212,25 @@ def recover_interrupted(conn: sqlite3.Connection) -> int:
     return ambiguous
 
 
+def enqueue_missing_deliveries(
+    conn: sqlite3.Connection, *, transports: Iterable[str], now: datetime
+) -> int:
+    """Create outbox rows when a transport is configured after finalization."""
+    inserted = 0
+    for transport in transports:
+        inserted += conn.execute(
+            """
+            INSERT OR IGNORE INTO live_deliveries
+                (event_key, transport, status, next_attempt_at)
+            SELECT event_key, ?, 'pending', ? FROM live_events
+            WHERE status = 'finalized'
+              AND final_category IN ('animal_candidate', 'incident_candidate')
+            """,
+            (transport, utc_text(now)),
+        ).rowcount
+    return inserted
+
+
 def due_deliveries(conn: sqlite3.Connection, now: datetime) -> list[sqlite3.Row]:
     return list(
         conn.execute(

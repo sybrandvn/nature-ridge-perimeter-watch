@@ -103,6 +103,31 @@ The default 300-second Initial-sibling window is measured from the local corpus:
 paired events completed within it, and 99.9% completed within 286 seconds. Stopped/Timeout clips
 finalize immediately. Override `EVENT_WAIT_SECONDS` only with newer measured evidence.
 
+### Telegram alert and query bot
+
+Create the bot once in Telegram with `@BotFather` (`/newbot`) and put the returned token in
+`TELEGRAM_BOT_TOKEN`. The same bot can post urgent clip alerts and answer private commands. Add it
+to the alert destination, grant permission to post, and set `ALERT_CHANNEL_ID` if alert delivery is
+wanted. Never paste the token into source files, logs, or chat.
+
+The bot enforces `BOT_TRUSTEE_IDS` and `BOT_SECURITY_IDS` in every handler. Trustees and security
+can use `/about`, `/tonight`, `/health`, `/animals`, and `/map`; only trustees can use `/patrols`.
+The map is deliberately an approximate ordered list, and patrol output carries a confidence
+caveat. Unlisted users receive only `Not authorized` and their numeric user ID is recorded in the
+structured watcher log. This provides a bootstrap path: configure the token, message `/about`,
+read the denied ID from `docker compose logs watcher`, then add that ID to the appropriate
+comma-separated allowlist and restart the service.
+
+```bash
+docker compose up -d --build watcher
+docker compose logs --tail=100 watcher
+docker compose --profile tools run --rm toolbox python scripts/send_test_alert.py
+```
+
+When an alert transport is configured after events were already finalized, the restart recovery
+step creates missing delivery rows for urgent events. Existing delivered or ambiguous rows are not
+duplicated.
+
 ## Workflow
 
 ### 1. First Telegram auth

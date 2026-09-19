@@ -79,7 +79,13 @@ class LiveWatcher:
         self._lock = asyncio.Lock()
 
     def recover(self) -> int:
-        return live_state.recover_interrupted(self.conn)
+        ambiguous = live_state.recover_interrupted(self.conn)
+        live_state.enqueue_missing_deliveries(
+            self.conn,
+            transports=self._transports("incident_candidate"),
+            now=self.now(),
+        )
+        return ambiguous
 
     def _analyze(
         self, *, channel_id: str, message_id: int, path: Path, timestamp: str, camera: Any

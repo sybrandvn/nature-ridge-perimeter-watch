@@ -347,7 +347,7 @@ def test_classify_low_persistence_blocks_every_alert_branch(features):
 
 def test_classify_alert_persistence_floor_is_inclusive():
     features = _features(
-        persistence=0.01,
+        persistence=0.025,
         outside_pixel_fraction=0.9,
         median_fence_distance=0.2,
         color_fraction=0.0,

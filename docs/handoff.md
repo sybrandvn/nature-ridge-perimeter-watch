@@ -27,14 +27,33 @@ siblings whose full follow-up clips correctly detect the flashlight, while the p
 zero or one genuine detection and geometry dominated by recovered boxes. This is an evidence-
 quality failure, not a flashlight-detector failure.
 
-`classification.alert.persistence_min: 0.01` now applies immediately before every
+`classification.alert.persistence_min: 0.025` now applies immediately before every
 `animal_candidate` or `incident_candidate` return. Earlier guard and environment rules retain
 priority. Clips below the floor become `unclassified` with reason
 `insufficient_detection_evidence`. Relative persistence was chosen instead of a minimum frame
 count because short genuine clips still need to qualify; the weakest known protected alert is
-0.0769 (over seven times the floor), and cam10/7631 is 0.1111. On the 708 labelled clips, the exact
-alert-channel result moves from TP 29 / FP 39 / FN 18 / TN 622 (precision 0.4265, recall 0.6170,
-F1 0.5043) to TP 29 / FP 31 / FN 18 / TN 630 (precision 0.4833, recall 0.6170, F1 0.5421).
+0.0769 (over three times the floor), and cam10/7631 is 0.1111. The initial 0.01 floor removed eight
+false alerts. A follow-up audit extended the floor to 0.025: the only additional labelled alert is
+cam07/22289, a guard/startup-illumination clip, and five additional unlabelled alerts at exactly
+0.0233 likewise show illumination with no persistent subject (a sixth is already caught by the
+multi-object flashlight rule). On the 708 labelled clips, the exact alert-channel result moves
+from TP 29 / FP 39 / FN 18 / TN 622 (precision 0.4265, recall 0.6170, F1 0.5043) to TP 29 / FP 30 /
+FN 18 / TN 631 (precision 0.4915, recall 0.6170, F1 0.5472).
+
+The residual audit separates 22 confirmed false-alert clips (14 guard, 8 environment; 20 events)
+from eight `unknown` alerts. Do not treat those unknowns as false: notes include “probably an
+animal”, “worth reporting”, and a bag caught on the camera. All 30 residual alerts are emitted by
+the two generic outside branches (`outside_no_colour`: 22; `outside_colour`: 8), but no further
+global gate has protected-class margin. Recovery is not enough: real incidents reach recovered
+fractions 0.846 (cam08/4052) and 0.792 (cam06/21520). Size/height is not enough: the real
+cam10/21524 incident has row-normalised area 41,624 and height 2.44m, overlapping the large guard
+and vegetation residuals. Lowering the global green-flicker threshold is actively unsafe because
+it suppresses cam10/7631. Lowering the warmup-flashlight threshold to 0.0015 catches only two
+alerting guards and has narrow margin over animal cam01/16028 at 0.001176, so it was measured but
+not shipped. Six of the 20 residual false events are preview alerts whose longer sibling is
+non-alerting; that is evidence for the separate wait-for-completed-sibling policy investigation,
+not another detector threshold.
+
 No feature reprocessing is required because `persistence` is already cached; a normal reprocess
 remains the recovery path if detector features change later.
 

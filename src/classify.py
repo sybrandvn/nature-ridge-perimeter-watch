@@ -139,12 +139,13 @@ Rules:
     Only fires for calibrated cameras (`uncalibrated == 0.0`); the 3 without a
     usable picket trace (cam01b, cam15, cam16) are untouched by this rule and
     fall through to the pixel-space rules exactly as before.
-  - unclassified (minimum alert evidence): persistence < 0.01 immediately
+  - unclassified (minimum alert evidence): persistence < 0.025 immediately
     before any animal_candidate or incident_candidate return. Guard and
-    environment rules retain priority. All 11 current alert clips below this
-    floor were manually reviewed: six are guards, two are unknown and three
-    are blank/camera artifacts; none is a confirmed animal or incident. The
-    weakest known protected alert has persistence 0.0769, over 7x the floor.
+    environment rules retain priority. All 17 current alert clips below this
+    floor were audited: seven are guards, two are unknown, three are blank/
+    camera artifacts and five unlabelled clips show only startup illumination;
+    none is a confirmed animal or incident. The weakest known protected alert
+    has persistence 0.0769, over 3x the floor.
     Relative persistence is used instead of a minimum frame count so short,
     genuine events such as cam10/7631 (0.1111) remain eligible.
   - animal_candidate (near-fence daylight recovery): the same compact,

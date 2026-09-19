@@ -88,10 +88,11 @@ classification:
 
   alert:
     # Minimum temporal evidence before geometry may emit animal_candidate or
-    # incident_candidate. Every current alert clip below 0.01 was manually
-    # reviewed: six guards, two unknowns and three blank/camera-artifact clips;
-    # no animal or incident. The weakest known protected alert is 0.0769.
-    persistence_min: 0.01
+    # incident_candidate. All 17 current alert clips below 0.025 were audited:
+    # seven guards, two unknowns, three blank/camera-artifact clips and five
+    # unlabelled clips showing only startup illumination; no animal or incident.
+    # The weakest known protected alert is 0.0769, over 3x this floor.
+    persistence_min: 0.025
 
   # classify() docstring, "animal_candidate / incident_candidate".
   # median_fence_distance is upper-bounded as well as lower-bounded (added

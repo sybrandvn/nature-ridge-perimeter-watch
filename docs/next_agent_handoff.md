@@ -1,6 +1,27 @@
-# Next-agent handoff: production service, Telegram, Docker, and detection
+# Next-agent handoff: operate and improve the production watcher
 
-Updated 2026-09-19 on branch `feat/phase2-refactor`.
+Updated 2026-09-19 on `main` after the detector, Docker, and Telegram work was completed.
+
+## Completed production path
+
+- `src/clip_analysis.py` is the shared production/backtest analysis entry point.
+- `src/event_keys.py` owns embedded timestamp grouping and lifecycle parsing.
+- schema v8 durably stores processed messages, pending/final events, analyzed siblings, and
+  per-transport delivery attempts; migrate v7 with `scripts/migrate_schema_v8.py`.
+- `src/live_watcher.py` and `scripts/watch.py` provide live Telethon ingestion, atomic media
+  downloads, measured sibling buffering, conservative urgent-event resolution, Telegram video
+  delivery, ntfy delivery, bounded retry, restart recovery, and heartbeat maintenance.
+- Compose now runs `watcher` by default with `restart: unless-stopped`, persistent `./data`, and a
+  readiness-plus-heartbeat healthcheck. The operator and session-bootstrap profiles remain.
+- The measured sibling wait is 300 seconds: only 6 of 8,274 observed sibling groups exceeded it;
+  99.9% completed within 286 seconds. Completion captions finalize immediately, and a late urgent
+  sibling reopens an already-finalized suppressed event.
+- The resolver preserves any `animal_candidate` or `incident_candidate` sibling. The proposed
+  completed-guard and longest-only overrides remain rejected because measured protected events
+  lost alerts under those policies.
+
+The sections below preserve the implementation brief and detector constraints for audit context.
+Do not treat their future-tense statements as current repository status.
 
 Independent code review, later the same day:
 [code_effectiveness_review_2026-09-19.md](code_effectiveness_review_2026-09-19.md).
@@ -12,39 +33,24 @@ the rejected coexistence override, and the new cold-corpus measurements.
 
 ## Scope
 
-Complete the remaining application: event policy, live Telegram ingestion, alert delivery, and
-Docker deployment. The earlier statement that the user would handle Docker and Telegram was a
-miscommunication; **the next agent owns both**.
+Operate the completed watcher, inspect real live outcomes, and improve it only from measured
+false-positive/false-negative evidence.
 
 Keep the reusable production logic in `src/`. Thin process/CLI entry points may live in `scripts/`,
 but do not promote the existing backtest or debug scripts into the service.
 
 ## Current state
 
-- The 2026-09-19 detection-review implementation is currently uncommitted; inspect
-  the working-tree diff before starting the production service.
-- Recent detector commits:
-  - `3155f2d` — keep camera artifacts orthogonal to alerts.
-  - `e33ee6d` — recover warmup-only guard evidence.
-  - `f3702aa` — repository cleanup and Cam12 trace work; its original middle-era dating was
-    corrected by `e33ee6d`.
+- Detector review and production work are committed logically on `main`.
 - `EXTRACTOR_VERSION` is `motion-features-v7`.
-- Full verification: **774 tests pass**, Ruff clean.
+- Run the current full suite and Ruff before changing behavior; the count grows with each layer.
 - Cold labelled backtest plus final classifier replay: **708 clips**, TP 32 / FP 24 /
   FN 15 / TN 637, precision 0.571, recall 0.681, F1 0.621 (unknowns counted negative).
 - Protected-event regression: all 5 incident and 20 animal events pass with all 49
   protected sibling clips present and no exception.
 - cam12/9162 remains `animal_candidate`: it is labelled `unknown`, but the user's
   review says it may contain a small animal as well as a camera artifact.
-- Telegram foundations already exist: Telethon credentials and source-channel configuration,
-  pure message parsing/backfill logic, tested Bot API text delivery, tested ntfy delivery, and a
-  manual `scripts/send_test_alert.py`. There is no long-running watcher, media-delivery path,
-  durable processing/delivery state, or production watcher service yet.
-- Docker foundations now exist on `main`: the locked runtime image builds and runs non-root;
-  Compose provides explicit operator-tool and interactive session-bootstrap profiles; `./data`
-  persists the database/WAL, source clips, references, reports, logs, and Telethon session; the
-  root filesystem is read-only; and readiness plus real H.264 encode/decode smoke checks pass.
-  There is deliberately no always-running Compose service until the watcher exists.
+- Telegram and Docker production paths are implemented as summarized above.
 
 Run the normal checks with:
 
@@ -58,7 +64,7 @@ uv run python scripts/backtest.py \
 Use `--no-record` for experiments. Bump `src.motion.EXTRACTOR_VERSION` whenever cached feature
 semantics change; classifier-only changes do not require an extractor bump.
 
-## Required implementation sequence
+## Original implementation sequence (completed; retained for audit context)
 
 ### 1. Measure and implement the completed-sibling event resolver
 
@@ -270,15 +276,21 @@ do not appear in `git status`.
 - `src/motion.py` — detector and cached extraction identity.
 - `src/scoring.py` — feature calculation from a `ClipDetection`.
 - `src/classify.py` — deterministic per-clip classification and reason codes.
+- `src/clip_analysis.py` — shared reference/cache/extraction/classification path.
+- `src/event_keys.py` — production sibling grouping and lifecycle parsing.
+- `src/live_watcher.py`, `src/live_state.py` — watcher orchestration and durable state transitions.
+- `src/media_download.py` — video-type validation and atomic downloads.
 - `src/backfill.py`, `src/message_parsing.py` — reusable Telegram message ingestion/parsing pieces.
-- `src/telegram_alert.py`, `src/ntfy_alert.py` — current tested text transports.
-- `src/db.py` — SQLite schema/repository functions; live event and delivery state is not present.
+- `src/telegram_alert.py`, `src/ntfy_alert.py` — injectable Telegram video/text and ntfy transports.
+- `src/db.py` — schema v8 persistence, including live event and delivery state.
 - `src/config.py`, `config/thresholds.yaml` — typed classification thresholds.
 - `config/cameras.yaml` — dated geometry and camera configuration.
 - `scripts/backtest.py` — labelled/full-corpus evaluation harness.
 - `scripts/render_debug.py` — visual detector inspection; its HUD shows classification, warmup
   evidence, rectangular artifact evidence, and global shift evidence.
-- `scripts/label.py` — label workflow and the current offline `_event_key` helper.
+- `scripts/label.py` — label workflow using the shared production event key.
+- `scripts/watch.py` — Telethon process entry point and heartbeat loop.
+- `scripts/migrate_schema_v8.py` — additive v7-to-v8 migration.
 - `scripts/send_test_alert.py` — current manual text-transport smoke test.
 - `.env.example` — existing Telegram, Bot API, ntfy, DB, and operating-window settings.
 - `docs/handoff.md` — full historical investigation log. Start with session #22; older sections

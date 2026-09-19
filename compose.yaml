@@ -27,6 +27,28 @@ x-perimeter-app: &perimeter-app
   stop_grace_period: 30s
 
 services:
+  watcher:
+    <<: *perimeter-app
+    command: ["python", "-m", "scripts.watch"]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "scripts.container_healthcheck",
+          "--readiness",
+          "--heartbeat",
+          "/app/data/live/watcher.heartbeat",
+          "--max-heartbeat-age",
+          "600",
+        ]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
   # Reusable operator container. Examples:
   #   docker compose --profile tools run --rm toolbox python scripts/meta_backfill.py
   #   docker compose --profile tools run --rm toolbox python scripts/backtest.py --help

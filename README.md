@@ -1,15 +1,13 @@
 # Nature Ridge Perimeter Watch
 
 Motion-based perimeter fence monitoring built from a Telegram security-camera feed. The reusable
-detection, scoring, classification, persistence, calibration, and alert-transport code now lives
-under `src/`. The repository still does **not** contain the live Telegram watcher/orchestrator
-that continuously receives clips and routes classifications; `scripts/` contains operator and
-offline-analysis entry points, not a hidden production service. See [docs/plan.md](docs/plan.md)
-for that remaining application work.
+detection, scoring, classification, persistence, calibration, and alert-transport code lives
+under `src/`. `scripts/watch.py` runs the durable Telegram watcher: it downloads new videos,
+analyzes them, resolves Initial/Stopped siblings, and delivers urgent animal/incident alerts.
 
 For a new coding agent, start with
 [docs/next_agent_handoff.md](docs/next_agent_handoff.md). It describes the current detector state,
-the next evidence-backed event-policy work, and the remaining live Telegram service integration.
+the measured detector behavior, completed service integration, and remaining improvement work.
 
 Two gates decide whether the rest of the pipeline gets built:
 
@@ -43,7 +41,7 @@ uv run pytest -q
 
 ## Docker
 
-The image packages the locked runtime dependencies and the current operator tools. It runs as a
+The image packages the locked runtime dependencies, watcher, and operator tools. It runs as a
 non-root user, keeps the root filesystem read-only under Compose, and bind-mounts `./data` for the
 SQLite database/WAL, Telethon session, downloaded history, references, reports, and logs.
 
@@ -60,8 +58,8 @@ docker compose --profile tools run --rm toolbox \
 
 The media smoke check writes a real H.264 file through `Mp4Writer` and decodes it again with
 OpenCV. Readiness validates the mounted directory, schema version, camera configuration, and
-threshold configuration. The future watcher can add
-`--heartbeat /app/data/live/watcher.heartbeat` to require a fresh process heartbeat as well.
+threshold configuration. The production service healthcheck also requires a fresh watcher
+heartbeat at `/app/data/live/watcher.heartbeat`.
 
 Create the Telethon session once in an interactive terminal. It is written to
 `data/session.session` on the host and is excluded from both Git and the image build context:
@@ -84,9 +82,26 @@ irreplaceable source clips before upgrades. Rebuild with `docker compose --profi
 --pull toolbox`; the bind-mounted data survives image replacement. Stop active writers before a
 filesystem-level SQLite copy, or use SQLite's backup API.
 
-There is deliberately no always-running Compose service yet. The live watcher, durable event
-resolver, and delivery orchestrator have not been implemented, so an idle container would provide
-a false readiness signal. `toolbox` and `session-bootstrap` are profiles and only run when invoked.
+Before the first watcher start on an existing schema-v7 database, run the additive migration, then
+start the default service:
+
+```bash
+docker compose --profile tools run --rm --build toolbox python -m scripts.migrate_schema_v8
+docker compose up -d --build watcher
+docker compose ps
+docker compose logs -f watcher
+```
+
+`watcher` restarts unless stopped and is healthy only while configuration, SQLite, persistent
+storage, and its heartbeat are healthy. `toolbox` and `session-bootstrap` run only through their
+profiles. For an upgrade, stop `watcher`, back up SQLite and the session, rebuild, run any new
+explicit migration with `toolbox`, and start `watcher` again. Pending events and known failed
+deliveries resume. A delivery interrupted after its external call began is marked `ambiguous` for
+manual review so a restart cannot post a duplicate.
+
+The default 300-second Initial-sibling window is measured from the local corpus: 8,268 of 8,274
+paired events completed within it, and 99.9% completed within 286 seconds. Stopped/Timeout clips
+finalize immediately. Override `EVENT_WAIT_SECONDS` only with newer measured evidence.
 
 ## Workflow
 

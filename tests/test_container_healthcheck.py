@@ -89,5 +89,9 @@ def test_docker_configuration_is_non_root_locked_and_persistent():
     assert "read_only: true" in compose
     assert "no-new-privileges:true" in compose
     assert "session-bootstrap:" in compose
+    assert "watcher:" in compose
+    assert 'command: ["python", "-m", "scripts.watch"]' in compose
+    assert "restart: unless-stopped" in compose
+    assert '"--heartbeat"' in compose
     assert ".env" in dockerignore
     assert "data" in dockerignore

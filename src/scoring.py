@@ -22,6 +22,7 @@ from src.features import (
     apply_photometric_match,
     area_stability,
     aspect_ratio,
+    blob_black_white_balance,
     blob_white_fraction,
     color_saturation_fraction,
     depth_progression,
@@ -884,6 +885,7 @@ class _DetectionFeatureSummary:
     genuine_detected_indices: tuple[int, ...]
     genuine_frames_detected: int
     non_genuine_frames: int
+    reverse_filled_frames: int
     flow_coherence_values: tuple[float, ...]
     whole_frame_green_ratios: tuple[float, ...]
     color_fraction: float
@@ -893,6 +895,7 @@ class _DetectionFeatureSummary:
     blob_count: int
     blob_count_median: float
     white_fraction: float
+    black_white_balance: float
     frames_with_box: int
     flashlight_bbox_frames: int
 
@@ -939,6 +942,7 @@ def _summarize_detection_features(
     genuine_detected_indices: list[int] = []
     genuine_frames_detected = 0
     non_genuine_frames = 0
+    reverse_filled_frames = 0
     flow_coherence_values: list[float] = []
     previous_genuine_index: int | None = None
     previous_genuine_gray: np.ndarray | None = None
@@ -955,6 +959,7 @@ def _summarize_detection_features(
     motion_pixel_fraction = 0.0
     blob_count = 0
     white_fraction = 0.0
+    black_white_balance = 0.0
     frames_with_box = 0
     flashlight_bbox_frames = 0
 
@@ -984,6 +989,8 @@ def _summarize_detection_features(
         blob_count = max(blob_count, len(detected.blobs))
         if detected.recovered or detected.filled_by_reverse:
             non_genuine_frames += 1
+        if detected.filled_by_reverse:
+            reverse_filled_frames += 1
         contour = detected.largest
         if contour is None:
             continue
@@ -1015,6 +1022,10 @@ def _summarize_detection_features(
             or detected.filled_by_reverse
         ):
             continue
+        black_white_balance = max(
+            black_white_balance,
+            blob_black_white_balance(detected.frame, contour),
+        )
         genuine_frames_detected += 1
         genuine_detected_indices.append(detected.index)
         genuine_blob_areas.append(area)
@@ -1043,6 +1054,7 @@ def _summarize_detection_features(
         genuine_detected_indices=tuple(genuine_detected_indices),
         genuine_frames_detected=genuine_frames_detected,
         non_genuine_frames=non_genuine_frames,
+        reverse_filled_frames=reverse_filled_frames,
         flow_coherence_values=tuple(flow_coherence_values),
         whole_frame_green_ratios=tuple(whole_frame_green_ratios),
         color_fraction=(
@@ -1058,6 +1070,7 @@ def _summarize_detection_features(
             [float(len(detected.blobs)) for detected in detection.frames]
         ),
         white_fraction=white_fraction,
+        black_white_balance=black_white_balance,
         frames_with_box=frames_with_box,
         flashlight_bbox_frames=flashlight_bbox_frames,
     )
@@ -1095,6 +1108,9 @@ def _appearance_features(
         ),
         "row_normalised_area": row_normalised_area(contour, reference_row),
         "edge_density": edge_density(frame, contour),
+        "blob_frame_fraction": (
+            cv2.contourArea(contour) / float(frame.shape[0] * frame.shape[1])
+        ),
         "blob_white_fraction": summary.white_fraction,
     }
 
@@ -1136,6 +1152,15 @@ def _temporal_features(
         "recovered_fraction": (
             summary.non_genuine_frames / frame_count if frame_count else 0.0
         ),
+        "reverse_filled_fraction": (
+            summary.reverse_filled_frames / frame_count if frame_count else 0.0
+        ),
+        "terminal_reverse_seed": float(
+            summary.reverse_filled_frames > 0
+            and len(summary.genuine_detected_indices) == 1
+            and summary.genuine_detected_indices[0] == frame_count - 1
+        ),
+        "blob_black_white_balance": summary.black_white_balance,
         "scenery_motion_fraction": detection.scenery_motion_fraction,
         "has_reference_background": float(detection.has_reference_background),
     }
@@ -1363,4 +1388,3 @@ def features_from_detection(
         **_temporal_features(detection, summary),
         **metric_features_from_observations(metric_observations, zone),
     }
-

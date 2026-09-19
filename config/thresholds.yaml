@@ -64,9 +64,11 @@ classification:
     green_light_ratio_min: 0.02
     green_light_flicker_min: 0.02
     # classify() docstring, "guard_candidate (warmup flashlight)". Scores the
-    # frames DROPPED as IR flare, which no other feature looks at. Sits 4.3x
-    # above the highest positive; flags 118/283 guards with 0/21 animal+incident leak.
-    warmup_flashlight_ratio_min: 0.002
+    # frames DROPPED as IR flare, which no other feature looks at. The 0.0019
+    # floor remains 4.1x above incident's measured max (0.00046) and catches
+    # reviewed bad-startup 17752 plus alerting guard 5374, with no protected
+    # category change across the labelled corpus.
+    warmup_flashlight_ratio_min: 0.0019
 
   environment:
     # classify() docstring, "environment_candidate". A PEAK over frames.
@@ -91,8 +93,16 @@ classification:
     # incident_candidate. All 17 current alert clips below 0.025 were audited:
     # seven guards, two unknowns, three blank/camera-artifact clips and five
     # unlabelled clips showing only startup illumination; no animal or incident.
-    # The weakest known protected alert is 0.0769, over 3x this floor.
-    persistence_min: 0.025
+    # A later reviewed alert, cam07/19289, is a static warmup branch lock at
+    # 0.0588. A 0.06 floor suppresses it while preserving user-approved 4487
+    # at 0.0714 and the weakest confirmed animal at 0.0769.
+    persistence_min: 0.06
+    # A lone final-frame detection can seed reverse tracking through earlier
+    # frames. Suppress it only when that genuine seed contains both clipped
+    # black and clipped white pixels: 9162=0.188 and known artifact 5465=0.116,
+    # while the acceptable unclear alert 4487 is 0.073. No current labelled
+    # animal or incident alert reaches this combined provenance/pixel pattern.
+    camera_artifact_black_white_balance_min: 0.10
 
   # classify() docstring, "animal_candidate / incident_candidate".
   # median_fence_distance is upper-bounded as well as lower-bounded (added
@@ -148,4 +158,11 @@ classification:
   # incident, both well under 0.4. long_flare_frames is an ABSOLUTE frame count.
   blinding:
     blob_white_fraction_min: 0.4
+    # Maintenance-only large obstruction gate. The reviewed bag on the cam07
+    # lens (19145) covers 0.3469 of the frame with 0.2374 near-white pixels.
+    # Requiring both >=0.34 coverage and >=0.20 whiteness has zero animal or
+    # incident hits across all 47 labelled protected clips; either feature
+    # alone overlaps them and must not be used as a maintenance signal.
+    large_blob_frame_fraction_min: 0.34
+    large_blob_white_fraction_min: 0.20
     long_flare_frames_min: 18

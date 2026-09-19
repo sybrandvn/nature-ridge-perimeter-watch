@@ -2423,6 +2423,43 @@ def test_metric_observations_keep_only_genuine_boxes_and_original_indices():
     assert observations.fps == 7.5
 
 
+def test_terminal_reverse_seed_keeps_pixel_evidence_from_genuine_frame_only():
+    contour = _rect_contour(5, 6, 10, 10)
+    inferred = replace(
+        _fake_frame_detection(0, contour),
+        recovered=True,
+        filled_by_reverse=True,
+    )
+    genuine_frame = _blank_frame(value=128)
+    cv2.rectangle(genuine_frame, (5, 6), (9, 15), (0, 0, 0), thickness=-1)
+    cv2.rectangle(genuine_frame, (10, 6), (14, 15), (255, 255, 255), thickness=-1)
+    genuine = replace(_fake_frame_detection(2, contour), frame=genuine_frame)
+    detection = motion.ClipDetection(
+        frames=[inferred, replace(inferred, index=1), genuine],
+        background=_blank_frame(),
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=0,
+        total_frames=3,
+        dropped_frames=[],
+        dropped_frame_boxes=[],
+    )
+
+    result = scoring.features_from_detection(
+        detection, _ZONE, fps=10.0, threshold=18
+    )
+
+    assert result is not None
+    assert result["reverse_filled_fraction"] == pytest.approx(2 / 3)
+    assert result["terminal_reverse_seed"] == 1.0
+    assert result["blob_black_white_balance"] == pytest.approx(0.5)
+    assert result["blob_frame_fraction"] == pytest.approx(
+        cv2.contourArea(contour) / (60 * 60)
+    )
+    assert "terminal_reverse_seed" in spike.FEATURE_COLUMNS
+    assert "blob_frame_fraction" in spike.FEATURE_COLUMNS
+
+
 def test_extract_clip_features_depth_progression_higher_for_steady_travel(monkeypatch, tmp_path):
     steady = [_frame_with_square(pos) for pos in (5, 12, 19, 26, 33, 40)]
     oscillating = [_frame_with_square(pos) for pos in (5, 20, 8, 22, 6, 24)]

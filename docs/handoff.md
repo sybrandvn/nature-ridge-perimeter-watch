@@ -1,7 +1,7 @@
 # Handoff: animal-event regressions fixed; detector extraction complete
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-19. **If you are a new agent
-picking this up, search this file for "Handoff for a new agent (2026-09-19, session #20)"
+picking this up, search this file for "Handoff for a new agent (2026-09-19, session #21)"
 and start there.** (This file's session sections are not in one consistent order: #1-#5 are the
 oldest, kept in their original forward-chronological spot further up; starting from #6, each new
 session's entry is instead inserted directly above its predecessor, so the chain from #6 to the
@@ -17,6 +17,49 @@ this file is the short version of
 where things actually stand and what to do next. `docs/detection_improvement_review.md` is the
 authoritative record of everything session #16 measured and shipped, with its own itemised
 "Implementation status" section at the top.
+
+## Handoff for a new agent (2026-09-19, session #21)
+
+Reviewed the eight residual unknown alerts with the user. Preserve alerts for cam07/4487,
+cam05/9694+9695 and cam07/19288; the first is unclear but alert-worthy, the cam05 pair may be a
+very small daylight animal, and 19288 is unclear but alert-worthy. cam01b/17752 is bad startup,
+cam07/19289 is a static branch lock during warmup, cam12/9162 is a black/white camera artifact
+reverse-tracked into earlier frames, and cam07/19145 is a bag covering much of the camera and
+should carry the orthogonal maintenance flag.
+
+Three measured changes shipped from that review:
+
+- Added `terminal_reverse_seed`, `reverse_filled_fraction`, and
+  `blob_black_white_balance`. Exactly three current alerts have the terminal reverse-seed
+  provenance: artifact cam03/5465=0.116, artifact cam12/9162=0.188, and approved alert
+  cam07/4487=0.073. The alert-only `terminal_reverse_camera_artifact` gate at balance >=0.10
+  therefore suppresses the two artifacts, preserves 4487, and touches no labelled animal or
+  incident alert. Contrast/extreme-pixel fraction alone was rejected because 4487 is actually
+  higher on that measure than both artifacts.
+- Raised `classification.alert.persistence_min` from 0.025 to 0.06. This suppresses only the
+  reviewed static branch lock cam07/19289 (0.0588) among current alerts, while preserving 4487
+  (0.0714) and the weakest confirmed animal (0.0769). Lowered the existing warmup-flashlight
+  floor narrowly from 0.002 to 0.0019: reviewed bad-startup 17752 reads 0.001991 and alerting
+  guard 5374 reads 0.001915. Both leave the alert channel with no animal/incident category
+  change; the threshold remains 4.1x above incident's measured maximum.
+- Added direct `blob_frame_fraction` rather than misusing perspective-scaled area for
+  maintenance. The bag in 19145 covers 0.3469 of the image and is 0.2374 near-white. The
+  maintenance-only conjunction (coverage >=0.34 and whiteness >=0.20) flags it with zero new
+  animal/incident maintenance hits; either feature alone overlaps protected footage. Its
+  incident category remains independently intact, as intended by `is_blinding_foreground`.
+
+`EXTRACTOR_VERSION` is now `motion-features-v3`; the 708 labelled clips were cold-reprocessed.
+Relative to session #20's TP 29 / FP 30 / FN 18 / TN 631, the final result is **TP 29 / FP 25 /
+FN 18 / TN 636**, precision 0.5370, recall 0.6170, F1 0.5743. Full suite: 748 passed; Ruff clean.
+
+Cam12 geometry is not silently changed yet. The user reports the fence moved by the 9161/9162
+event, but automatic scene registration puts trace source 3457 and 9162 within about one pixel,
+and overlays remain visually aligned across the sampled interval. Per the project's hard-won
+rule, do not invent coordinates from the low-resolution frame. Clean 4x canvases for the top
+rail, base and a picket are in `data/reports/cam12_retrace_9162_2026-09-19/` (gitignored). Once
+the user traces them in red, add a complete dated zone era (all three geometries, because
+classification prefers `fence_bottom`) effective from the earlier sibling, cam12/9161 at
+`2024-11-23T03:52:25Z`, unless review finds an earlier changed clip.
 
 ## Handoff for a new agent (2026-09-19, session #20)
 

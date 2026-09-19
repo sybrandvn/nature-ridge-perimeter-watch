@@ -6,6 +6,7 @@ from src.features import (
     apply_photometric_match,
     area_stability,
     aspect_ratio,
+    blob_black_white_balance,
     blob_white_fraction,
     color_saturation_fraction,
     daylight_hint,
@@ -97,6 +98,22 @@ def test_blob_white_fraction_zero_for_dim_content():
     frame = np.full((50, 50, 3), 50, dtype=np.uint8)
     contour = _rect_contour(10, 10, 20, 20)
     assert blob_white_fraction(frame, contour) == pytest.approx(0.0)
+
+
+def test_blob_black_white_balance_requires_both_clipped_polarities():
+    frame = np.full((20, 20, 3), 128, dtype=np.uint8)
+    cv2.rectangle(frame, (2, 2), (9, 17), (0, 0, 0), thickness=-1)
+    cv2.rectangle(frame, (10, 2), (17, 17), (255, 255, 255), thickness=-1)
+    contour = _rect_contour(2, 2, 15, 15)
+
+    assert blob_black_white_balance(frame, contour) == pytest.approx(0.5)
+
+
+def test_blob_black_white_balance_is_zero_for_one_sided_dark_blob():
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    contour = _rect_contour(2, 2, 15, 15)
+
+    assert blob_black_white_balance(frame, contour) == pytest.approx(0.0)
 
 
 def _bgr(b: int, g: int, r: int) -> np.ndarray:

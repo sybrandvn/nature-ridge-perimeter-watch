@@ -603,12 +603,13 @@ _REPO_THRESHOLDS = Path(__file__).parents[1] / "config" / "thresholds.yaml"
 _GOLDEN_THRESHOLDS = {
     "green_light_ratio_min": 0.02,
     "green_light_flicker_min": 0.02,
-    "warmup_flashlight_ratio_min": 0.002,
+    "warmup_flashlight_ratio_min": 0.0019,
     "blob_count_peak_min": 10.0,
     "blob_count_median_min": 4.0,
     "implausible_height_fraction_min": 0.5,
     "motion_pixel_fraction_median_min": 0.12,
-    "alert_persistence_min": 0.025,
+    "alert_persistence_min": 0.06,
+    "camera_artifact_black_white_balance_min": 0.10,
     "outside_pixel_fraction_min": 0.6,
     "median_fence_distance_min": 0.1,
     "median_fence_distance_max": 0.40,
@@ -622,6 +623,8 @@ _GOLDEN_THRESHOLDS = {
     "jitter_min": 50.0,
     "solidity_max": 0.85,
     "blob_white_fraction_min": 0.4,
+    "large_blob_frame_fraction_min": 0.34,
+    "large_blob_white_fraction_min": 0.20,
     "long_flare_frames_min": 18.0,
     # neighbour_candidate, added 2026-09-09 (docs/detection_improvement_review.md
     # section 2.2): person-sized (real-world height) + outside + real daylight.

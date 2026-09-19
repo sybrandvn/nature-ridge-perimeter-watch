@@ -47,7 +47,7 @@ Rules:
     rule's own recall was 8.7% under the pre-2026-09-06 rule set. That is not
     the system's guard recall -- see the inside-only and warmup-flashlight
     rules below.)
-  - guard_candidate (warmup flashlight): warmup_flashlight_ratio > 0.002
+  - guard_candidate (warmup flashlight): warmup_flashlight_ratio > 0.0019
     (added 2026-09-06). Fixes the dominant false-candidate mode found by
     reviewing the first ranked queue by hand: the guard walks out of shot
     BEFORE the IR gain settles, so every frame they appear in is dropped as
@@ -59,15 +59,19 @@ Rules:
     src.scoring.extract_clip_features), which no other feature looks at.
     Measured over the whole labelled corpus, with the same daylight gate the
     other green-light features use: animal 11/11 exactly 0.0, incident max
-    0.00046, guard median 0.00049 and max 0.154. A 0.002 threshold sits 4.3x
-    above the highest positive and flags 118/283 guards with **0/21
+    0.00046, guard median 0.00049 and max 0.154. The original 0.002 threshold
+    sat 4.3x above the highest positive and flags 118/283 guards with **0/21
     animal+incident leak**.
     Placed with the other guard rule, ABOVE the animal/incident geometry rule,
     because these clips DO pass that geometry test -- that is exactly why they
     reached the queue. Known risk, accepted: a genuine incident that a guard
     responds to within the same clip would be routed to guard. The existing
-    green_light rule above already carries that same risk, and the 4.3x margin
-    is the mitigation; revisit if a labelled incident ever exceeds 0.002.
+    green_light rule above already carries that same risk. On 2026-09-19 the
+    floor moved narrowly to 0.0019 after the user identified cam01b/17752 as a
+    bad startup: it reads 0.001991, and cam03/5374 is an alerting guard at
+    0.001915. The new floor catches both with no animal/incident category
+    change and remains 4.1x above incident's measured maximum. Revisit if a
+    labelled incident ever exceeds 0.0019.
   - guard_candidate (per-object flashlight): multi_object_max_flashlight_ratio
     > GREEN_LIGHT_RATIO_MIN (same threshold as the single-track green_light
     rule above -- added 2026-09-09, from docs/detection_improvement_review.md
@@ -139,15 +143,27 @@ Rules:
     Only fires for calibrated cameras (`uncalibrated == 0.0`); the 3 without a
     usable picket trace (cam01b, cam15, cam16) are untouched by this rule and
     fall through to the pixel-space rules exactly as before.
-  - unclassified (minimum alert evidence): persistence < 0.025 immediately
+  - unclassified (minimum alert evidence): persistence < 0.06 immediately
     before any animal_candidate or incident_candidate return. Guard and
     environment rules retain priority. All 17 current alert clips below this
     floor were audited: seven are guards, two are unknown, three are blank/
     camera artifacts and five unlabelled clips show only startup illumination;
-    none is a confirmed animal or incident. The weakest known protected alert
-    has persistence 0.0769, over 3x the floor.
+    none is a confirmed animal or incident. A later reviewed alert,
+    cam07/19289, was a static branch lock during warmup at 0.0588; moving the
+    floor to 0.06 suppresses it while preserving user-approved cam07/4487 at
+    0.0714 and the weakest confirmed animal at 0.0769.
     Relative persistence is used instead of a minimum frame count so short,
     genuine events such as cam10/7631 (0.1111) remain eligible.
+  - environment_candidate (terminal reverse camera artifact): immediately
+    before an animal/incident return, a track with exactly one genuine
+    detection in the final scored frame, earlier reverse-filled boxes, and
+    blob_black_white_balance >= 0.10 is treated as sensor/decode corruption.
+    This is deliberately a conjunction: the three current alert clips with
+    terminal reverse seeds are known artifacts cam03/5465 (balance 0.116),
+    user-confirmed artifact cam12/9162 (0.188), and acceptable unclear alert
+    cam07/4487 (0.073). The threshold catches the first two and preserves the
+    third; no current labelled animal or incident alert has the combined
+    provenance/pixel signature. Guard rules retain priority.
   - animal_candidate (near-fence daylight recovery): the same compact,
     colour-bearing outside subject as the animal branch below, but with
     median_fence_distance in (0.05, 0.10] and real daylight required. A
@@ -418,6 +434,30 @@ def _insufficient_alert_evidence(
     return None
 
 
+def _alert_suppression(
+    features: dict[str, float], thresholds: ClassificationThresholds
+) -> ClassificationResult | None:
+    """Apply evidence gates that are meaningful only before an alert."""
+    if insufficient := _insufficient_alert_evidence(features, thresholds):
+        return insufficient
+    terminal_reverse_seed = features.get("terminal_reverse_seed", 0.0)
+    black_white_balance = features.get("blob_black_white_balance", 0.0)
+    if (
+        terminal_reverse_seed > 0.0
+        and black_white_balance
+        >= thresholds.camera_artifact_black_white_balance_min
+    ):
+        return ClassificationResult(
+            "environment_candidate",
+            "terminal_reverse_camera_artifact",
+            {
+                "terminal_reverse_seed": terminal_reverse_seed,
+                "blob_black_white_balance": black_white_balance,
+            },
+        )
+    return None
+
+
 def classify_detailed(
     features: dict[str, float] | None,
     thresholds: ClassificationThresholds | None = None,
@@ -442,7 +482,8 @@ def classify_detailed(
     `near_fence_animal`, `fence_straddle_no_colour`, `blinding_blob_white`,
     `motion_pixel_sustained`, `animal_row_area`,
     `insufficient_detection_evidence`, `outside_colour`,
-    `outside_no_colour`, `outside_person_daylight`, `jitter_solidity`,
+    `outside_no_colour`, `terminal_reverse_camera_artifact`,
+    `outside_person_daylight`, `jitter_solidity`,
     `inside_only_daylight`, `inside_only_night`, `no_rule_matched`), never
     renamed or reused for a different rule -- a caller may match on it.
     `contributing` holds exactly the feature values
@@ -504,8 +545,8 @@ def classify_detailed(
         and features["color_fraction"] > thresholds.color_fraction_min
         and features.get("is_daylight", False)
     ):
-        if insufficient := _insufficient_alert_evidence(features, thresholds):
-            return insufficient
+        if suppressed := _alert_suppression(features, thresholds):
+            return suppressed
         return ClassificationResult(
             "animal_candidate",
             "inside_elevated_animal",
@@ -549,8 +590,8 @@ def classify_detailed(
         <= thresholds.motion_pixel_fraction_median_min
         and features.get("is_daylight", False)
     ):
-        if insufficient := _insufficient_alert_evidence(features, thresholds):
-            return insufficient
+        if suppressed := _alert_suppression(features, thresholds):
+            return suppressed
         return ClassificationResult(
             "animal_candidate",
             "near_fence_animal",
@@ -589,8 +630,8 @@ def classify_detailed(
         and features.get("scenery_motion_fraction", 0.0)
         < thresholds.motion_pixel_fraction_median_min
     ):
-        if insufficient := _insufficient_alert_evidence(features, thresholds):
-            return insufficient
+        if suppressed := _alert_suppression(features, thresholds):
+            return suppressed
         return ClassificationResult(
             "incident_candidate",
             "fence_straddle_no_colour",
@@ -651,8 +692,8 @@ def classify_detailed(
                         "row_normalised_area": features.get("row_normalised_area", 0.0),
                     },
                 )
-            if insufficient := _insufficient_alert_evidence(features, thresholds):
-                return insufficient
+            if suppressed := _alert_suppression(features, thresholds):
+                return suppressed
             return ClassificationResult(
                 "animal_candidate",
                 "outside_colour",
@@ -663,8 +704,8 @@ def classify_detailed(
                     "row_normalised_area": features.get("row_normalised_area", 0.0),
                 },
             )
-        if insufficient := _insufficient_alert_evidence(features, thresholds):
-            return insufficient
+        if suppressed := _alert_suppression(features, thresholds):
+            return suppressed
         return ClassificationResult(
             "incident_candidate",
             "outside_no_colour",
@@ -745,6 +786,11 @@ def is_blinding_foreground(
     and common everywhere) crossing 18 is similarly rare outside this pattern.
     Combined: 7/10 of a hand-picked blinding debug set caught, ZERO leak into
     animal or incident, 14.5% guard / 29.3% environment / 20% resident false-fire.
+    The later large-obstruction conjunction adds cam07/19145's bag on the
+    camera: blob_frame_fraction 0.3469 and blob_white_fraction 0.2374. A 0.34
+    coverage floor plus 0.20 whiteness floor has zero hits on all 47 labelled
+    animal/incident clips; neither feature is safe alone (their respective
+    protected maxima are 0.3567 and 0.310).
 
     `thresholds` defaults the same way `classify()`'s does -- see there.
     `blob_white_fraction_min` is the SAME value `classify()`'s outside-geometry
@@ -755,8 +801,15 @@ def is_blinding_foreground(
         thresholds = default_thresholds()
     if features is None:
         return False
-    return features.get("blob_white_fraction", 0.0) >= thresholds.blob_white_fraction_min or (
-        features.get("long_flare_frames", 0.0) >= thresholds.long_flare_frames_min
+    white_fraction = features.get("blob_white_fraction", 0.0)
+    return (
+        white_fraction >= thresholds.blob_white_fraction_min
+        or (
+            features.get("blob_frame_fraction", 0.0)
+            >= thresholds.large_blob_frame_fraction_min
+            and white_fraction >= thresholds.large_blob_white_fraction_min
+        )
+        or features.get("long_flare_frames", 0.0) >= thresholds.long_flare_frames_min
     )
 
 

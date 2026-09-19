@@ -115,6 +115,22 @@ def test_is_blinding_foreground_on_long_flare():
     assert is_blinding_foreground(_features(long_flare_frames=20)) is True
 
 
+def test_is_blinding_foreground_on_large_bright_obstruction():
+    features = _features(blob_frame_fraction=0.346875, blob_white_fraction=0.2374)
+    assert is_blinding_foreground(features) is True
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        _features(blob_frame_fraction=0.33, blob_white_fraction=0.2374),
+        _features(blob_frame_fraction=0.346875, blob_white_fraction=0.19),
+    ],
+)
+def test_large_obstruction_maintenance_gate_requires_both_features(features):
+    assert is_blinding_foreground(features) is False
+
+
 def test_is_blinding_foreground_false_below_both_thresholds():
     features = _features(blob_white_fraction=0.1, long_flare_frames=5)
     assert is_blinding_foreground(features) is False
@@ -347,7 +363,7 @@ def test_classify_low_persistence_blocks_every_alert_branch(features):
 
 def test_classify_alert_persistence_floor_is_inclusive():
     features = _features(
-        persistence=0.025,
+        persistence=0.06,
         outside_pixel_fraction=0.9,
         median_fence_distance=0.2,
         color_fraction=0.0,
@@ -734,6 +750,23 @@ def test_classify_alert_persistence_threshold_is_wired():
     assert classify(features, _thresholds(alert_persistence_min=0.0)) == "incident_candidate"
 
 
+def test_classify_terminal_reverse_artifact_threshold_is_wired():
+    features = _features(
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+        terminal_reverse_seed=1.0,
+        blob_black_white_balance=0.188,
+    )
+    assert classify(features) == "environment_candidate"
+    assert (
+        classify(
+            features,
+            _thresholds(camera_artifact_black_white_balance_min=0.2),
+        )
+        == "incident_candidate"
+    )
+
+
 def test_classify_inside_blob_count_threshold_is_wired():
     features = _features(
         uncalibrated=0.0,
@@ -914,6 +947,19 @@ def test_is_blinding_foreground_long_flare_frames_threshold_is_wired():
     features = _features(long_flare_frames=20)
     assert is_blinding_foreground(features) is True
     assert is_blinding_foreground(features, _thresholds(long_flare_frames_min=50)) is False
+
+
+def test_is_blinding_foreground_large_blob_thresholds_are_wired():
+    features = _features(blob_frame_fraction=0.35, blob_white_fraction=0.24)
+    assert is_blinding_foreground(features) is True
+    assert (
+        is_blinding_foreground(features, _thresholds(large_blob_frame_fraction_min=0.5))
+        is False
+    )
+    assert (
+        is_blinding_foreground(features, _thresholds(large_blob_white_fraction_min=0.3))
+        is False
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1166,6 +1212,43 @@ def test_reason_outside_no_colour():
     }
 
 
+def test_reason_terminal_reverse_camera_artifact():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        terminal_reverse_seed=1.0,
+        blob_black_white_balance=0.188,
+    )
+    result = classify_detailed(features)
+    assert result.category == "environment_candidate" == classify(features)
+    assert result.reason == "terminal_reverse_camera_artifact"
+    assert result.contributing == {
+        "terminal_reverse_seed": 1.0,
+        "blob_black_white_balance": 0.188,
+    }
+
+
+def test_terminal_reverse_artifact_preserves_4487_below_measured_balance():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        terminal_reverse_seed=1.0,
+        blob_black_white_balance=0.073,
+    )
+    assert classify(features) == "incident_candidate"
+
+
+def test_guard_signal_beats_terminal_reverse_camera_artifact():
+    features = _features(
+        green_light_ratio=0.2,
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        terminal_reverse_seed=1.0,
+        blob_black_white_balance=0.188,
+    )
+    assert classify(features) == "guard_candidate"
+
+
 def test_reason_jitter_solidity():
     features = _features(jitter=60, solidity=0.5)
     result = classify_detailed(features)
@@ -1205,7 +1288,7 @@ def test_reason_no_rule_matched():
     assert result.contributing == {}
 
 
-def test_all_21_reason_codes_are_distinct():
+def test_all_22_reason_codes_are_distinct():
     # Guards against a copy-paste reusing a reason code across two branches.
     codes = {
         "no_features",
@@ -1224,10 +1307,11 @@ def test_all_21_reason_codes_are_distinct():
         "insufficient_detection_evidence",
         "outside_colour",
         "outside_no_colour",
+        "terminal_reverse_camera_artifact",
         "outside_person_daylight",
         "jitter_solidity",
         "inside_only_daylight",
         "inside_only_night",
         "no_rule_matched",
     }
-    assert len(codes) == 21
+    assert len(codes) == 22

@@ -627,6 +627,7 @@ class ClassificationThresholds:
     implausible_height_fraction_min: float
     motion_pixel_fraction_median_min: float
     alert_persistence_min: float
+    camera_artifact_black_white_balance_min: float
     outside_pixel_fraction_min: float
     median_fence_distance_min: float
     median_fence_distance_max: float
@@ -640,6 +641,8 @@ class ClassificationThresholds:
     jitter_min: float
     solidity_max: float
     blob_white_fraction_min: float
+    large_blob_frame_fraction_min: float
+    large_blob_white_fraction_min: float
     long_flare_frames_min: float
     neighbour_subject_height_min: float
     neighbour_subject_height_max: float
@@ -656,6 +659,10 @@ _CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
     "implausible_height_fraction_min": ("environment", "implausible_height_fraction_min"),
     "motion_pixel_fraction_median_min": ("environment", "motion_pixel_fraction_median_min"),
     "alert_persistence_min": ("alert", "persistence_min"),
+    "camera_artifact_black_white_balance_min": (
+        "alert",
+        "camera_artifact_black_white_balance_min",
+    ),
     "outside_pixel_fraction_min": ("outside", "pixel_fraction_min"),
     "median_fence_distance_min": ("outside", "median_fence_distance_min"),
     "median_fence_distance_max": ("outside", "median_fence_distance_max"),
@@ -669,6 +676,14 @@ _CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
     "jitter_min": ("insect", "jitter_min"),
     "solidity_max": ("insect", "solidity_max"),
     "blob_white_fraction_min": ("blinding", "blob_white_fraction_min"),
+    "large_blob_frame_fraction_min": (
+        "blinding",
+        "large_blob_frame_fraction_min",
+    ),
+    "large_blob_white_fraction_min": (
+        "blinding",
+        "large_blob_white_fraction_min",
+    ),
     "long_flare_frames_min": ("blinding", "long_flare_frames_min"),
     "neighbour_subject_height_min": ("neighbour", "subject_height_min"),
     "neighbour_subject_height_max": ("neighbour", "subject_height_max"),

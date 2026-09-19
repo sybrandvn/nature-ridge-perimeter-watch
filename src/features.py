@@ -91,6 +91,32 @@ def blob_white_fraction(
     return float((pixels > brightness_threshold).mean())
 
 
+def blob_black_white_balance(
+    frame_bgr: np.ndarray,
+    contour: np.ndarray,
+    *,
+    black_threshold: int = 40,
+    white_threshold: int = 220,
+) -> float:
+    """Smaller of the near-black and near-white fractions inside a blob.
+
+    A sensor/decode corruption block can contain substantial amounts of both
+    clipped black and clipped white.  Taking the smaller fraction requires
+    both polarities, unlike a generic contrast or overexposure measurement.
+    This feature is intentionally paired with reverse-track provenance by the
+    classifier; on its own, high-contrast real subjects are not artifacts.
+    """
+    mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+    cv2.drawContours(mask, [contour], -1, color=255, thickness=-1)
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    pixels = gray[mask == 255]
+    if pixels.size == 0:
+        return 0.0
+    black_fraction = float((pixels < black_threshold).mean())
+    white_fraction = float((pixels > white_threshold).mean())
+    return min(black_fraction, white_fraction)
+
+
 def post_flash_red_shift(frames_bgr: Sequence[np.ndarray]) -> float:
     """Whole-frame red shift AFTER the clip's brightness peak, minus before it.
 

@@ -29,6 +29,7 @@ from src.features import (
     detect_stationary_light_mask,
     edge_density,
     flashlight_bbox_overlap,
+    global_camera_shift_score,
     green_light_flicker,
     green_light_ratio,
     heading_change,
@@ -163,7 +164,11 @@ def _warmup_motion_features(
     Not usable as a hard suppression rule: a fully-inside warmup track catches
     97/205 guards but also 4/12 positives, so it stays a ranker input only.
     """
-    zeros = {"warmup_outside_fraction": 0.0}
+    zeros = {
+        "warmup_outside_fraction": 0.0,
+        "warmup_dynamic_frame_fraction": 0.0,
+        "warmup_dynamic_outside_fraction": 0.0,
+    }
     dropped = detection.dropped_frames
     if len(dropped) < 2:
         return zeros
@@ -177,7 +182,7 @@ def _warmup_motion_features(
         corrected = apply_photometric_match(grey_raw, gain, offset)
         corrected_reversed.append(corrected)
         reference = corrected
-    corrected_frames = reversed(corrected_reversed)
+    corrected_frames = list(reversed(corrected_reversed))
 
     frame_area = float(frame_width * frame_height)
     kernel = np.ones((3, 3), np.uint8)
@@ -200,8 +205,62 @@ def _warmup_motion_features(
             continue
         track.append((x, y, w, h))
 
+    dynamic_verdicts: list[str] = []
+    close_kernel = np.ones((9, 9), np.uint8)
+    ignore_mask = (
+        ignore_region_mask(frame_width, frame_height, zone.ignore) if zone.ignore else None
+    )
+    dynamic_hits = 0
+    for previous, current in zip(corrected_frames, corrected_frames[1:], strict=False):
+        dynamic_mask = cv2.morphologyEx(
+            (cv2.absdiff(previous, current) > threshold).astype(np.uint8) * 255,
+            cv2.MORPH_OPEN,
+            kernel,
+        )
+        dynamic_mask = cv2.morphologyEx(
+            dynamic_mask, cv2.MORPH_CLOSE, close_kernel
+        )
+        if ignore_mask is not None:
+            dynamic_mask[ignore_mask] = 0
+        contours, _ = cv2.findContours(
+            dynamic_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        candidates = [
+            contour
+            for contour in contours
+            if 0.0005 * frame_area
+            <= cv2.contourArea(contour)
+            <= 0.25 * frame_area
+        ]
+        if not candidates:
+            continue
+        dynamic_hits += 1
+        x, y, width, height = cv2.boundingRect(max(candidates, key=cv2.contourArea))
+        dynamic_verdicts.append(
+            classify_zone(
+                ((x + width / 2.0) / frame_width, (y + height) / frame_height),
+                zone,
+            )
+        )
+
+    pair_count = len(corrected_frames) - 1
+    dynamic_classifiable = [
+        verdict for verdict in dynamic_verdicts if verdict in ("outside", "inside")
+    ]
+    dynamic_features = {
+        "warmup_dynamic_frame_fraction": (
+            dynamic_hits / pair_count if pair_count > 0 else 0.0
+        ),
+        "warmup_dynamic_outside_fraction": (
+            sum(1 for verdict in dynamic_classifiable if verdict == "outside")
+            / len(dynamic_classifiable)
+            if dynamic_classifiable
+            else 0.0
+        ),
+    }
+
     if not track:
-        return zeros
+        return {**zeros, **dynamic_features}
 
     # Same base-of-box convention and same geometry every scored side feature
     # uses, so a warmup verdict is directly comparable to outside_frame_fraction.
@@ -211,11 +270,12 @@ def _warmup_motion_features(
     ]
     classifiable = [v for v in verdicts if v in ("outside", "inside")]
     if not classifiable:
-        return zeros
+        return {**zeros, **dynamic_features}
 
     return {
         "warmup_outside_fraction": sum(1 for v in classifiable if v == "outside")
-        / len(classifiable)
+        / len(classifiable),
+        **dynamic_features,
     }
 
 
@@ -889,13 +949,13 @@ class _DetectionFeatureSummary:
     flow_coherence_values: tuple[float, ...]
     whole_frame_green_ratios: tuple[float, ...]
     color_fraction: float
-    warmup_flashlight_ratio: float
     motion_pixel_fraction: float
     motion_pixel_fraction_median: float
     blob_count: int
     blob_count_median: float
     white_fraction: float
     black_white_balance: float
+    rectangular_black_white_balance: float
     frames_with_box: int
     flashlight_bbox_frames: int
 
@@ -929,12 +989,38 @@ def _feature_exclude_mask(
     return exclude_mask
 
 
-def _summarize_detection_features(
+def _warmup_flashlight_feature(
     detection: ClipDetection,
     *,
     exclude_mask: np.ndarray | None,
     daylight_color_fraction: float,
     daylight_hint: bool | None,
+) -> float:
+    """Measure flashlight colour without requiring a settled-frame track."""
+    if not detection.dropped_frames:
+        return 0.0
+    warmup_colour = [
+        color_saturation_fraction(frame) for frame in detection.dropped_frames
+    ]
+    warmup_daylight = (
+        sum(warmup_colour) / len(warmup_colour) > daylight_color_fraction
+        and daylight_hint is not False
+    )
+    if warmup_daylight:
+        return 0.0
+    whole_frame = _whole_frame_contour(
+        detection.frame_width, detection.frame_height
+    )
+    return max(
+        green_light_ratio(frame, whole_frame, exclude_mask=exclude_mask)
+        for frame in detection.dropped_frames
+    )
+
+
+def _summarize_detection_features(
+    detection: ClipDetection,
+    *,
+    exclude_mask: np.ndarray | None,
 ) -> _DetectionFeatureSummary | None:
     """Reduce frame imagery and contours to the scalars used during scoring."""
     genuine_centroids: list[tuple[float, float]] = []
@@ -960,25 +1046,23 @@ def _summarize_detection_features(
     blob_count = 0
     white_fraction = 0.0
     black_white_balance = 0.0
+    rectangular_black_white_balance = 0.0
     frames_with_box = 0
     flashlight_bbox_frames = 0
 
-    warmup_flashlight_ratio = 0.0
-    if detection.dropped_frames:
-        warmup_colour = [
-            color_saturation_fraction(frame) for frame in detection.dropped_frames
-        ]
-        warmup_daylight = (
-            sum(warmup_colour) / len(warmup_colour) > daylight_color_fraction
-            and daylight_hint is not False
-        )
-        if not warmup_daylight:
-            warmup_flashlight_ratio = max(
-                green_light_ratio(frame, whole_frame, exclude_mask=exclude_mask)
-                for frame in detection.dropped_frames
-            )
-
     for detected in detection.frames:
+        for candidate in detected.all_contours:
+            area = cv2.contourArea(candidate)
+            if area <= 0:
+                continue
+            _x, _y, width, height = cv2.boundingRect(candidate)
+            box_area = width * height
+            if box_area <= 0 or area / box_area < 0.5:
+                continue
+            rectangular_black_white_balance = max(
+                rectangular_black_white_balance,
+                blob_black_white_balance(detected.frame, candidate),
+            )
         whole_frame_green_ratios.append(
             green_light_ratio(detected.frame, whole_frame, exclude_mask=exclude_mask)
         )
@@ -1060,7 +1144,6 @@ def _summarize_detection_features(
         color_fraction=(
             sum(color_fractions) / len(color_fractions) if color_fractions else 0.0
         ),
-        warmup_flashlight_ratio=warmup_flashlight_ratio,
         motion_pixel_fraction=motion_pixel_fraction,
         motion_pixel_fraction_median=_median(
             [detected.motion_pixel_fraction for detected in detection.frames]
@@ -1071,6 +1154,7 @@ def _summarize_detection_features(
         ),
         white_fraction=white_fraction,
         black_white_balance=black_white_balance,
+        rectangular_black_white_balance=rectangular_black_white_balance,
         frames_with_box=frames_with_box,
         flashlight_bbox_frames=flashlight_bbox_frames,
     )
@@ -1161,6 +1245,11 @@ def _temporal_features(
             and summary.genuine_detected_indices[0] == frame_count - 1
         ),
         "blob_black_white_balance": summary.black_white_balance,
+        "rectangular_black_white_balance": summary.rectangular_black_white_balance,
+        "global_camera_shift_score": global_camera_shift_score(
+            list(detection.dropped_frames)
+            + [detected.frame for detected in detection.frames]
+        ),
         "scenery_motion_fraction": detection.scenery_motion_fraction,
         "has_reference_background": float(detection.has_reference_background),
     }
@@ -1169,13 +1258,20 @@ def _temporal_features(
 def _warmup_features(
     detection: ClipDetection,
     zone: CameraZone,
-    summary: _DetectionFeatureSummary,
     *,
     threshold: int,
+    exclude_mask: np.ndarray | None,
+    daylight_color_fraction: float,
+    daylight_hint: bool | None,
 ) -> dict[str, float]:
     """Features sourced from, or explicitly describing, the warmup window."""
     return {
-        "warmup_flashlight_ratio": summary.warmup_flashlight_ratio,
+        "warmup_flashlight_ratio": _warmup_flashlight_feature(
+            detection,
+            exclude_mask=exclude_mask,
+            daylight_color_fraction=daylight_color_fraction,
+            daylight_hint=daylight_hint,
+        ),
         **_warmup_motion_features(
             detection,
             zone,
@@ -1362,11 +1458,38 @@ def features_from_detection(
     summary = _summarize_detection_features(
         detection,
         exclude_mask=ignore_mask,
+    )
+    warmup_features = _warmup_features(
+        detection,
+        zone,
+        threshold=threshold,
+        exclude_mask=ignore_mask,
         daylight_color_fraction=daylight_color_fraction,
         daylight_hint=daylight_hint,
     )
     if summary is None:
-        return None
+        if (
+            warmup_features["warmup_dynamic_frame_fraction"] <= 0.0
+            and warmup_features["warmup_flashlight_ratio"] <= 0.0
+        ):
+            return None
+        return {
+            "scored_motion_present": 0.0,
+            "green_light_ratio": 0.0,
+            "green_light_flicker": 0.0,
+            "outside_pixel_fraction": 0.0,
+            "median_fence_distance": 0.0,
+            "color_fraction": 0.0,
+            "blob_count": 0.0,
+            "global_camera_shift_score": global_camera_shift_score(
+                list(detection.dropped_frames)
+                + [detected.frame for detected in detection.frames]
+            ),
+            "rectangular_black_white_balance": 0.0,
+            "scenery_motion_fraction": detection.scenery_motion_fraction,
+            "has_reference_background": float(detection.has_reference_background),
+            **warmup_features,
+        }
     ref_row = (
         reference_row if reference_row is not None else float(detection.frame_height)
     )
@@ -1377,13 +1500,14 @@ def features_from_detection(
     metric_observations = metric_observations_from_detection(detection, fps=fps)
 
     return {
+        "scored_motion_present": 1.0,
         **geometry_features_from_observations(geometry_observations, zone),
         **_appearance_features(
             summary,
             exclude_mask=ignore_mask,
             reference_row=ref_row,
         ),
-        **_warmup_features(detection, zone, summary, threshold=threshold),
+        **warmup_features,
         **_multi_object_features(detection, zone, exclude_mask=ignore_mask),
         **_temporal_features(detection, summary),
         **metric_features_from_observations(metric_observations, zone),

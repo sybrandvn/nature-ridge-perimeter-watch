@@ -69,6 +69,14 @@ classification:
     # reviewed bad-startup 17752 plus alerting guard 5374, with no protected
     # category change across the labelled corpus.
     warmup_flashlight_ratio_min: 0.0019
+    # Warmup-only recovery: among all 15 labelled clips where the settled
+    # detector found no contour, this conjunction identifies exactly four
+    # guards (5464, 17501, 21491, 21506), with no animal or incident match.
+    # The latter two win earlier via their warmup flashlight in the final rule
+    # order. It is restricted to clips with no scored motion so it cannot steal
+    # a genuine later subject.
+    warmup_dynamic_frame_fraction_min: 0.8
+    warmup_dynamic_outside_fraction_max: 0.25
 
   environment:
     # classify() docstring, "environment_candidate". A PEAK over frames.

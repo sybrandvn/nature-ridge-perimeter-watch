@@ -97,6 +97,18 @@ Rules:
     Placed alongside the other two guard rules, ABOVE the environment/outside
     rules, for the same reason warmup_flashlight is: a real flashlight
     sighting should never fall through to a shape-based read.
+  - guard_candidate (warmup-only onside dynamics): when the settled detector
+    found no contour (`scored_motion_present == 0`), adjacent corrected warmup
+    frames contain motion in at least 80% of pairs, and no more than 25% of
+    classifiable motion is outside. Added 2026-09-19 after reviewing people who
+    crossed and left during IR settling. The conjunction matches exactly four
+    labelled guards (5464, 17501, 21491, 21506); in final rule order 21491 and
+    21506 already win via warmup flashlight, while this rule recovers the other
+    two. No animal or incident category changes. The no-settled-motion condition
+    is load-bearing: genuine outside
+    subjects can coexist with onside warmup motion. Other warmup-only evidence
+    becomes `unclassified/warmup_only_unclassified`, preserving the feature
+    contract without pretending the later normal rule chain has a subject.
   - environment_candidate: blob_count > 10 (added 2026-08-31, checked before
     animal_candidate/incident_candidate/insect_candidate so a stormy/windy clip's
     scattered foliage blobs don't get read as a shape signal. Measured against
@@ -477,7 +489,8 @@ def classify_detailed(
     (see tests/test_classify.py).
 
     `reason` is one fixed code per rule (`no_features`, `green_light`,
-    `warmup_flashlight`, `multi_object_flashlight`, `blob_count_peak`,
+    `warmup_flashlight`, `warmup_dynamic_inside`,
+    `warmup_only_unclassified`, `multi_object_flashlight`, `blob_count_peak`,
     `blob_count_sustained`, `inside_elevated_animal`, `implausible_height`,
     `near_fence_animal`, `fence_straddle_no_colour`, `blinding_blob_white`,
     `motion_pixel_sustained`, `animal_row_area`,
@@ -512,6 +525,26 @@ def classify_detailed(
             "warmup_flashlight",
             {"warmup_flashlight_ratio": features.get("warmup_flashlight_ratio", 0.0)},
         )
+    if (
+        features.get("scored_motion_present", 1.0) == 0.0
+        and features.get("warmup_dynamic_frame_fraction", 0.0)
+        >= thresholds.warmup_dynamic_frame_fraction_min
+        and features.get("warmup_dynamic_outside_fraction", 1.0)
+        <= thresholds.warmup_dynamic_outside_fraction_max
+    ):
+        return ClassificationResult(
+            "guard_candidate",
+            "warmup_dynamic_inside",
+            {
+                "scored_motion_present": features.get("scored_motion_present", 1.0),
+                "warmup_dynamic_frame_fraction": features.get(
+                    "warmup_dynamic_frame_fraction", 0.0
+                ),
+                "warmup_dynamic_outside_fraction": features.get(
+                    "warmup_dynamic_outside_fraction", 1.0
+                ),
+            },
+        )
     if features.get("multi_object_max_flashlight_ratio", 0.0) > thresholds.green_light_ratio_min:
         return ClassificationResult(
             "guard_candidate",
@@ -520,6 +553,19 @@ def classify_detailed(
                 "multi_object_max_flashlight_ratio": features.get(
                     "multi_object_max_flashlight_ratio", 0.0
                 )
+            },
+        )
+    if features.get("scored_motion_present", 1.0) == 0.0:
+        return ClassificationResult(
+            "unclassified",
+            "warmup_only_unclassified",
+            {
+                "warmup_dynamic_frame_fraction": features.get(
+                    "warmup_dynamic_frame_fraction", 0.0
+                ),
+                "warmup_dynamic_outside_fraction": features.get(
+                    "warmup_dynamic_outside_fraction", 0.0
+                ),
             },
         )
     if features["blob_count"] > thresholds.blob_count_peak_min:

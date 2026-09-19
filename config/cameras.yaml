@@ -407,23 +407,11 @@ cameras:
     # 2026-03-02T16:18:11Z) -- the earliest timestamp there's real evidence
     # for, not a guessed midpoint of the year-long gap.
     zones:
-      - fence: [[0.4646, 0.276], [0.3669, 0.456], [0.2664, 0.6359], [0.1659, 0.8159], [0.0678, 0.9958]]
-        outside: right
-        depth_cutoff: 0.05
-        # 2026-09-05: fence_bottom, traced by the user over data/history/cam12/3457.mp4
-        # (2023-11-20, pre-remount era). `outside: right` re-confirmed.
-        fence_bottom:
-          [[0.498, 0.1635], [0.4875, 0.3719], [0.4769, 0.5802], [0.4664, 0.7885], [0.4559, 0.9969]]
-        # 2026-09-06: fence_pickets, traced by the user over the era-1 screengrab
-        # in data/reports/picket_trace_2026-09-06/ (data/history/cam12/3457.mp4).
-        fence_pickets:
-          - [[0.3621, 0.4822], [0.4289, 0.9969]]
-        metric_calibration: true
-      - effective_from: "2024-11-23T03:52:25Z"
-        # 2026-09-19: user retraced all three geometry primitives in red over
-        # data/history/cam12/9162.mp4 after spotting the subtle fence shift in
-        # its debug render. Effective from 9161, the earlier sibling of the
-        # reviewed 9162 event and therefore the earliest direct evidence.
+      - # 2026-09-19: the user retraced all three geometry primitives over
+        # data/history/cam12/9162.mp4. Comparison with 8982 (2024-11-19),
+        # 9161/9162 (2024-11-23), and the original 3457 trace found no dated
+        # camera movement: this is a more accurate trace of the same pose, so
+        # it replaces the original geometry for the whole pre-remount era.
         fence:
           [[0.4959, 0.2021], [0.3887, 0.3932], [0.2815, 0.5844], [0.1742, 0.7755], [0.067, 0.9667]]
         outside: right

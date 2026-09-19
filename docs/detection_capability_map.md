@@ -16,7 +16,7 @@ distinct levels, and conflating them is the single most common source of a surpr
 | **per-frame** | computed for every frame, usually then reduced (median/peak/fraction) | `blob_count`, `motion_pixel_fraction` |
 | **single-track** | about "the" one tracked target only (`track_contour`'s pick) | `path_length`, `jitter`, `green_light_ratio` |
 | **per-object** | about every persistently-identified blob (`multi_tracks`), not just the one tracked target | `multi_object_*` (2026-09-09) |
-| **warmup** | the dropped/pre-scored IR-flare frames, not the scored ones | `warmup_flashlight_ratio`, `warmup_outside_fraction` |
+| **warmup** | the dropped/pre-scored IR-flare frames, not the scored ones | `warmup_flashlight_ratio`, `warmup_outside_fraction`, `warmup_dynamic_*` |
 
 ---
 
@@ -144,6 +144,8 @@ daylight colour, not to detect a light source).
 | `motion_pixel_fraction` / `_median` | per-frame → peak/median | fraction of the whole frame that's "motion" this frame, no blob/side awareness at all | `_median` **yes** (sustained whole-frame motion gate); peak version tried and rejected (worst incident 0.123 vs guard/environment median 0.172 — not enough margin) |
 | `blob_count` / `_median` | per-frame → peak/median | how many separate blobs passed the area gates this frame | **yes**, both — the environment/storm gate |
 | `scenery_motion_fraction` | whole-clip | fraction of clip's motion area matching a **per-camera reference background** (§7) at the same coordinates — "this moves, and it's always there" | reported only (feeds the reference-background veto elsewhere, not a `classify()` feature directly) |
+| `rectangular_black_white_balance` | per-frame contours → peak | scans filled rectangular contours for a clipped black+white sensor/decode signature, even if the contour did not become the main track | debug/reporting evidence; not safe alone, while the narrower terminal reverse-seed conjunction is wired |
+| `global_camera_shift_score` | adjacent frames → peak | phase-correlation evidence for broad image translation after edge normalisation; detects wind-driven camera/fence movement but can also rise when a large nearby subject dominates the image | debug/reporting only; never an alert veto |
 | `multi_object_outside_fraction_weighted` / `_dominant` / `_count` | per-object, whole-clip | area-weighted outside fraction across every persistent object; the largest-total-area object's own fraction; how many distinct objects | **no** — added 2026-09-09, reporting only, see this session's measurement notes in the commit log for why it isn't ready |
 
 ---
@@ -158,7 +160,8 @@ thrown away entirely.
 | --- | --- |
 | `flare_frames` / `flare_settle_index` | Per-clip, measures when the gain step actually settles (varies frame 1 to 21+), so the drop window is measured, not a fixed guess. |
 | `photometric_match` / `apply_photometric_match` / `photometric_match_color` | Brightness+colour-cast correction, so a dropped warmup frame can be fairly diffed against the *settled* background instead of comparing pre-gain-step pixels to post-gain-step ones. |
-| `_warmup_motion_features` → `warmup_outside_fraction` | Re-diffs the corrected warmup frames, tracks whatever moved, reads its fence side. AUC-measured (+0.017 over baseline), not usable as a hard rule (a fully-inside warmup track catches 97/205 guards but also 4/12 positives) — ranker input only, never wired into `classify()`. **Known limitation, documented on the exact clip this session revisited**: also flags a STATIC object lit differently before/after the gain step as if it moved — confirmed on cam07/18570, a static bright branch. |
+| `_warmup_motion_features` → `warmup_outside_fraction` | Re-diffs corrected warmup frames against the settled background, tracks the largest changed region, and reads its fence side. The location signal remains reporting/ranker evidence because inside warmup presence overlaps positives. |
+| `_warmup_motion_features` → `warmup_dynamic_frame_fraction`, `warmup_dynamic_outside_fraction` | Diffs adjacent photometrically corrected warmup frames, so a static branch merely lit differently from the settled background does not count as moving. When **no settled/scored motion exists**, strong persistent onside dynamics recover four labelled guards with no animal/incident category change; otherwise these remain evidence only and cannot override a later real subject. |
 | `post_flash_red_shift` | Whole-clip colour-shift signal spanning warmup **and** scored frames — the flash itself is often inside the flare window. |
 | `warmup_flashlight_ratio` | See §3 — hue check on the same corrected warmup frames. |
 

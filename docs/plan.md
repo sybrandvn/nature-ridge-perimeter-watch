@@ -47,6 +47,15 @@ it exists, rather than merely unioning categories, is the more promising fix hin
 data, but is unmeasured and unbuilt. Deferred along with the rest of the live-alerting pipeline
 (see the opening paragraph of this file) — revisit once the live service itself is scoped.
 
+**2026-09-19 evidence update:** a second detailed review confirmed the same mechanism on
+cam01b/17500→17501, cam03/5465→5464, cam07/18641→18642, and cam03/20521→20522. In each event the
+short clip either loses the person during IR warmup or later locks onto unrelated scenery/noise,
+while the fuller sibling carries clear guard evidence. Warmup-only onside motion can now recover a
+guard only when the settled detector found no subject; it intentionally cannot override a later
+outside subject because confirmed footage can contain both. This strengthens the case for holding
+Initial previews for the completed sibling, but the production policy remains unbuilt and should
+be measured at event level before the live orchestrator is implemented.
+
 ## Checkpoint (2026-09-07): triage router built; classifier state re-measured
 
 Supersedes the stale figures below wherever they conflict. Full narrative in `docs/handoff.md`

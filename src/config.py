@@ -622,6 +622,8 @@ class ClassificationThresholds:
     green_light_ratio_min: float
     green_light_flicker_min: float
     warmup_flashlight_ratio_min: float
+    warmup_dynamic_frame_fraction_min: float
+    warmup_dynamic_outside_fraction_max: float
     blob_count_peak_min: float
     blob_count_median_min: float
     implausible_height_fraction_min: float
@@ -654,6 +656,14 @@ _CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
     "green_light_ratio_min": ("guard", "green_light_ratio_min"),
     "green_light_flicker_min": ("guard", "green_light_flicker_min"),
     "warmup_flashlight_ratio_min": ("guard", "warmup_flashlight_ratio_min"),
+    "warmup_dynamic_frame_fraction_min": (
+        "guard",
+        "warmup_dynamic_frame_fraction_min",
+    ),
+    "warmup_dynamic_outside_fraction_max": (
+        "guard",
+        "warmup_dynamic_outside_fraction_max",
+    ),
     "blob_count_peak_min": ("environment", "blob_count_peak_min"),
     "blob_count_median_min": ("environment", "blob_count_median_min"),
     "implausible_height_fraction_min": ("environment", "implausible_height_fraction_min"),

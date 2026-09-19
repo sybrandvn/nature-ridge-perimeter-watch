@@ -1133,6 +1133,10 @@ def test_daylight_hint_no_longer_gates_the_scored_frame_features(monkeypatch):
         out[hint] = scoring.extract_clip_features("clip.mp4", _ZONE, daylight_hint=hint)
     assert out[None] is not None
     assert out[None]["green_light_ratio"] > 0.5
+    # OpenCV phase correlation may vary by a few millipixels across repeated
+    # FFT reductions; daylight_hint does not participate in that feature.
+    shift_scores = [result.pop("global_camera_shift_score") for result in out.values()]
+    assert max(shift_scores) - min(shift_scores) < 0.01
     assert out[True] == out[None] == out[False]
 
 
@@ -2191,6 +2195,30 @@ def test_extract_clip_features_returns_none_without_motion(monkeypatch, tmp_path
     result = scoring.extract_clip_features(str(tmp_path / "clip.mp4"), _ZONE)
 
     assert result is None
+
+
+def test_features_from_detection_keeps_warmup_flashlight_without_settled_track():
+    warmup = _blank_frame(value=25)
+    cv2.rectangle(warmup, (20, 20), (35, 35), (40, 255, 40), thickness=-1)
+    detection = motion.ClipDetection(
+        frames=[],
+        background=_blank_frame()[:, :, 0],
+        frame_width=60,
+        frame_height=60,
+        warmup_dropped=1,
+        total_frames=1,
+        dropped_frames=[warmup],
+        dropped_frame_boxes=[None],
+        multi_tracks=[],
+    )
+
+    result = scoring.features_from_detection(
+        detection, _ZONE, fps=10.0, threshold=18, daylight_hint=False
+    )
+
+    assert result is not None
+    assert result["scored_motion_present"] == 0.0
+    assert result["warmup_flashlight_ratio"] > 0.0
 
 
 def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tmp_path):

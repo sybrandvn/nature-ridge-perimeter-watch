@@ -57,6 +57,7 @@ from scripts.label import (
     _event_key,  # noqa: E402
 )
 from src import db  # noqa: E402
+from src.classify import classify_detailed  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
 from src.features import (  # noqa: E402
     FLASHLIGHT_SUBJECT_THRESHOLD,
@@ -98,6 +99,12 @@ DEFAULTS = {
 COLOR_TRACKED = (255, 0, 255)
 COLOR_RECOVERED = (0, 165, 255)
 COLOR_REVERSE = (255, 255, 0)
+
+# Display-only review hints. These deliberately do not suppress an alert:
+# confirmed incidents can also contain clipped rectangular pixels or broad
+# image translation. The values make that ambiguity visible in the render.
+DEBUG_RECT_ARTIFACT_BALANCE = 0.07
+DEBUG_GLOBAL_SHIFT_SCORE = 1.0
 COLOR_BLOB = (200, 200, 0)
 COLOR_DISCARDED = (90, 90, 90)
 COLOR_FENCE = (0, 255, 255)
@@ -539,15 +546,20 @@ def render_clip(
         threshold=threshold,
         flare_tolerance=flare_tolerance,
         max_flare_fraction=max_flare_fraction,
+        reference_background=reference_background,
         daylight_hint=daylight_hint(timestamp),
         prefer_flashlight_candidate=prefer_flashlight_candidate,
     )
+    classification = classify_detailed(features)
 
     source_fps = sane_fps(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS))
     width, height = detection.frame_width * scale, detection.frame_height * scale
     # None unless this camera opted in via `metric_calibration` in cameras.yaml.
     calib = calibrate(zone, detection.frame_width, detection.frame_height)
-    hud_height = 165
+    # The base per-frame readings plus the clip-level classification/evidence
+    # rows need 27 lines. Keep the panel tall enough that the new diagnostics
+    # are visible instead of silently falling below the encoded frame.
+    hud_height = 370
     overrides = [
         f"{name}={value}"
         for name, value in (
@@ -924,27 +936,62 @@ def render_clip(
             if features is not None:
                 live += [
                     (
+                        "classification",
+                        f"{classification.category} ({classification.reason})",
+                    ),
+                    (
+                        "scored / warmup dynamic",
+                        f"{features.get('scored_motion_present', 0.0):.0f} / "
+                        f"{features.get('warmup_dynamic_frame_fraction', 0.0):.2f}",
+                    ),
+                    (
+                        "warmup dynamic outside",
+                        f"{features.get('warmup_dynamic_outside_fraction', 0.0):.2f}",
+                    ),
+                    (
+                        "rect B/W artifact evidence",
+                        f"{features.get('rectangular_black_white_balance', 0.0):.3f}"
+                        + (
+                            "  CHECK CAMERA ARTIFACT"
+                            if features.get("rectangular_black_white_balance", 0.0)
+                            >= DEBUG_RECT_ARTIFACT_BALANCE
+                            else ""
+                        ),
+                    ),
+                    (
+                        "global shift evidence",
+                        f"{features.get('global_camera_shift_score', 0.0):.3f}"
+                        + (
+                            "  CHECK GLOBAL SHIFT / LARGE MOTION"
+                            if features.get("global_camera_shift_score", 0.0)
+                            >= DEBUG_GLOBAL_SHIFT_SCORE
+                            else ""
+                        ),
+                    ),
+                    (
                         "clip aspect/solidity",
-                        f"{features['aspect_ratio']:.2f} / {features['solidity']:.2f}",
+                        f"{features.get('aspect_ratio', 0.0):.2f} / "
+                        f"{features.get('solidity', 0.0):.2f}",
                     ),
                     (
                         "clip outside/crossed",
-                        f"{features['outside_pixel_fraction']:.2f} /"
-                        f" {features['fence_crossed']:.0f}",
+                        f"{features.get('outside_pixel_fraction', 0.0):.2f} /"
+                        f" {features.get('fence_crossed', 0.0):.0f}",
                     ),
                     (
                         "clip jitter/speed",
-                        f"{features['jitter']:.1f} / {features['normalised_speed']:.2f}",
+                        f"{features.get('jitter', 0.0):.1f} / "
+                        f"{features.get('normalised_speed', 0.0):.2f}",
                     ),
                     (
                         "clip persist/run",
-                        f"{features['persistence']:.2f} /"
-                        f" {features['longest_detection_run']:.2f}",
+                        f"{features.get('persistence', 0.0):.2f} /"
+                        f" {features.get('longest_detection_run', 0.0):.2f}",
                     ),
-                    ("clip blob_count", f"{features['blob_count']:.0f}"),
+                    ("clip blob_count", f"{features.get('blob_count', 0.0):.0f}"),
                     (
                         "clip color_fraction (green gated?)",
-                        f"{features['color_fraction']:.2f}"
+                        f"{features.get('color_fraction', 0.0):.2f}"
                         + (
                             " YES"
                             if daylight_gated

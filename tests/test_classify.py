@@ -53,6 +53,44 @@ def test_classify_guard_candidate_on_warmup_flashlight():
     assert classify(_features(warmup_flashlight_ratio=0.01)) == "guard_candidate"
 
 
+def test_classify_guard_candidate_on_warmup_only_inside_motion():
+    result = classify_detailed(
+        _features(
+            scored_motion_present=0.0,
+            warmup_dynamic_frame_fraction=0.9,
+            warmup_dynamic_outside_fraction=0.0,
+        )
+    )
+
+    assert result.category == "guard_candidate"
+    assert result.reason == "warmup_dynamic_inside"
+
+
+def test_warmup_dynamic_inside_does_not_steal_scored_subject():
+    features = _features(
+        scored_motion_present=1.0,
+        warmup_dynamic_frame_fraction=1.0,
+        warmup_dynamic_outside_fraction=0.0,
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+    )
+
+    assert classify(features) == "incident_candidate"
+
+
+def test_other_warmup_only_motion_remains_unclassified():
+    result = classify_detailed(
+        _features(
+            scored_motion_present=0.0,
+            warmup_dynamic_frame_fraction=0.5,
+            warmup_dynamic_outside_fraction=1.0,
+        )
+    )
+
+    assert result.category == "unclassified"
+    assert result.reason == "warmup_only_unclassified"
+
+
 def test_classify_warmup_flashlight_beats_animal_incident_geometry():
     # These clips DO pass the outside/far-from-fence geometry test -- that is
     # why they reached the review queue in the first place.

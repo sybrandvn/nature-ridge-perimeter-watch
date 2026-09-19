@@ -117,6 +117,50 @@ def blob_black_white_balance(
     return min(black_fraction, white_fraction)
 
 
+def global_camera_shift_score(frames_bgr: Sequence[np.ndarray]) -> float:
+    """Peak whole-frame translation evidence across adjacent frames.
+
+    Wind moving the camera shifts the fence and background together. Phase
+    correlation is applied to Sobel edge magnitude rather than brightness so
+    an IR gain step does not look like camera movement. Multiplying pixel
+    displacement by registration confidence keeps an ambiguous/noisy
+    alignment from reporting a large shift merely because phase correlation
+    returned an unstable offset. A large nearby subject can dominate enough
+    edges to raise the same score, so this is evidence of global translation,
+    not proof that the camera itself moved.
+
+    This is a reporting feature, not a classification decision.  Keeping the
+    raw score lets corpus evidence choose any eventual environment threshold.
+    """
+    if len(frames_bgr) < 2:
+        return 0.0
+
+    edges: list[np.ndarray] = []
+    for frame in frames_bgr:
+        gray = cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+        gray_float = gray.astype(np.float32)
+        grad_x = cv2.Sobel(gray_float, cv2.CV_32F, 1, 0)
+        grad_y = cv2.Sobel(gray_float, cv2.CV_32F, 0, 1)
+        magnitude = cv2.magnitude(grad_x, grad_y)
+        std = float(magnitude.std())
+        if std > 1e-6:
+            magnitude = (magnitude - float(magnitude.mean())) / std
+        else:
+            magnitude = np.zeros_like(magnitude)
+        edges.append(magnitude)
+
+    peak = 0.0
+    for previous, current in zip(edges, edges[1:], strict=False):
+        (shift_x, shift_y), response = cv2.phaseCorrelate(previous, current)
+        confidence = min(1.0, max(0.0, float(response)))
+        score = math.hypot(float(shift_x), float(shift_y)) * confidence
+        peak = max(peak, score)
+    # OpenCV's FFT reduction can vary in the fourth decimal across repeated
+    # calls on the same frames; millipixel precision is already far beyond
+    # what this low-resolution footage can support.
+    return round(peak, 3)
+
+
 def post_flash_red_shift(frames_bgr: Sequence[np.ndarray]) -> float:
     """Whole-frame red shift AFTER the clip's brightness peak, minus before it.
 

@@ -16,6 +16,7 @@ from src.features import (
     flare_frames,
     flare_settle_index,
     flashlight_bbox_overlap,
+    global_camera_shift_score,
     green_light_flicker,
     green_light_mask,
     green_light_ratio,
@@ -114,6 +115,24 @@ def test_blob_black_white_balance_is_zero_for_one_sided_dark_blob():
     contour = _rect_contour(2, 2, 15, 15)
 
     assert blob_black_white_balance(frame, contour) == pytest.approx(0.0)
+
+
+def test_global_camera_shift_score_detects_whole_frame_translation():
+    frame = np.zeros((80, 100, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (35, 55), (220, 220, 220), thickness=2)
+    cv2.line(frame, (50, 5), (85, 70), (140, 140, 140), thickness=2)
+    transform = np.float32([[1, 0, 4], [0, 1, 0]])
+    shifted = cv2.warpAffine(frame, transform, (frame.shape[1], frame.shape[0]))
+
+    assert global_camera_shift_score([frame, shifted]) > 2.0
+
+
+def test_global_camera_shift_score_ignores_brightness_step():
+    frame = np.zeros((80, 100, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (10, 10), (35, 55), (100, 100, 100), thickness=2)
+    brighter = np.clip(frame.astype(np.int16) + 70, 0, 255).astype(np.uint8)
+
+    assert global_camera_shift_score([frame, brighter]) < 0.2
 
 
 def _bgr(b: int, g: int, r: int) -> np.ndarray:

@@ -112,19 +112,19 @@ def test_load_cameras_config_empty_is_valid(tmp_path):
     assert cfg.unknown_camera_id == "unknown"
 
 
-def test_repo_cam12_selects_all_three_dated_geometry_eras():
+def test_repo_cam12_selects_pre_remount_retrace_and_remounted_geometry():
     cfg = load_cameras_config(Path(__file__).parents[1] / "config" / "cameras.yaml")
     cam12 = cfg.by_id("cam12")
     assert cam12 is not None
 
-    original = cam12.zone_at("2024-11-19T03:35:39Z")
-    shifted = cam12.zone_at("2024-11-23T03:52:25Z")
+    before_9162 = cam12.zone_at("2024-11-19T03:35:39Z")
+    at_9162 = cam12.zone_at("2024-11-23T03:52:25Z")
     remounted = cam12.zone_at("2026-03-02T16:13:54Z")
 
-    assert original.fence[0] == (0.4646, 0.276)
-    assert shifted.fence[0] == (0.4959, 0.2021)
-    assert shifted.fence_bottom[-1] == (0.4472, 0.999)
-    assert shifted.fence_pickets == (((0.3613, 0.4635), (0.4322, 0.999)),)
+    assert before_9162.fence[0] == (0.4959, 0.2021)
+    assert at_9162.fence == before_9162.fence
+    assert at_9162.fence_bottom[-1] == (0.4472, 0.999)
+    assert at_9162.fence_pickets == (((0.3613, 0.4635), (0.4322, 0.999)),)
     assert remounted.fence[0] == (0.4455, 0.1958)
 
 
@@ -620,6 +620,8 @@ _GOLDEN_THRESHOLDS = {
     "green_light_ratio_min": 0.02,
     "green_light_flicker_min": 0.02,
     "warmup_flashlight_ratio_min": 0.0019,
+    "warmup_dynamic_frame_fraction_min": 0.8,
+    "warmup_dynamic_outside_fraction_max": 0.25,
     "blob_count_peak_min": 10.0,
     "blob_count_median_min": 4.0,
     "implausible_height_fraction_min": 0.5,

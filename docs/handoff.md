@@ -1,7 +1,7 @@
 # Handoff: animal-event regressions fixed; detector extraction complete
 
 Written 2026-08-28, updated repeatedly since; last updated 2026-09-19. **If you are a new agent
-picking this up, search this file for "Handoff for a new agent (2026-09-19, session #21)"
+picking this up, search this file for "Handoff for a new agent (2026-09-19, session #22)"
 and start there.** (This file's session sections are not in one consistent order: #1-#5 are the
 oldest, kept in their original forward-chronological spot further up; starting from #6, each new
 session's entry is instead inserted directly above its predecessor, so the chain from #6 to the
@@ -17,6 +17,52 @@ this file is the short version of
 where things actually stand and what to do next. `docs/detection_improvement_review.md` is the
 authoritative record of everything session #16 measured and shipped, with its own itemised
 "Implementation status" section at the top.
+
+## Handoff for a new agent (2026-09-19, session #22)
+
+The user reviewed the residual false-alert set in detail. Their notes are now in the live label
+DB (backups: `data/backups/labels_pre_false_alert_review_20260919.jsonl` and
+`labels_after_false_alert_review_20260919.jsonl`). Corrections include cam06/6505+6506 spider web,
+cam07/18570 foliage/artifact and cam07/19045+19046 maintenance foliage as `environment`; 17752 is
+also explicitly a blank bad-startup clip. Small daylight motion cam05/9694+9695 and unclear
+cam07/19288 remain alert-worthy animal candidates; do not tune them away. The refreshed debug set
+is `data/reports/review_false_alerts_2026-09-19-v2/`, including longer siblings for the warmup
+failures and a HUD that exposes classifier reason, warmup motion, rectangular black/white evidence,
+and global shift evidence.
+
+The apparent Cam12 geometry change at 9161/9162 was rechecked and session #21's dating was wrong.
+8982 (2024-11-19) and 9161/9162 (2024-11-23) have the same pose; earlier registration work also
+put 3457 and 9162 within about one pixel. The user's 9162 trace is a more accurate retrace of the
+same pre-remount pose, so it now replaces the initial geometry for the whole pre-2026 era. The
+unsupported 2024-11-23 middle era was removed. The independently evidenced 2026-03-02 remount
+remains, Cam12 references were rebuilt, and the full labelled regression changed only cam12/4175
+from `environment_candidate` to `unclassified`; alert metrics were unchanged.
+
+Warmup motion now has a photometrically corrected adjacent-frame measurement:
+`warmup_dynamic_frame_fraction` and `warmup_dynamic_outside_fraction`. Unlike the older
+frame-vs-settled-background feature, adjacent differences distinguish actual movement from a
+static object merely lit differently during IR settling. When the settled detector finds no
+motion, strong onside warmup dynamics route to `guard_candidate/warmup_dynamic_inside`; other
+warmup-only evidence stays `unclassified` rather than crashing the normal feature contract. The
+warmup flashlight calculation is now independent of the settled-track summary as well. Together
+these recover five guards that were previously `no_motion`: 5464 and 17501 via dynamics, 18105 via
+flashlight, and 21491/21506 via flashlight (they also satisfy the dynamic rule). There is no animal
+or incident category change. It does not override a later scored object: 17500, 18641 and 20521 still contain
+both real onside warmup movement and later outside artifact/noise, while their longer siblings
+correctly route to guard. That is now concrete evidence for a future live policy that holds an
+Initial preview until the fuller sibling arrives; a blanket artifact veto is unsafe.
+
+Two reporting-only signals were added. `rectangular_black_white_balance` scans rectangular
+contours for the clipped black+white sensor/decode signature, including artifacts that did not win
+the main track. It marks the user-noted artifacts, but confirmed footage can contain the same
+pixels, so only the already-proven terminal reverse-seed conjunction suppresses. The phase-
+correlation `global_camera_shift_score` clearly rises on cam15/16208 (2.323), cam15/16564 (1.319)
+and storm cam05/18679 (1.494), but also on real/large local motion (including guard 20522 at
+6.826), so it is a debug cue for possible fence/camera motion, never an alert veto.
+
+`EXTRACTOR_VERSION` is `motion-features-v6`. Final labelled result remains **TP 29 / FP 25 /
+FN 18 / TN 636**, precision 0.537, recall 0.617, F1 0.574 across 708 clips. Focused tests and Ruff
+were clean before the final full-suite run.
 
 ## Handoff for a new agent (2026-09-19, session #21)
 
@@ -52,11 +98,10 @@ Three measured changes shipped from that review:
 Relative to session #20's TP 29 / FP 30 / FN 18 / TN 631, the final result is **TP 29 / FP 25 /
 FN 18 / TN 636**, precision 0.5370, recall 0.6170, F1 0.5743. Full suite: 748 passed; Ruff clean.
 
-Cam12 geometry is now dated from the 9161/9162 event. The user drew the top rail, base and picket
-as three separate red strokes over the 4x 9162 canvas; connected-component line fits produced the
-complete middle era in `config/cameras.yaml`, effective from the earlier sibling cam12/9161 at
-`2024-11-23T03:52:25Z`. The checked overlay follows all three traces. The source/review material
-is retained under `data/reports/archive/review_2026-09-19/` (gitignored).
+Cam12 geometry was initially dated from the 9161/9162 event here. **Superseded by session #22:**
+the checked overlay fit, but comparison clips did not support a camera move on that date. The trace
+is retained as the better geometry for the entire pre-remount era, not as a third dated era. The
+source/review material remains under `data/reports/archive/review_2026-09-19/` (gitignored).
 
 Repository/data cleanup followed. Root-level DB backups moved to `data/backups/legacy_root/`,
 download logs to `data/logs/`, the completed unknown review and trace source to

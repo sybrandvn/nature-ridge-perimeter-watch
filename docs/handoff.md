@@ -52,17 +52,25 @@ both real onside warmup movement and later outside artifact/noise, while their l
 correctly route to guard. That is now concrete evidence for a future live policy that holds an
 Initial preview until the fuller sibling arrives; a blanket artifact veto is unsafe.
 
+The same principle supersedes session #21's blanket terminal-artifact suppression. cam03/5465 is
+now routed to guard only because the clipped terminal artifact is accompanied by independent,
+strong onside warmup motion. Artifact evidence by itself cannot cancel a possible subject:
+cam12/9162 has no such warmup corroboration and the user's latest review calls it a possible small
+animal/unknown as well as an artifact, so it remains `animal_candidate` and may alert.
+
 Two reporting-only signals were added. `rectangular_black_white_balance` scans rectangular
 contours for the clipped black+white sensor/decode signature, including artifacts that did not win
 the main track. It marks the user-noted artifacts, but confirmed footage can contain the same
-pixels, so only the already-proven terminal reverse-seed conjunction suppresses. The phase-
+pixels, so it never suppresses by itself. The phase-
 correlation `global_camera_shift_score` clearly rises on cam15/16208 (2.323), cam15/16564 (1.319)
 and storm cam05/18679 (1.494), but also on real/large local motion (including guard 20522 at
 6.826), so it is a debug cue for possible fence/camera motion, never an alert veto.
 
-`EXTRACTOR_VERSION` is `motion-features-v6`. Final labelled result remains **TP 29 / FP 25 /
-FN 18 / TN 636**, precision 0.537, recall 0.617, F1 0.574 across 708 clips. Focused tests and Ruff
-were clean before the final full-suite run.
+`EXTRACTOR_VERSION` is `motion-features-v6`. With 9162 intentionally restored to the alert channel,
+the final labelled result is **TP 29 / FP 26 / FN 18 / TN 635**, precision 0.527, recall 0.617,
+F1 0.569 across 708 clips. The one-FP accounting increase is the explicit cost of treating that
+unknown possible animal as alert-worthy, not a detector regression. Focused tests and Ruff were
+clean before the final full-suite run.
 
 ## Handoff for a new agent (2026-09-19, session #21)
 
@@ -75,7 +83,7 @@ should carry the orthogonal maintenance flag.
 
 Three measured changes shipped from that review:
 
-- Added `terminal_reverse_seed`, `reverse_filled_fraction`, and
+- **Superseded by session #22's coexistence policy:** added `terminal_reverse_seed`, `reverse_filled_fraction`, and
   `blob_black_white_balance`. Exactly three current alerts have the terminal reverse-seed
   provenance: artifact cam03/5465=0.116, artifact cam12/9162=0.188, and approved alert
   cam07/4487=0.073. The alert-only `terminal_reverse_camera_artifact` gate at balance >=0.10

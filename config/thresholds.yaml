@@ -106,10 +106,10 @@ classification:
     # at 0.0714 and the weakest confirmed animal at 0.0769.
     persistence_min: 0.06
     # A lone final-frame detection can seed reverse tracking through earlier
-    # frames. Suppress it only when that genuine seed contains both clipped
-    # black and clipped white pixels: 9162=0.188 and known artifact 5465=0.116,
-    # while the acceptable unclear alert 4487 is 0.073. No current labelled
-    # animal or incident alert reaches this combined provenance/pixel pattern.
+    # frames. This threshold marks the clipped black+white corruption signature
+    # (9162=0.188, 5465=0.116, 4487=0.073), but never suppresses by itself.
+    # Combined with strong onside warmup movement it routes 5465 to guard;
+    # 9162 remains alert-worthy because an animal may coexist with its artifact.
     camera_artifact_black_white_balance_min: 0.10
 
   # classify() docstring, "animal_candidate / incident_candidate".

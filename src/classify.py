@@ -166,16 +166,15 @@ Rules:
     0.0714 and the weakest confirmed animal at 0.0769.
     Relative persistence is used instead of a minimum frame count so short,
     genuine events such as cam10/7631 (0.1111) remain eligible.
-  - environment_candidate (terminal reverse camera artifact): immediately
-    before an animal/incident return, a track with exactly one genuine
-    detection in the final scored frame, earlier reverse-filled boxes, and
-    blob_black_white_balance >= 0.10 is treated as sensor/decode corruption.
-    This is deliberately a conjunction: the three current alert clips with
-    terminal reverse seeds are known artifacts cam03/5465 (balance 0.116),
-    user-confirmed artifact cam12/9162 (0.188), and acceptable unclear alert
-    cam07/4487 (0.073). The threshold catches the first two and preserves the
-    third; no current labelled animal or incident alert has the combined
-    provenance/pixel signature. Guard rules retain priority.
+  - guard_candidate (onside warmup plus terminal camera artifact): immediately
+    before an animal/incident return, the later track has exactly one genuine
+    final-frame detection, earlier reverse-filled boxes, and clipped black+
+    white pixels, while independent adjacent-frame evidence shows persistent
+    onside warmup movement. This narrow conjunction routes cam03/5465 to guard:
+    the person leaves during warmup and the later outside target is corruption.
+    Artifact evidence alone no longer suppresses a clip. The user's later
+    review says cam12/9162 may contain a small animal as well as the artifact;
+    it has no dynamic warmup evidence and therefore remains alert-worthy.
   - animal_candidate (near-fence daylight recovery): the same compact,
     colour-bearing outside subject as the animal branch below, but with
     median_fence_distance in (0.05, 0.10] and real daylight required. A
@@ -458,13 +457,23 @@ def _alert_suppression(
         terminal_reverse_seed > 0.0
         and black_white_balance
         >= thresholds.camera_artifact_black_white_balance_min
+        and features.get("warmup_dynamic_frame_fraction", 0.0)
+        >= thresholds.warmup_dynamic_frame_fraction_min
+        and features.get("warmup_dynamic_outside_fraction", 1.0)
+        <= thresholds.warmup_dynamic_outside_fraction_max
     ):
         return ClassificationResult(
-            "environment_candidate",
-            "terminal_reverse_camera_artifact",
+            "guard_candidate",
+            "warmup_inside_terminal_artifact",
             {
                 "terminal_reverse_seed": terminal_reverse_seed,
                 "blob_black_white_balance": black_white_balance,
+                "warmup_dynamic_frame_fraction": features.get(
+                    "warmup_dynamic_frame_fraction", 0.0
+                ),
+                "warmup_dynamic_outside_fraction": features.get(
+                    "warmup_dynamic_outside_fraction", 1.0
+                ),
             },
         )
     return None
@@ -495,7 +504,7 @@ def classify_detailed(
     `near_fence_animal`, `fence_straddle_no_colour`, `blinding_blob_white`,
     `motion_pixel_sustained`, `animal_row_area`,
     `insufficient_detection_evidence`, `outside_colour`,
-    `outside_no_colour`, `terminal_reverse_camera_artifact`,
+    `outside_no_colour`, `warmup_inside_terminal_artifact`,
     `outside_person_daylight`, `jitter_solidity`,
     `inside_only_daylight`, `inside_only_night`, `no_rule_matched`), never
     renamed or reused for a different rule -- a caller may match on it.

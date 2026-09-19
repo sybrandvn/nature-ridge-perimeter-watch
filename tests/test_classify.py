@@ -794,8 +794,10 @@ def test_classify_terminal_reverse_artifact_threshold_is_wired():
         median_fence_distance=0.2,
         terminal_reverse_seed=1.0,
         blob_black_white_balance=0.188,
+        warmup_dynamic_frame_fraction=0.9,
+        warmup_dynamic_outside_fraction=0.0,
     )
-    assert classify(features) == "environment_candidate"
+    assert classify(features) == "guard_candidate"
     assert (
         classify(
             features,
@@ -1250,19 +1252,36 @@ def test_reason_outside_no_colour():
     }
 
 
-def test_reason_terminal_reverse_camera_artifact():
+def test_terminal_reverse_camera_artifact_alone_does_not_hide_possible_animal():
+    features = _features(
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+        color_fraction=0.3,
+        terminal_reverse_seed=1.0,
+        blob_black_white_balance=0.188,
+    )
+    result = classify_detailed(features)
+    assert result.category == "animal_candidate" == classify(features)
+    assert result.reason == "outside_colour"
+
+
+def test_reason_warmup_inside_terminal_artifact():
     features = _features(
         outside_pixel_fraction=0.65,
         median_fence_distance=0.2,
         terminal_reverse_seed=1.0,
         blob_black_white_balance=0.188,
+        warmup_dynamic_frame_fraction=0.9,
+        warmup_dynamic_outside_fraction=0.0,
     )
     result = classify_detailed(features)
-    assert result.category == "environment_candidate" == classify(features)
-    assert result.reason == "terminal_reverse_camera_artifact"
+    assert result.category == "guard_candidate" == classify(features)
+    assert result.reason == "warmup_inside_terminal_artifact"
     assert result.contributing == {
         "terminal_reverse_seed": 1.0,
         "blob_black_white_balance": 0.188,
+        "warmup_dynamic_frame_fraction": 0.9,
+        "warmup_dynamic_outside_fraction": 0.0,
     }
 
 
@@ -1326,12 +1345,14 @@ def test_reason_no_rule_matched():
     assert result.contributing == {}
 
 
-def test_all_22_reason_codes_are_distinct():
+def test_all_24_reason_codes_are_distinct():
     # Guards against a copy-paste reusing a reason code across two branches.
     codes = {
         "no_features",
         "green_light",
         "warmup_flashlight",
+        "warmup_dynamic_inside",
+        "warmup_only_unclassified",
         "multi_object_flashlight",
         "blob_count_peak",
         "blob_count_sustained",
@@ -1345,11 +1366,11 @@ def test_all_22_reason_codes_are_distinct():
         "insufficient_detection_evidence",
         "outside_colour",
         "outside_no_colour",
-        "terminal_reverse_camera_artifact",
+        "warmup_inside_terminal_artifact",
         "outside_person_daylight",
         "jitter_solidity",
         "inside_only_daylight",
         "inside_only_night",
         "no_rule_matched",
     }
-    assert len(codes) == 22
+    assert len(codes) == 24

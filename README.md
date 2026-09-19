@@ -9,8 +9,7 @@ for that remaining application work.
 
 For a new coding agent, start with
 [docs/next_agent_handoff.md](docs/next_agent_handoff.md). It describes the current detector state,
-the next evidence-backed event-policy work, and the remaining live Telegram and Docker
-implementation that the agent owns.
+the next evidence-backed event-policy work, and the remaining live Telegram service integration.
 
 Two gates decide whether the rest of the pipeline gets built:
 
@@ -41,6 +40,53 @@ Run tests and lint after any change:
 uv run ruff check . --fix
 uv run pytest -q
 ```
+
+## Docker
+
+The image packages the locked runtime dependencies and the current operator tools. It runs as a
+non-root user, keeps the root filesystem read-only under Compose, and bind-mounts `./data` for the
+SQLite database/WAL, Telethon session, downloaded history, references, reports, and logs.
+
+Set `PUID` and `PGID` in `.env` to the owner of the host `data/` directory, then build and verify
+the container:
+
+```bash
+printf 'PUID=%s\nPGID=%s\n' "$(id -u)" "$(id -g)" >> .env
+docker compose --profile tools build toolbox
+docker compose --profile tools run --rm toolbox
+docker compose --profile tools run --rm toolbox \
+  python -m scripts.container_healthcheck --readiness --media-smoke
+```
+
+The media smoke check writes a real H.264 file through `Mp4Writer` and decodes it again with
+OpenCV. Readiness validates the mounted directory, schema version, camera configuration, and
+threshold configuration. The future watcher can add
+`--heartbeat /app/data/live/watcher.heartbeat` to require a fresh process heartbeat as well.
+
+Create the Telethon session once in an interactive terminal. It is written to
+`data/session.session` on the host and is excluded from both Git and the image build context:
+
+```bash
+docker compose --profile bootstrap run --rm session-bootstrap
+```
+
+Run existing workflows in the same reproducible image, for example:
+
+```bash
+docker compose --profile tools run --rm toolbox python scripts/meta_backfill.py
+docker compose --profile tools run --rm toolbox \
+  python scripts/download_clips.py --camera cam06 --limit-per-camera 10
+docker compose --profile tools run --rm toolbox python scripts/backtest.py --labelled-only --no-record
+```
+
+Back up `data/perimeter_watch.db`, its `-wal`/`-shm` companions, `data/session.session`, and any
+irreplaceable source clips before upgrades. Rebuild with `docker compose --profile tools build
+--pull toolbox`; the bind-mounted data survives image replacement. Stop active writers before a
+filesystem-level SQLite copy, or use SQLite's backup API.
+
+There is deliberately no always-running Compose service yet. The live watcher, durable event
+resolver, and delivery orchestrator have not been implemented, so an idle container would provide
+a false readiness signal. `toolbox` and `session-bootstrap` are profiles and only run when invoked.
 
 ## Workflow
 

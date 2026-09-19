@@ -39,7 +39,12 @@ but do not promote the existing backtest or debug scripts into the service.
 - Telegram foundations already exist: Telethon credentials and source-channel configuration,
   pure message parsing/backfill logic, tested Bot API text delivery, tested ntfy delivery, and a
   manual `scripts/send_test_alert.py`. There is no long-running watcher, media-delivery path,
-  durable processing/delivery state, or container yet.
+  durable processing/delivery state, or production watcher service yet.
+- Docker foundations now exist on `main`: the locked runtime image builds and runs non-root;
+  Compose provides explicit operator-tool and interactive session-bootstrap profiles; `./data`
+  persists the database/WAL, source clips, references, reports, logs, and Telethon session; the
+  root filesystem is read-only; and readiness plus real H.264 encode/decode smoke checks pass.
+  There is deliberately no always-running Compose service until the watcher exists.
 
 Run the normal checks with:
 
@@ -147,20 +152,21 @@ Telegram and ntfy functions are injectable and unit-tested; extend that pattern 
 retry orchestration. `scripts/send_test_alert.py` should become the safe manual end-to-end
 credential/media smoke test, not the live service itself.
 
-### 4. Dockerize the service
+### 4. Attach the watcher to the existing Docker deployment
 
-Add a production Dockerfile and Compose configuration for the watcher. At minimum:
+`Dockerfile`, `compose.yaml`, `.dockerignore`, and `scripts/container_healthcheck.py` already cover
+the reproducible/non-root image, persistent bind mount, locked dependencies, signal-forwarding
+init, read-only root filesystem, config/DB readiness, optional watcher-heartbeat contract,
+interactive Telethon bootstrap, and H.264 write/read verification. Keep those controls.
 
-- run as a non-root user;
-- install from the locked project dependencies;
-- persist `data/`, the SQLite database/WAL files, downloaded history, references, and the Telethon
-  session in mounted storage;
+Once the watcher from step 2 exists, add it as the default production Compose service. At minimum:
+
 - receive credentials through environment/secrets, never bake `.env` or a session into the image;
-- provide a healthcheck tied to the watcher's real heartbeat/readiness;
+- use the healthcheck's `--heartbeat` option so health is tied to the real watcher heartbeat;
 - use a restart policy and graceful stop period compatible with flushing SQLite and pending state;
-- document the one-time interactive Telethon session bootstrap and subsequent unattended startup;
-- verify that generated/debug/alert video is playable from the container. The project already uses
-  the FFmpeg binary bundled by `imageio-ffmpeg` rather than relying on system OpenCV codecs.
+- document unattended watcher startup, upgrade, backup, and recovery around the existing bootstrap
+  and operator commands;
+- keep the existing H.264 smoke check in deployment validation.
 
 If ntfy runs in a separate container, configure its Compose service hostname; the example
 `http://localhost:80` points back into the watcher container and will not reach a sibling service.

@@ -1,0 +1,45 @@
+name: nature-ridge-perimeter-watch
+
+x-perimeter-app: &perimeter-app
+  build:
+    context: .
+    args:
+      APP_UID: ${PUID:-1000}
+      APP_GID: ${PGID:-1000}
+  image: nature-ridge-perimeter-watch:local
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DB_PATH: /app/data/perimeter_watch.db
+    TELEGRAM_SESSION_PATH: /app/data/session.session
+    PYTHONUNBUFFERED: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  volumes:
+    - ./data:/app/data
+  read_only: true
+  tmpfs:
+    - /tmp:size=512m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  stop_grace_period: 30s
+
+services:
+  # Reusable operator container. Examples:
+  #   docker compose --profile tools run --rm toolbox python scripts/meta_backfill.py
+  #   docker compose --profile tools run --rm toolbox python scripts/backtest.py --help
+  toolbox:
+    <<: *perimeter-app
+    profiles: ["tools"]
+    command: ["python", "-m", "scripts.container_healthcheck", "--readiness"]
+
+  # One-time interactive Telethon authorization/channel discovery. The
+  # resulting /app/data/session.session persists through the bind mount.
+  session-bootstrap:
+    <<: *perimeter-app
+    profiles: ["bootstrap"]
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/list_channels.py"]

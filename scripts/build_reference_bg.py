@@ -34,8 +34,29 @@ from src.reference_bg import (  # noqa: E402
     bucket_clips,
     clip_median_background,
     combine,
+    load_manifest,
     sample_evenly,
 )
+
+
+def _merged_manifest_entries(
+    out_root: Path,
+    built: list[ReferenceEntry],
+    only_camera: str | None,
+) -> list[ReferenceEntry]:
+    """Preserve other cameras when rebuilding a single camera in place."""
+    if only_camera is None:
+        return built
+    retained = [entry for entry in load_manifest(out_root) if entry.camera_id != only_camera]
+    return sorted(
+        [*retained, *built],
+        key=lambda entry: (
+            entry.camera_id,
+            entry.era or "",
+            entry.daylight,
+            entry.start,
+        ),
+    )
 
 
 def build(
@@ -95,7 +116,10 @@ def build(
                 )
 
     out_root.mkdir(parents=True, exist_ok=True)
-    (out_root / MANIFEST_NAME).write_text(json.dumps([asdict(e) for e in entries], indent=2))
+    manifest_entries = _merged_manifest_entries(out_root, entries, only_camera)
+    (out_root / MANIFEST_NAME).write_text(
+        json.dumps([asdict(e) for e in manifest_entries], indent=2)
+    )
     return entries
 
 

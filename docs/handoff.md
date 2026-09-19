@@ -52,14 +52,28 @@ Three measured changes shipped from that review:
 Relative to session #20's TP 29 / FP 30 / FN 18 / TN 631, the final result is **TP 29 / FP 25 /
 FN 18 / TN 636**, precision 0.5370, recall 0.6170, F1 0.5743. Full suite: 748 passed; Ruff clean.
 
-Cam12 geometry is not silently changed yet. The user reports the fence moved by the 9161/9162
-event, but automatic scene registration puts trace source 3457 and 9162 within about one pixel,
-and overlays remain visually aligned across the sampled interval. Per the project's hard-won
-rule, do not invent coordinates from the low-resolution frame. Clean 4x canvases for the top
-rail, base and a picket are in `data/reports/cam12_retrace_9162_2026-09-19/` (gitignored). Once
-the user traces them in red, add a complete dated zone era (all three geometries, because
-classification prefers `fence_bottom`) effective from the earlier sibling, cam12/9161 at
-`2024-11-23T03:52:25Z`, unless review finds an earlier changed clip.
+Cam12 geometry is now dated from the 9161/9162 event. The user drew the top rail, base and picket
+as three separate red strokes over the 4x 9162 canvas; connected-component line fits produced the
+complete middle era in `config/cameras.yaml`, effective from the earlier sibling cam12/9161 at
+`2024-11-23T03:52:25Z`. The checked overlay follows all three traces. The source/review material
+is retained under `data/reports/archive/review_2026-09-19/` (gitignored).
+
+Repository/data cleanup followed. Root-level DB backups moved to `data/backups/legacy_root/`,
+download logs to `data/logs/`, the completed unknown review and trace source to
+`data/reports/archive/review_2026-09-19/`, and the four old stage-1 backtest pairs to
+`data/reports/archive/backtests_2026-09-09/`. Raw history, the live DB, labels, all historical
+investigation folders, and referenced debug renders were retained. Only redundant blank Cam12
+canvases, an editor temp file, stale `cam12/day_07.png`, and regenerable Python/test caches were
+deleted. Cam12 references were rebuilt in place; `scripts/build_reference_bg.py --camera` now
+merges the rebuilt camera into the existing manifest instead of erasing every other camera.
+
+The production boundary is now explicit in README and enforced by `tests/test_architecture.py`:
+`src` never imports `scripts`. Detection/scoring/classification, DB/config, reference handling and
+alert transports are in `src`; scripts are operator/offline CLIs. There is still no live Telegram
+watcher/orchestrator, so the repo has reusable production logic but not an end-to-end production
+service. Build that as a small service over `src` rather than promoting a backtest/debug script.
+Final verification after the geometry/reference/cleanup work: 752 tests pass, Ruff clean, and the
+labelled backtest remains TP 29 / FP 25 / FN 18 / TN 636.
 
 ## Handoff for a new agent (2026-09-19, session #20)
 
@@ -1583,7 +1597,8 @@ in `src/features.py`, not to silence the test.
 records every real run by default (`--no-record` to skip). Needed a schema bump — see next.
 
 **Schema v6** (`scripts/migrate_schema_v6.py`, applied to `data/perimeter_watch.db`, backed up
-first to `data/perimeter_watch.db.bak-2026-09-09-pre-v6`): `backtest_results.predicted_class`'s
+first to `data/backups/legacy_root/perimeter_watch.db.bak-2026-09-09-pre-v6`):
+`backtest_results.predicted_class`'s
 CHECK constraint used to accept only the four-class routing vocabulary
 (`guard_side`/`outside_alert`/`outside_priority`/`ambiguous`) that plan step 25 always specified but
 was never built. `classify()` emits eight different categories instead. The constraint was

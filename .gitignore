@@ -21,6 +21,7 @@ data/reports/*
 *.db.bak-*
 data/backups/
 data/*.log
+data/logs/
 
 # Editors / OS
 .vscode/

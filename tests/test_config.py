@@ -112,6 +112,22 @@ def test_load_cameras_config_empty_is_valid(tmp_path):
     assert cfg.unknown_camera_id == "unknown"
 
 
+def test_repo_cam12_selects_all_three_dated_geometry_eras():
+    cfg = load_cameras_config(Path(__file__).parents[1] / "config" / "cameras.yaml")
+    cam12 = cfg.by_id("cam12")
+    assert cam12 is not None
+
+    original = cam12.zone_at("2024-11-19T03:35:39Z")
+    shifted = cam12.zone_at("2024-11-23T03:52:25Z")
+    remounted = cam12.zone_at("2026-03-02T16:13:54Z")
+
+    assert original.fence[0] == (0.4646, 0.276)
+    assert shifted.fence[0] == (0.4959, 0.2021)
+    assert shifted.fence_bottom[-1] == (0.4472, 0.999)
+    assert shifted.fence_pickets == (((0.3613, 0.4635), (0.4322, 0.999)),)
+    assert remounted.fence[0] == (0.4455, 0.1958)
+
+
 def test_load_cameras_config_valid_with_zone(tmp_path):
     path = _write(
         tmp_path / "cameras.yaml",

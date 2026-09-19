@@ -419,6 +419,20 @@ cameras:
         fence_pickets:
           - [[0.3621, 0.4822], [0.4289, 0.9969]]
         metric_calibration: true
+      - effective_from: "2024-11-23T03:52:25Z"
+        # 2026-09-19: user retraced all three geometry primitives in red over
+        # data/history/cam12/9162.mp4 after spotting the subtle fence shift in
+        # its debug render. Effective from 9161, the earlier sibling of the
+        # reviewed 9162 event and therefore the earliest direct evidence.
+        fence:
+          [[0.4959, 0.2021], [0.3887, 0.3932], [0.2815, 0.5844], [0.1742, 0.7755], [0.067, 0.9667]]
+        outside: right
+        depth_cutoff: 0.05
+        fence_bottom:
+          [[0.5002, 0.2344], [0.487, 0.4255], [0.4737, 0.6167], [0.4605, 0.8078], [0.4472, 0.999]]
+        fence_pickets:
+          - [[0.3613, 0.4635], [0.4322, 0.999]]
+        metric_calibration: true
       - effective_from: "2026-03-02T16:13:54Z"
         fence: [[0.4455, 0.1958], [0.3466, 0.3943], [0.2467, 0.5927], [0.1467, 0.7911], [0.0477, 0.9896]]
         outside: right
@@ -513,4 +527,3 @@ cameras:
     # side_name against the same reference points as the top-rail line.
     fence_bottom:
       [[0.4946, 0.0708], [0.5086, 0.3029], [0.5227, 0.5349], [0.5369, 0.7669], [0.551, 0.999]]
-

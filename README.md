@@ -1,8 +1,11 @@
 # Nature Ridge Perimeter Watch
 
-Motion-based perimeter fence monitoring built from a Telegram security-camera feed. This round
-covers discovery, feasibility validation, and calibration tooling — **not** a live alerting
-service (see [docs/plan.md](docs/plan.md) for the full plan and what's explicitly deferred).
+Motion-based perimeter fence monitoring built from a Telegram security-camera feed. The reusable
+detection, scoring, classification, persistence, calibration, and alert-transport code now lives
+under `src/`. The repository still does **not** contain the live Telegram watcher/orchestrator
+that continuously receives clips and routes classifications; `scripts/` contains operator and
+offline-analysis entry points, not a hidden production service. See [docs/plan.md](docs/plan.md)
+for that remaining application work.
 
 Two gates decide whether the rest of the pipeline gets built:
 
@@ -255,12 +258,24 @@ suppress an outside alert. This must be preserved in `classify.py` when it's bui
 
 ```
 config/            cameras.yaml, thresholds.yaml
-scripts/           CLI entry points (meta_backfill, infer_camera_order, label, spike)
-src/               config, db, backfill, sequence, zones, features, message_parsing,
-                   logging_setup, errors
+src/               reusable runtime/domain code: motion, scoring, classification, DB,
+                   configuration, calibration, references, parsing, and alert transports
+scripts/           operator/offline CLIs: ingestion/backfill, labelling, backtesting,
+                   review rendering, reference builds, migrations, and diagnostics
 tests/             pytest suite (unit tests only; no live Telegram/video needed)
-docs/plan.md       full implementation plan, scope decisions, and what's deferred
+docs/              current plan, handoff, capability map, and historical findings
+data/history/      source clips (local, gitignored)
+data/reference_bg/ derived production references (local, gitignored, reproducible)
+data/reports/      generated review/analysis artifacts (local, gitignored)
+data/backups/      retained DB/label backups (local, gitignored)
+data/logs/         retained operational logs (local, gitignored)
 ```
+
+The dependency direction is deliberate: `scripts` may import `src`, but `src` must never import
+`scripts`. `tests/test_architecture.py` enforces that boundary. Some scripts are necessarily
+substantial because they implement interactive review or report orchestration; none is imported
+by the future runtime path. Before deployment, add a small service entry point around the `src`
+APIs rather than promoting a backtest/debug script into production.
 
 ## Sensitivity note
 

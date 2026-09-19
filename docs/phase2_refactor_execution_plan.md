@@ -68,7 +68,7 @@ corpus diff always points at exactly one change.
 8. **Never `cat`, `grep`, or otherwise read `.env`**, and never scope a search broadly enough to
    match it. It holds live credentials.
 9. **Back up the database before running any migration** (Step 8). Use the repo's existing
-   convention: `data/perimeter_watch.db.bak-2026-09-09-pre-v6`.
+   convention: `data/backups/legacy_root/perimeter_watch.db.bak-2026-09-09-pre-v6`.
 10. **Do not invent a mapping from `*_candidate` categories to
     `guard_side`/`outside_alert`/`outside_priority`/`ambiguous`.** See Step 8 — this is a routing
     policy decision tied to an unset business criterion, not a refactor.
@@ -557,7 +557,7 @@ honest and leaves that decision where it belongs.
 4. Back up and migrate the live database:
 
 ```bash
-cp data/perimeter_watch.db data/perimeter_watch.db.bak-2026-09-09-pre-v6
+cp data/perimeter_watch.db data/backups/legacy_root/perimeter_watch.db.bak-2026-09-09-pre-v6
 uv run python scripts/migrate_schema_v6.py
 uv run python scripts/check_incident_regression.py | tail -3   # proves the db still opens
 ```

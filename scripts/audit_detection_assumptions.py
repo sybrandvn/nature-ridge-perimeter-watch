@@ -31,11 +31,11 @@ import numpy as np  # noqa: E402
 
 from scripts import check_incident_regression as regression  # noqa: E402
 from scripts.backtest import _reference_background, summarize_labelled  # noqa: E402
-from scripts.label import _event_key  # noqa: E402
 from scripts.rank_candidates import clip_duration_seconds  # noqa: E402
 from src import db  # noqa: E402
 from src.classify import classify_detailed, classify_event  # noqa: E402
 from src.config import CameraZone, load_cameras_config  # noqa: E402
+from src.event_keys import event_key as _event_key  # noqa: E402
 from src.features import daylight_hint, flare_settle_index, is_daylight  # noqa: E402
 from src.motion import (  # noqa: E402
     ClipDetection,

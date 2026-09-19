@@ -48,11 +48,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from scripts.label import _event_key  # noqa: E402
 from scripts.spike import FEATURE_COLUMNS  # noqa: E402
 from src import db  # noqa: E402
 from src.classify import is_blinding_foreground  # noqa: E402
 from src.config import CamerasConfig, load_app_config, load_cameras_config  # noqa: E402
+from src.event_keys import event_key as _event_key  # noqa: E402
 from src.features import daylight_hint, is_daylight, sane_fps  # noqa: E402
 from src.reference_bg import (  # noqa: E402
     era_of,

@@ -57,7 +57,6 @@ from __future__ import annotations
 
 import argparse
 import random
-import re
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -70,6 +69,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src import db  # noqa: E402
 from src.config import load_app_config  # noqa: E402
 from src.db import VALID_LABELS  # noqa: E402
+from src.event_keys import event_key as _event_key  # noqa: E402
 
 PromptFn = Callable[[Mapping], "tuple[str, str | None] | None"]  # None => quit
 BulkConfirmFn = Callable[[str, int], bool]
@@ -89,7 +89,6 @@ PRIORITY_MESSAGE_IDS: dict[str, frozenset[int]] = {
 # Captions like "(Initial*) ... @ 14-03-24 20:44:22" and "(Stopped*) ... @ 14-03-24
 # 20:44:22" are two separate alert messages for the same physical trigger, sharing
 # this embedded camera timestamp -- not independent events.
-_EVENT_TS_RE = re.compile(r"@\s*(\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
 
 def _prioritize(rows: list[Mapping]) -> tuple[list[Mapping], list[Mapping]]:
@@ -120,15 +119,6 @@ def _spread_by_camera(rows: list[Mapping], rng: random.Random) -> list[Mapping]:
             if by_camera[cam]:
                 result.append(by_camera[cam].pop(0))
     return result
-
-
-def _event_key(camera_id: str, caption: str | None) -> str | None:
-    """Group key for alert messages sharing one embedded camera timestamp (same
-    physical trigger), or None if the caption doesn't carry one."""
-    if not caption:
-        return None
-    match = _EVENT_TS_RE.search(caption)
-    return f"{camera_id}|{match.group(1)}" if match else None
 
 
 def _event_label_map(conn) -> dict[str, str]:

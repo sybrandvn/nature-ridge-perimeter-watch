@@ -29,19 +29,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.spike import FEATURE_COLUMNS  # noqa: E402
 from src import db  # noqa: E402
 from src.backtester import record_run  # noqa: E402
-from src.classify import classify_detailed, is_blinding_foreground  # noqa: E402
+from src.clip_analysis import analyze_clip  # noqa: E402
 from src.config import (  # noqa: E402
     CamerasConfig,
     load_app_config,
     load_cameras_config,
     load_thresholds_config,
 )
-from src.features import daylight_hint, is_daylight  # noqa: E402
-from src.motion import (  # noqa: E402
-    extraction_fingerprint,
-    get_cached_features,
-    put_cached_features,
-)
+from src.features import is_daylight  # noqa: E402
 from src.reference_bg import (  # noqa: E402
     era_of,
     load_manifest,
@@ -138,52 +133,22 @@ def run_backtest(
         if camera is None:
             unknown_cameras.add(clip["camera_id"])
             continue
-        extra: dict[str, Any] = {}
-        reference = _reference_background(
-            reference_entries, reference_root, camera, clip["timestamp"]
+        analysis = analyze_clip(
+            conn=conn,
+            channel_id=clip["channel_id"],
+            message_id=clip["message_id"],
+            video_path=clip["file_path"],
+            timestamp=clip["timestamp"],
+            camera=camera,
+            thresholds=thresholds_config,
+            reference_entries=reference_entries,
+            reference_root=reference_root,
+            extract_fn=extract_fn,
+            use_cache=use_cache,
+            cache_standard=cache_standard_path,
         )
-        if reference is not None:
-            extra["reference_background"] = reference
-        hint = daylight_hint(clip["timestamp"])
-        if hint is not None:
-            extra["daylight_hint"] = hint
-        zone = camera.zone_at(clip["timestamp"])
-        features: dict[str, float] | None
-        cache_fingerprint = None
-        cache_hit = False
-        if cache_standard_path:
-            cache_fingerprint = extraction_fingerprint(
-                video_path=clip["file_path"],
-                motion_fingerprint=thresholds_config.motion_fingerprint(),
-                zone=zone,
-                reference_background=reference,
-                daylight_hint=hint,
-            )
-            cache_hit, features = get_cached_features(
-                conn,
-                channel_id=clip["channel_id"],
-                message_id=clip["message_id"],
-                fingerprint=cache_fingerprint,
-            )
-        else:
-            features = None
-        if not cache_hit:
-            features = extract_fn(clip["file_path"], zone, **extra)
-            if cache_standard_path and cache_fingerprint is not None:
-                put_cached_features(
-                    conn,
-                    channel_id=clip["channel_id"],
-                    message_id=clip["message_id"],
-                    fingerprint=cache_fingerprint,
-                    features=features,
-                )
-        if features is not None and clip["timestamp"] is not None:
-            # classify() needs the real exogenous signal, not an image
-            # statistic -- see the module docstring's resident_candidate note.
-            # Cast to float so it round-trips through REPORT_COLUMNS/CSV/
-            # features_json the same way every other feature does.
-            features["is_daylight"] = float(is_daylight(clip["timestamp"]))
-        result = classify_detailed(features)
+        features = analysis.features
+        result = analysis.classification
         row = {
             "channel_id": clip["channel_id"],
             "message_id": clip["message_id"],
@@ -191,7 +156,7 @@ def run_backtest(
             "label": clip["label"],
             "category": result.category,
             "reason": result.reason,
-            "blinding_foreground": is_blinding_foreground(features),
+            "blinding_foreground": analysis.blinding_foreground,
         }
         for col in REPORT_COLUMNS[len(_IDENTITY_COLUMNS) :]:
             row[col] = None if features is None else features.get(col)

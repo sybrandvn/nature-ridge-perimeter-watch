@@ -52,13 +52,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from scripts.label import (
-    _EVENT_TS_RE,  # noqa: E402
-    _event_key,  # noqa: E402
-)
 from src import db  # noqa: E402
 from src.classify import classify_detailed  # noqa: E402
 from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
+from src.event_keys import EVENT_TIMESTAMP_RE as _EVENT_TS_RE  # noqa: E402
+from src.event_keys import event_key as _event_key  # noqa: E402
 from src.features import (  # noqa: E402
     FLASHLIGHT_CANDIDATE_MIN_RATIO,
     FLASHLIGHT_SUBJECT_THRESHOLD,

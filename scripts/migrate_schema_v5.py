@@ -30,9 +30,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.label import _event_key  # noqa: E402
 from src.config import load_app_config  # noqa: E402
 from src.db import _SCHEMA_SQL  # noqa: E402
+from src.event_keys import event_key as _event_key  # noqa: E402
 
 _STARTUP_STATE_BY_V4_LABEL = {
     "startup": "duplicate",

@@ -10,7 +10,9 @@ loaded via `src.config.ClassificationThresholds`; `classify()` and
 `is_blinding_foreground()` both default to that file when called with no
 explicit `thresholds` argument, memoised so it is parsed once per process.
 
-`classify()` is the live per-clip path. `classify_event()` is reporting-only.
+`classify()` is the per-clip path. `classify_event()` resolves buffered live
+siblings and reporting groups without allowing a suppressed sibling to hide an
+urgent clip.
 `is_blinding_foreground()` is a separate, orthogonal maintenance flag.
 
 Rule ORDER is load-bearing: guard is tested before environment, and environment
@@ -996,10 +998,9 @@ def classify_event(categories: Iterable[str]) -> str:
     `incident_candidate`/`animal_candidate` always win, matching this repo's
     own alerting rule that shape/trajectory may never suppress an outside
     alert -- so this can only ever RAISE an event's verdict toward the alert
-    channel relative to any single clip, never lower it. This function is
-    reporting/analysis-only; it is never called from the live per-clip
-    `classify()` path, since a real system sees clips one at a time and
-    can't know a sibling's category before it exists.
+    channel relative to any single clip, never lower it. The live watcher calls
+    this only after its sibling window closes or a completion clip arrives;
+    per-clip classification remains independent.
 
     Empty input (an id with no clips at all) returns "no_motion", matching
     `classify()`'s own convention for "nothing to go on".

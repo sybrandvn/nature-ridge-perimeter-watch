@@ -101,3 +101,47 @@ def test_interrupted_send_becomes_ambiguous_not_retried(tmp_path):
     assert live_state.due_deliveries(conn, now + timedelta(days=1)) == []
     row = conn.execute("SELECT * FROM live_deliveries").fetchone()
     assert row["status"] == "ambiguous"
+
+
+def test_late_urgent_sibling_reopens_a_suppressed_final_event(tmp_path):
+    conn = db.connect(tmp_path / "test.db")
+    now = _now()
+    live_state.add_analyzed_clip(
+        conn,
+        event_key="cam01|x",
+        camera_id="cam01",
+        deadline_at=now,
+        channel_id="source",
+        message_id=1,
+        phase="initial",
+        category="guard_candidate",
+        reason="green_light",
+        blinding_foreground=False,
+        features=None,
+    )
+    live_state.finalize_event(
+        conn,
+        event_key="cam01|x",
+        category="guard_candidate",
+        reason="green_light",
+        representative_channel_id="source",
+        representative_message_id=1,
+        transports=(),
+        now=now,
+    )
+    live_state.add_analyzed_clip(
+        conn,
+        event_key="cam01|x",
+        camera_id="cam01",
+        deadline_at=now,
+        channel_id="source",
+        message_id=2,
+        phase="complete",
+        category="incident_candidate",
+        reason="outside_no_colour",
+        blinding_foreground=False,
+        features=None,
+    )
+    row = conn.execute("SELECT * FROM live_events").fetchone()
+    assert row["status"] == "pending"
+    assert live_state.due_event_keys(conn, now) == ["cam01|x"]

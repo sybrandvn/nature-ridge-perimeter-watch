@@ -6,13 +6,18 @@ any real network access, or omit it to construct a real `telegram.Bot`.
 
 from __future__ import annotations
 
-from typing import Protocol
+from pathlib import Path
+from typing import Any, Protocol
 
 from src.errors import AlertError
 
 
 class _SendsMessages(Protocol):
     async def send_message(self, chat_id: int | str, text: str) -> object: ...
+
+    async def send_video(
+        self, chat_id: int | str, video: Any, caption: str
+    ) -> object: ...
 
 
 async def send_telegram_alert(
@@ -21,6 +26,7 @@ async def send_telegram_alert(
     bot_token: str,
     chat_id: str,
     bot: _SendsMessages | None = None,
+    video_path: str | Path | None = None,
 ) -> None:
     """Send `message` to `chat_id` using `bot_token`. Raises AlertError on failure."""
     from telegram.error import TelegramError
@@ -32,6 +38,10 @@ async def send_telegram_alert(
         client = Bot(token=bot_token)
 
     try:
-        await client.send_message(chat_id=chat_id, text=message)
-    except TelegramError as exc:
+        if video_path is None:
+            await client.send_message(chat_id=chat_id, text=message)
+        else:
+            with Path(video_path).open("rb") as video:
+                await client.send_video(chat_id=chat_id, video=video, caption=message)
+    except (TelegramError, OSError) as exc:
         raise AlertError(f"Telegram alert failed: {exc}") from exc

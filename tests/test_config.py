@@ -29,6 +29,38 @@ def test_load_app_config_minimal_valid_mapping():
     assert cfg.operating_window_end == "06:00"
     assert cfg.ntfy_priority == "urgent"
     assert cfg.bot_trustee_ids == ()
+    assert cfg.event_wait_seconds == 300.0
+    assert cfg.delivery_retry_base_seconds == 30.0
+    assert cfg.delivery_retry_max_seconds == 900.0
+    assert cfg.watcher_poll_seconds == 5.0
+
+
+def test_live_runtime_durations_validate_and_parse():
+    cfg = load_app_config_from_mapping(
+        {
+            "TELEGRAM_API_ID": "1",
+            "TELEGRAM_API_HASH": "x",
+            "SOURCE_CHANNEL": "x",
+            "EVENT_WAIT_SECONDS": "12.5",
+            "DELIVERY_RETRY_BASE_SECONDS": "2",
+            "DELIVERY_RETRY_MAX_SECONDS": "8",
+            "WATCHER_POLL_SECONDS": "1",
+        }
+    )
+    assert cfg.event_wait_seconds == 12.5
+    assert cfg.delivery_retry_max_seconds == 8.0
+
+
+def test_live_runtime_rejects_nonpositive_duration():
+    with pytest.raises(ConfigError, match="EVENT_WAIT_SECONDS"):
+        load_app_config_from_mapping(
+            {
+                "TELEGRAM_API_ID": "1",
+                "TELEGRAM_API_HASH": "x",
+                "SOURCE_CHANNEL": "x",
+                "EVENT_WAIT_SECONDS": "0",
+            }
+        )
 
 
 def test_missing_required_var_raises():

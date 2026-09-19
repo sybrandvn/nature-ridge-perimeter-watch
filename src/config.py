@@ -49,6 +49,12 @@ class AppConfig:
     operating_window_end: str
     bot_trustee_ids: tuple[int, ...]
     bot_security_ids: tuple[int, ...]
+    event_wait_seconds: float
+    delivery_retry_base_seconds: float
+    delivery_retry_max_seconds: float
+    watcher_poll_seconds: float
+    watcher_heartbeat_path: Path
+    live_media_dir: Path
 
 
 def load_app_config(env_path: str | Path = ".env", *, require_telegram: bool = True) -> AppConfig:
@@ -77,6 +83,12 @@ _KNOWN_KEYS = {
     "OPERATING_WINDOW_END",
     "BOT_TRUSTEE_IDS",
     "BOT_SECURITY_IDS",
+    "EVENT_WAIT_SECONDS",
+    "DELIVERY_RETRY_BASE_SECONDS",
+    "DELIVERY_RETRY_MAX_SECONDS",
+    "WATCHER_POLL_SECONDS",
+    "WATCHER_HEARTBEAT_PATH",
+    "LIVE_MEDIA_DIR",
 }
 
 
@@ -119,6 +131,21 @@ def load_app_config_from_mapping(
         if not _HHMM_RE.match(value):
             raise ConfigError(f"{label} must be HH:MM (24h), got {value!r}")
 
+    def _positive_float(key: str, default: float) -> float:
+        raw = _get(key)
+        try:
+            value = default if raw is None else float(raw)
+        except ValueError as exc:
+            raise ConfigError(f"{key} must be a number, got {raw!r}") from exc
+        if value <= 0:
+            raise ConfigError(f"{key} must be greater than zero, got {value}")
+        return value
+
+    retry_base = _positive_float("DELIVERY_RETRY_BASE_SECONDS", 30.0)
+    retry_max = _positive_float("DELIVERY_RETRY_MAX_SECONDS", 900.0)
+    if retry_max < retry_base:
+        raise ConfigError("DELIVERY_RETRY_MAX_SECONDS must be >= DELIVERY_RETRY_BASE_SECONDS")
+
     return AppConfig(
         telegram_api_id=api_id,
         telegram_api_hash=api_hash,
@@ -135,6 +162,14 @@ def load_app_config_from_mapping(
         operating_window_end=end,
         bot_trustee_ids=_parse_id_list("BOT_TRUSTEE_IDS", _get("BOT_TRUSTEE_IDS")),
         bot_security_ids=_parse_id_list("BOT_SECURITY_IDS", _get("BOT_SECURITY_IDS")),
+        event_wait_seconds=_positive_float("EVENT_WAIT_SECONDS", 300.0),
+        delivery_retry_base_seconds=retry_base,
+        delivery_retry_max_seconds=retry_max,
+        watcher_poll_seconds=_positive_float("WATCHER_POLL_SECONDS", 5.0),
+        watcher_heartbeat_path=Path(
+            _get("WATCHER_HEARTBEAT_PATH") or "data/live/watcher.heartbeat"
+        ),
+        live_media_dir=Path(_get("LIVE_MEDIA_DIR") or "data/live/clips"),
     )
 
 

@@ -82,13 +82,24 @@ def add_analyzed_clip(
         INSERT INTO live_events (event_key, camera_id, status, deadline_at)
         VALUES (?, ?, 'pending', ?)
         ON CONFLICT (event_key) DO UPDATE SET
+            status = CASE
+                WHEN live_events.status = 'finalized'
+                 AND COALESCE(live_events.final_category, '') NOT IN
+                     ('animal_candidate', 'incident_candidate')
+                 AND ? IN ('animal_candidate', 'incident_candidate')
+                THEN 'pending' ELSE live_events.status
+            END,
             deadline_at = CASE
-                WHEN live_events.status = 'pending' THEN excluded.deadline_at
+                WHEN live_events.status = 'pending'
+                  OR (COALESCE(live_events.final_category, '') NOT IN
+                        ('animal_candidate', 'incident_candidate')
+                      AND ? IN ('animal_candidate', 'incident_candidate'))
+                THEN excluded.deadline_at
                 ELSE live_events.deadline_at
             END,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         """,
-        (event_key, camera_id, deadline),
+        (event_key, camera_id, deadline, category, category),
     )
     conn.execute(
         """

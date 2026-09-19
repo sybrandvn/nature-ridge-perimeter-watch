@@ -22,3 +22,20 @@ async def test_send_telegram_alert_wraps_telegram_error():
 
     with pytest.raises(AlertError, match="chat not found"):
         await send_telegram_alert("hi", bot_token="unused", chat_id="bad", bot=bot)
+
+
+async def test_send_telegram_alert_can_attach_video(tmp_path):
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"video")
+    bot = AsyncMock()
+    await send_telegram_alert(
+        "animal",
+        bot_token="unused",
+        chat_id="alerts",
+        bot=bot,
+        video_path=path,
+    )
+    kwargs = bot.send_video.await_args.kwargs
+    assert kwargs["chat_id"] == "alerts"
+    assert kwargs["caption"] == "animal"
+    assert kwargs["video"].name == str(path)

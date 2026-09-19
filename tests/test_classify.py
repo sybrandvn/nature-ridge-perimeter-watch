@@ -269,9 +269,90 @@ def test_classify_environment_wins_over_animal_incident_shape():
     assert classify(features) == "environment_candidate"
 
 
+def test_classify_guard_wins_over_low_alert_persistence():
+    features = _features(
+        persistence=0.0,
+        green_light_ratio=0.2,
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+    )
+    assert classify(features) == "guard_candidate"
+
+
+def test_classify_environment_wins_over_low_alert_persistence():
+    features = _features(
+        persistence=0.0,
+        blob_count=11,
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+    )
+    assert classify(features) == "environment_candidate"
+
+
 def test_classify_animal_candidate_on_daylight_color():
     features = _features(outside_pixel_fraction=0.9, median_fence_distance=0.2, color_fraction=0.3)
     assert classify(features) == "animal_candidate"
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        _features(
+            persistence=0.005,
+            uncalibrated=0.0,
+            implausible_height_fraction=0.8,
+            zone_classifiable_fraction=1.0,
+            outside_pixel_fraction=0.0,
+            blob_count=2,
+            color_fraction=0.2,
+            is_daylight=True,
+        ),
+        _features(
+            persistence=0.005,
+            outside_pixel_fraction=1.0,
+            median_fence_distance=0.097,
+            color_fraction=0.23,
+            row_normalised_area=101.0,
+            is_daylight=True,
+        ),
+        _features(
+            persistence=0.005,
+            outside_pixel_fraction=0.5,
+            median_fence_distance=0.034,
+            outside_frame_fraction=1.0,
+            fence_crossed=1.0,
+            color_fraction=0.016,
+            row_normalised_area=2028.0,
+            motion_pixel_fraction_median=0.003,
+            scenery_motion_fraction=0.0,
+            is_daylight=False,
+        ),
+        _features(
+            persistence=0.005,
+            outside_pixel_fraction=0.9,
+            median_fence_distance=0.2,
+            color_fraction=0.3,
+        ),
+        _features(
+            persistence=0.005,
+            outside_pixel_fraction=0.9,
+            median_fence_distance=0.2,
+            color_fraction=0.0,
+        ),
+    ],
+)
+def test_classify_low_persistence_blocks_every_alert_branch(features):
+    assert classify(features) == "unclassified"
+
+
+def test_classify_alert_persistence_floor_is_inclusive():
+    features = _features(
+        persistence=0.01,
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+        color_fraction=0.0,
+    )
+    assert classify(features) == "incident_candidate"
 
 
 def test_classify_near_fence_daylight_animal():
@@ -640,6 +721,17 @@ def test_classify_implausible_height_threshold_is_wired():
         classify(features, _thresholds(implausible_height_fraction_min=0.9))
         != "environment_candidate"
     )
+
+
+def test_classify_alert_persistence_threshold_is_wired():
+    features = _features(
+        persistence=0.005,
+        outside_pixel_fraction=0.9,
+        median_fence_distance=0.2,
+        color_fraction=0.0,
+    )
+    assert classify(features) == "unclassified"
+    assert classify(features, _thresholds(alert_persistence_min=0.0)) == "incident_candidate"
 
 
 def test_classify_inside_blob_count_threshold_is_wired():
@@ -1050,6 +1142,18 @@ def test_reason_outside_colour():
     }
 
 
+def test_reason_insufficient_detection_evidence():
+    features = _features(
+        persistence=0.005,
+        outside_pixel_fraction=0.65,
+        median_fence_distance=0.2,
+    )
+    result = classify_detailed(features)
+    assert result.category == "unclassified" == classify(features)
+    assert result.reason == "insufficient_detection_evidence"
+    assert result.contributing == {"persistence": 0.005}
+
+
 def test_reason_outside_no_colour():
     features = _features(outside_pixel_fraction=0.65, median_fence_distance=0.2)
     result = classify_detailed(features)
@@ -1101,7 +1205,7 @@ def test_reason_no_rule_matched():
     assert result.contributing == {}
 
 
-def test_all_20_reason_codes_are_distinct():
+def test_all_21_reason_codes_are_distinct():
     # Guards against a copy-paste reusing a reason code across two branches.
     codes = {
         "no_features",
@@ -1117,6 +1221,7 @@ def test_all_20_reason_codes_are_distinct():
         "blinding_blob_white",
         "motion_pixel_sustained",
         "animal_row_area",
+        "insufficient_detection_evidence",
         "outside_colour",
         "outside_no_colour",
         "outside_person_daylight",
@@ -1125,4 +1230,4 @@ def test_all_20_reason_codes_are_distinct():
         "inside_only_night",
         "no_rule_matched",
     }
-    assert len(codes) == 20
+    assert len(codes) == 21

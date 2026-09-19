@@ -1,11 +1,11 @@
 # Handoff: animal-event regressions fixed; detector extraction complete
 
-Written 2026-08-28, updated repeatedly since; last updated 2026-09-17. **If you are a new agent
-picking this up, search this file for "Handoff for a new agent (2026-09-17, session #19)"
+Written 2026-08-28, updated repeatedly since; last updated 2026-09-19. **If you are a new agent
+picking this up, search this file for "Handoff for a new agent (2026-09-19, session #20)"
 and start there.** (This file's session sections are not in one consistent order: #1-#5 are the
 oldest, kept in their original forward-chronological spot further up; starting from #6, each new
 session's entry is instead inserted directly above its predecessor, so the chain from #6 to the
-latest reads newest-first. #17 is the current latest.) On branch
+latest reads newest-first.) On branch
 `feat/phase2-refactor` (cut from `main`, which has all of Phase 1 and Phase 2's empirical
 detection/classification work merged). The detection work itself is in a good, validated,
 actively-improving state — see session #16's entry for the latest detection review and object
@@ -17,6 +17,26 @@ this file is the short version of
 where things actually stand and what to do next. `docs/detection_improvement_review.md` is the
 authoritative record of everything session #16 measured and shipped, with its own itemised
 "Implementation status" section at the top.
+
+## Handoff for a new agent (2026-09-19, session #20)
+
+Added a minimum-evidence alert gate after manually reviewing every current alert clip with
+`persistence < 0.01`. There are 11: six guards, two unknowns, and three blank/camera-artifact
+clips; none is a confirmed animal or incident. The clearest guard examples are startup/preview
+siblings whose full follow-up clips correctly detect the flashlight, while the preview itself has
+zero or one genuine detection and geometry dominated by recovered boxes. This is an evidence-
+quality failure, not a flashlight-detector failure.
+
+`classification.alert.persistence_min: 0.01` now applies immediately before every
+`animal_candidate` or `incident_candidate` return. Earlier guard and environment rules retain
+priority. Clips below the floor become `unclassified` with reason
+`insufficient_detection_evidence`. Relative persistence was chosen instead of a minimum frame
+count because short genuine clips still need to qualify; the weakest known protected alert is
+0.0769 (over seven times the floor), and cam10/7631 is 0.1111. On the 708 labelled clips, the exact
+alert-channel result moves from TP 29 / FP 39 / FN 18 / TN 622 (precision 0.4265, recall 0.6170,
+F1 0.5043) to TP 29 / FP 31 / FN 18 / TN 630 (precision 0.4833, recall 0.6170, F1 0.5421).
+No feature reprocessing is required because `persistence` is already cached; a normal reprocess
+remains the recovery path if detector features change later.
 
 ## Handoff for a new agent (2026-09-17, session #19)
 

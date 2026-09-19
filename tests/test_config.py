@@ -608,6 +608,7 @@ _GOLDEN_THRESHOLDS = {
     "blob_count_median_min": 4.0,
     "implausible_height_fraction_min": 0.5,
     "motion_pixel_fraction_median_min": 0.12,
+    "alert_persistence_min": 0.01,
     "outside_pixel_fraction_min": 0.6,
     "median_fence_distance_min": 0.1,
     "median_fence_distance_max": 0.40,

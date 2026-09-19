@@ -139,6 +139,14 @@ Rules:
     Only fires for calibrated cameras (`uncalibrated == 0.0`); the 3 without a
     usable picket trace (cam01b, cam15, cam16) are untouched by this rule and
     fall through to the pixel-space rules exactly as before.
+  - unclassified (minimum alert evidence): persistence < 0.01 immediately
+    before any animal_candidate or incident_candidate return. Guard and
+    environment rules retain priority. All 11 current alert clips below this
+    floor were manually reviewed: six are guards, two are unknown and three
+    are blank/camera artifacts; none is a confirmed animal or incident. The
+    weakest known protected alert has persistence 0.0769, over 7x the floor.
+    Relative persistence is used instead of a minimum frame count so short,
+    genuine events such as cam10/7631 (0.1111) remain eligible.
   - animal_candidate (near-fence daylight recovery): the same compact,
     colour-bearing outside subject as the animal branch below, but with
     median_fence_distance in (0.05, 0.10] and real daylight required. A
@@ -395,6 +403,20 @@ class ClassificationResult:
     contributing: Mapping[str, float]
 
 
+def _insufficient_alert_evidence(
+    features: dict[str, float], thresholds: ClassificationThresholds
+) -> ClassificationResult | None:
+    """Return the non-alert result when temporal detection evidence is too thin."""
+    persistence = features.get("persistence", 0.0)
+    if persistence < thresholds.alert_persistence_min:
+        return ClassificationResult(
+            "unclassified",
+            "insufficient_detection_evidence",
+            {"persistence": persistence},
+        )
+    return None
+
+
 def classify_detailed(
     features: dict[str, float] | None,
     thresholds: ClassificationThresholds | None = None,
@@ -417,7 +439,8 @@ def classify_detailed(
     `warmup_flashlight`, `multi_object_flashlight`, `blob_count_peak`,
     `blob_count_sustained`, `inside_elevated_animal`, `implausible_height`,
     `near_fence_animal`, `fence_straddle_no_colour`, `blinding_blob_white`,
-    `motion_pixel_sustained`, `animal_row_area`, `outside_colour`,
+    `motion_pixel_sustained`, `animal_row_area`,
+    `insufficient_detection_evidence`, `outside_colour`,
     `outside_no_colour`, `outside_person_daylight`, `jitter_solidity`,
     `inside_only_daylight`, `inside_only_night`, `no_rule_matched`), never
     renamed or reused for a different rule -- a caller may match on it.
@@ -480,6 +503,8 @@ def classify_detailed(
         and features["color_fraction"] > thresholds.color_fraction_min
         and features.get("is_daylight", False)
     ):
+        if insufficient := _insufficient_alert_evidence(features, thresholds):
+            return insufficient
         return ClassificationResult(
             "animal_candidate",
             "inside_elevated_animal",
@@ -523,6 +548,8 @@ def classify_detailed(
         <= thresholds.motion_pixel_fraction_median_min
         and features.get("is_daylight", False)
     ):
+        if insufficient := _insufficient_alert_evidence(features, thresholds):
+            return insufficient
         return ClassificationResult(
             "animal_candidate",
             "near_fence_animal",
@@ -561,6 +588,8 @@ def classify_detailed(
         and features.get("scenery_motion_fraction", 0.0)
         < thresholds.motion_pixel_fraction_median_min
     ):
+        if insufficient := _insufficient_alert_evidence(features, thresholds):
+            return insufficient
         return ClassificationResult(
             "incident_candidate",
             "fence_straddle_no_colour",
@@ -621,6 +650,8 @@ def classify_detailed(
                         "row_normalised_area": features.get("row_normalised_area", 0.0),
                     },
                 )
+            if insufficient := _insufficient_alert_evidence(features, thresholds):
+                return insufficient
             return ClassificationResult(
                 "animal_candidate",
                 "outside_colour",
@@ -631,6 +662,8 @@ def classify_detailed(
                     "row_normalised_area": features.get("row_normalised_area", 0.0),
                 },
             )
+        if insufficient := _insufficient_alert_evidence(features, thresholds):
+            return insufficient
         return ClassificationResult(
             "incident_candidate",
             "outside_no_colour",

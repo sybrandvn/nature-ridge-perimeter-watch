@@ -86,6 +86,13 @@ classification:
     # classify() docstring, "sustained whole-frame motion".
     motion_pixel_fraction_median_min: 0.12
 
+  alert:
+    # Minimum temporal evidence before geometry may emit animal_candidate or
+    # incident_candidate. Every current alert clip below 0.01 was manually
+    # reviewed: six guards, two unknowns and three blank/camera-artifact clips;
+    # no animal or incident. The weakest known protected alert is 0.0769.
+    persistence_min: 0.01
+
   # classify() docstring, "animal_candidate / incident_candidate".
   # median_fence_distance is upper-bounded as well as lower-bounded (added
   # 2026-09-07): a blob far BEYOND the fence is scenery, not a subject.

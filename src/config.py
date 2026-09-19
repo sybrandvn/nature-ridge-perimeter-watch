@@ -626,6 +626,7 @@ class ClassificationThresholds:
     blob_count_median_min: float
     implausible_height_fraction_min: float
     motion_pixel_fraction_median_min: float
+    alert_persistence_min: float
     outside_pixel_fraction_min: float
     median_fence_distance_min: float
     median_fence_distance_max: float
@@ -654,6 +655,7 @@ _CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
     "blob_count_median_min": ("environment", "blob_count_median_min"),
     "implausible_height_fraction_min": ("environment", "implausible_height_fraction_min"),
     "motion_pixel_fraction_median_min": ("environment", "motion_pixel_fraction_median_min"),
+    "alert_persistence_min": ("alert", "persistence_min"),
     "outside_pixel_fraction_min": ("outside", "pixel_fraction_min"),
     "median_fence_distance_min": ("outside", "median_fence_distance_min"),
     "median_fence_distance_max": ("outside", "median_fence_distance_max"),

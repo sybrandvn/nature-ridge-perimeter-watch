@@ -22,6 +22,12 @@ was completed.
   `/menu` and `/start` provide a four-section inline interface with camera buttons, paged event
   buttons, and back navigation; the visible slash list is intentionally limited to five entry
   points while direct command handlers remain available.
+- Every video returned by the query bot carries a `Debug view` callback. It restores missing source
+  media, renders the exact production detector overlay in a worker thread, and caches it below
+  `data/debug` with the extraction fingerprint and renderer version. The secondary
+  `/debug <video-id>` command accepts any known clip, including a latest-camera video outside the
+  animal/incident history. `scripts.watch.render_bot_debug_video` supplies the timestamp-specific
+  zone, reference background, and full `MotionThresholds` record to `render_clip`.
 - `src/retention.py` keeps urgent evidence, pending events, and one newest local video per camera.
   When explicitly enabled, other managed videos are removed hourly while metadata remains
   available for live retrieval. It is opt-in via `MEDIA_RETENTION_ENABLED=true` and defaults off

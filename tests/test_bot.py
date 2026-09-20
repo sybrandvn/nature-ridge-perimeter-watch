@@ -391,6 +391,73 @@ async def test_history_groups_siblings_and_event_sends_representative_video(tmp_
     assert video_button.text == "▶ 2024-03-16 00:50 · cam01"
 
 
+async def test_sent_video_offers_on_demand_debug_view(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    source = tmp_path / "42.mp4"
+    source.write_bytes(b"source")
+    debug_path = tmp_path / "42-debug.mp4"
+    debug_path.write_bytes(b"debug")
+    db.upsert_clip(
+        conn,
+        channel_id="source",
+        message_id=42,
+        camera_id="cam01",
+        timestamp="2026-09-19T18:30:00Z",
+        caption="motion",
+        file_path=str(source),
+        source="live",
+    )
+    debug_loader = AsyncMock(return_value=debug_path)
+    controller = QueryBot(queries, debug_loader=debug_loader)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+
+    await controller.last(update, SimpleNamespace(args=["cam01"]))
+    markup = message.reply_video.await_args.kwargs["reply_markup"]
+    assert markup.inline_keyboard[0][0].text == "Debug view"
+    assert markup.inline_keyboard[0][0].callback_data == "menu:debug:42"
+
+    message.reply_video.reset_mock()
+    query = SimpleNamespace(
+        data="menu:debug:42",
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    callback_update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=11),
+        effective_message=message,
+        callback_query=query,
+    )
+    await controller.menu_callback(callback_update, None)
+
+    debug_loader.assert_awaited_once_with(queries.clip_by_message_id(42), source)
+    assert "Detector debug 42" in message.reply_video.await_args.kwargs["caption"]
+    assert message.reply_video.await_args.kwargs["reply_markup"] is None
+
+
+async def test_debug_command_validates_video_id_and_renderer_availability(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    db.upsert_clip(
+        conn,
+        channel_id="source",
+        message_id=42,
+        camera_id="cam01",
+        timestamp="2026-09-19T18:30:00Z",
+        caption="motion",
+        file_path=None,
+        source="live",
+    )
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+
+    await controller.debug(update, SimpleNamespace(args=[]))
+    message.reply_text.assert_awaited_once_with("Usage: /debug <video-id>")
+    message.reply_text.reset_mock()
+    await controller.debug(update, SimpleNamespace(args=["42"]))
+    message.reply_text.assert_awaited_once_with("Debug video rendering is unavailable.")
+
+
 async def test_history_validates_category_and_event_id(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     controller = QueryBot(queries)

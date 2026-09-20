@@ -7,6 +7,7 @@ import asyncio
 import logging
 from pathlib import Path
 
+from scripts.render_debug import DEBUG_RENDER_VERSION, render_clip
 from src import db
 from src.bot import BotQueries, build_query_bot
 from src.config import (
@@ -15,10 +16,70 @@ from src.config import (
     load_thresholds_config,
     resolve_channel_ref,
 )
+from src.features import daylight_hint, is_daylight
 from src.live_watcher import LiveWatcher
 from src.logging_setup import configure_logging
+from src.motion import extraction_fingerprint
+from src.reference_bg import era_of, load_reference_image, reference_for
 
 logger = logging.getLogger("watch")
+
+
+def render_bot_debug_video(
+    clip,
+    source: Path,
+    *,
+    cameras,
+    thresholds,
+    reference_entries,
+    output_root: Path,
+) -> Path | None:
+    """Render and cache the production detector view for one bot video."""
+    camera = cameras.by_id(clip.camera_id)
+    if camera is None:
+        return None
+    reference = None
+    entry = reference_for(
+        reference_entries,
+        camera.id,
+        clip.timestamp,
+        era=era_of(camera, clip.timestamp),
+        daylight=is_daylight(clip.timestamp),
+    )
+    if entry is not None:
+        reference = load_reference_image(Path("data/reference_bg"), entry)
+    fingerprint = extraction_fingerprint(
+        video_path=source,
+        motion_fingerprint=thresholds.motion_fingerprint(),
+        zone=camera.zone_at(clip.timestamp),
+        reference_background=reference,
+        daylight_hint=daylight_hint(clip.timestamp),
+    )
+    destination = (
+        output_root
+        / camera.id
+        / f"{clip.message_id}-{fingerprint[:12]}-r{DEBUG_RENDER_VERSION}.mp4"
+    )
+    if destination.is_file():
+        return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f"{destination.stem}.part.mp4")
+    temporary.unlink(missing_ok=True)
+    result = render_clip(
+        str(source),
+        camera.zone_at(clip.timestamp),
+        out_path=str(temporary),
+        title=f"{camera.id}/{clip.message_id}",
+        scale=2,
+        reference_background=reference,
+        timestamp=clip.timestamp,
+        motion_thresholds=thresholds.motion_thresholds(),
+    )
+    if result is None:
+        temporary.unlink(missing_ok=True)
+        return None
+    Path(result).replace(destination)
+    return destination
 
 
 def write_heartbeat(path: Path) -> None:
@@ -76,6 +137,15 @@ async def run(argv: list[str] | None = None) -> None:  # pragma: no cover - real
                 BotQueries(conn=conn, config=config, cameras=cameras),
                 config.telegram_bot_token,
                 media_loader=watcher.retrieve_media,
+                debug_loader=lambda clip, source: asyncio.to_thread(
+                    render_bot_debug_video,
+                    clip,
+                    source,
+                    cameras=cameras,
+                    thresholds=thresholds,
+                    reference_entries=watcher.reference_entries,
+                    output_root=config.live_media_dir.parent / "debug",
+                ),
             )
             await query_application.initialize()
             query_initialized = True

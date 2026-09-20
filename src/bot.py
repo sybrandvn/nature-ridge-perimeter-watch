@@ -128,6 +128,17 @@ class BotQueries:
             path=None if row["file_path"] is None else Path(str(row["file_path"])),
         )
 
+    def clip_by_message_id(self, message_id: int) -> MediaClip | None:
+        """Return any known source clip, including clips outside event history."""
+        row = self.conn.execute(
+            """
+            SELECT channel_id, message_id, camera_id, timestamp, file_path FROM clips
+            WHERE message_id = ? ORDER BY timestamp DESC LIMIT 1
+            """,
+            (message_id,),
+        ).fetchone()
+        return None if row is None else self._media_clip(row)
+
     def _category_rows(self, category: str) -> list[sqlite3.Row]:
         if category not in {"animal", "incident"}:
             raise ValueError(f"unsupported media category: {category}")
@@ -574,9 +585,11 @@ class QueryBot:
         queries: BotQueries,
         *,
         media_loader: Callable[[MediaClip], Awaitable[Path | None]] | None = None,
+        debug_loader: Callable[[MediaClip, Path], Awaitable[Path | None]] | None = None,
     ) -> None:
         self.queries = queries
         self.media_loader = media_loader
+        self.debug_loader = debug_loader
 
     async def _authorize(
         self, update: Any, command: str, *, trustee_only: bool = False
@@ -737,6 +750,9 @@ class QueryBot:
         elif data.startswith("menu:event:"):
             await self._send_history_event(message, int(data.rsplit(":", 1)[1]))
             return
+        elif data.startswith("menu:debug:"):
+            await self._send_debug_video(message, int(data.rsplit(":", 1)[1]))
+            return
         elif data.startswith("menu:last:"):
             await self._send_last_camera(message, data.rsplit(":", 1)[1])
             return
@@ -869,7 +885,13 @@ class QueryBot:
             return None
 
     async def _send_video(
-        self, message: Any, clip: MediaClip, path: Path, *, heading: str
+        self,
+        message: Any,
+        clip: MediaClip,
+        path: Path,
+        *,
+        heading: str,
+        offer_debug: bool = True,
     ) -> bool:
         caption = (
             f"{heading}: {clip.camera_id}\n"
@@ -883,6 +905,13 @@ class QueryBot:
                     supports_streaming=True,
                     read_timeout=60,
                     write_timeout=60,
+                    reply_markup=(
+                        self._keyboard(
+                            [[("Debug view", f"menu:debug:{clip.message_id}")]]
+                        )
+                        if offer_debug and self.debug_loader is not None
+                        else None
+                    ),
                 )
         except Exception as exc:
             logger.exception(
@@ -985,6 +1014,53 @@ class QueryBot:
             return
         await self._send_history_event(message, message_id)
 
+    async def debug(self, update: Any, context: Any) -> None:
+        authorized = await self._authorize(update, "debug")
+        if authorized is None:
+            return
+        message, _role = authorized
+        args = list(getattr(context, "args", ()) or ())
+        try:
+            message_id = int(args[0]) if len(args) == 1 else None
+        except ValueError:
+            message_id = None
+        if message_id is None:
+            await message.reply_text("Usage: /debug <video-id>")
+            return
+        await self._send_debug_video(message, message_id)
+
+    async def _send_debug_video(self, message: Any, message_id: int) -> None:
+        clip = self.queries.clip_by_message_id(message_id)
+        if clip is None:
+            await message.reply_text(f"No video is listed with ID {message_id}.")
+            return
+        if self.debug_loader is None:
+            await message.reply_text("Debug video rendering is unavailable.")
+            return
+        source = await self._ensure_media(clip)
+        if source is None:
+            await message.reply_text(f"Video {message_id} is unavailable at its source.")
+            return
+        await message.reply_text(f"Generating debug view for {clip.camera_id}/{message_id}…")
+        try:
+            path = await self.debug_loader(clip, source)
+        except Exception as exc:
+            logger.exception(
+                "query_bot_debug_render_failed",
+                extra={"camera_id": clip.camera_id, "message_id": message_id, "error": str(exc)},
+            )
+            path = None
+        if path is None or not path.is_file():
+            await message.reply_text(f"Debug view for {clip.camera_id}/{message_id} failed.")
+            return
+        await self._send_video(
+            message,
+            clip,
+            path,
+            heading=f"Detector debug {message_id}",
+            offer_debug=False,
+        )
+
     async def _send_history_event(self, message: Any, message_id: int) -> None:
         event = self.queries.history_clip(message_id)
         if event is None:
@@ -1007,11 +1083,12 @@ def build_query_bot(
     token: str,
     *,
     media_loader: Callable[[MediaClip], Awaitable[Path | None]] | None = None,
+    debug_loader: Callable[[MediaClip, Path], Awaitable[Path | None]] | None = None,
 ) -> Any:
     from telegram import BotCommand
     from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
-    controller = QueryBot(queries, media_loader=media_loader)
+    controller = QueryBot(queries, media_loader=media_loader, debug_loader=debug_loader)
     application = Application.builder().token(token).build()
     for command in (
         "about",
@@ -1028,6 +1105,7 @@ def build_query_bot(
         "incidents",
         "history",
         "event",
+        "debug",
         "map",
         "patrols",
         "last",

@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -54,7 +55,13 @@ import numpy as np  # noqa: E402
 
 from src import db  # noqa: E402
 from src.classify import classify_detailed  # noqa: E402
-from src.config import CameraZone, load_app_config, load_cameras_config  # noqa: E402
+from src.config import (  # noqa: E402
+    CameraZone,
+    MotionThresholds,
+    load_app_config,
+    load_cameras_config,
+    load_thresholds_config,
+)
 from src.event_keys import EVENT_TIMESTAMP_RE as _EVENT_TS_RE  # noqa: E402
 from src.event_keys import event_key as _event_key  # noqa: E402
 from src.features import (  # noqa: E402
@@ -103,6 +110,7 @@ DEFAULTS = {
     "flare_tolerance": 3.0,
     "max_flare_fraction": 0.4,
 }
+DEBUG_RENDER_VERSION = 1
 
 COLOR_TRACKED = (255, 0, 255)
 COLOR_RECOVERED = (0, 165, 255)
@@ -524,6 +532,7 @@ def render_clip(
     reference_background: np.ndarray | None = None,
     timestamp: str | None = None,
     prefer_flashlight_candidate: bool = False,
+    motion_thresholds: MotionThresholds | None = None,
 ) -> str | None:
     """Write an annotated H.264 .mp4 video for one clip. Returns the path, or
     None if the clip has no readable frames.
@@ -540,6 +549,31 @@ def render_clip(
     difference, e.g. cam07/11174.
     """
     out_path = str(Path(out_path).with_suffix(".mp4"))
+    if motion_thresholds is not None:
+        threshold = motion_thresholds.threshold
+        min_blob_area_fraction = motion_thresholds.min_blob_area_fraction
+        max_area_fraction = motion_thresholds.max_area_fraction
+        flare_tolerance = motion_thresholds.flare_tolerance
+        max_flare_fraction = motion_thresholds.max_flare_fraction
+        prefer_flashlight_candidate = motion_thresholds.prefer_flashlight_candidate
+    detector_settings = {} if motion_thresholds is None else {
+        "max_track_jump_fraction": motion_thresholds.max_track_jump_fraction,
+        "max_track_miss_frames": motion_thresholds.max_track_miss_frames,
+        "template_match_threshold": motion_thresholds.template_match_threshold,
+        "flare_match_relax": motion_thresholds.flare_match_relax,
+        "track_search_margin_fraction": motion_thresholds.track_search_margin_fraction,
+        "min_track_search_margin": motion_thresholds.min_track_search_margin,
+        "fragment_close_kernel_size": motion_thresholds.fragment_close_kernel_size,
+        "max_recovered_streak": motion_thresholds.max_recovered_streak,
+        "max_size_change_ratio": motion_thresholds.max_size_change_ratio,
+        "anchor_refine": motion_thresholds.anchor_refine,
+        "max_anchor_streak": motion_thresholds.max_anchor_streak,
+        "min_reacquire_area": motion_thresholds.min_reacquire_area,
+        "max_scenery_streak": motion_thresholds.max_scenery_streak,
+        "scenery_correlation": motion_thresholds.scenery_correlation,
+        "compensate_warmup": motion_thresholds.compensate_warmup,
+        "multi_track_confirm_frames": motion_thresholds.multi_track_confirm_frames,
+    }
     detection: ClipDetection | None = detect_clip(
         video_path,
         max_area_fraction=max_area_fraction,
@@ -549,8 +583,11 @@ def render_clip(
         max_flare_fraction=max_flare_fraction,
         ignore_polygons=zone.ignore,
         reference_background=reference_background,
-        compensate_warmup=True,
+        compensate_warmup=(
+            True if motion_thresholds is None else motion_thresholds.compensate_warmup
+        ),
         prefer_flashlight_candidate=prefer_flashlight_candidate,
+        **{key: value for key, value in detector_settings.items() if key != "compensate_warmup"},
     )
     if detection is None:
         return None
@@ -1192,6 +1229,16 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--clip needs --camera so the fence geometry can be loaded")
 
     cameras = load_cameras_config("config/cameras.yaml")
+    configured_motion = load_thresholds_config("config/thresholds.yaml").motion_thresholds()
+    configured_motion = replace(
+        configured_motion,
+        threshold=args.threshold,
+        min_blob_area_fraction=args.min_area,
+        max_area_fraction=args.max_area,
+        flare_tolerance=args.flare_tolerance,
+        max_flare_fraction=args.max_flare_fraction,
+        prefer_flashlight_candidate=args.prefer_flashlight_candidate,
+    )
     reference_entries = [] if args.no_reference_bg else load_manifest(args.reference_bg)
     if args.clip:
         clips = _resolve_clips(args, None)
@@ -1237,6 +1284,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             timestamp=clip.get("timestamp"),
             prefer_flashlight_candidate=args.prefer_flashlight_candidate,
+            motion_thresholds=configured_motion,
         )
         if result is None:
             print(f"  skip {title}: no readable frames")

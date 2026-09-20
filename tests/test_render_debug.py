@@ -12,7 +12,7 @@ from scripts.render_debug import (
     _draw_multi_tracks,
     render_clip,
 )
-from src.config import CameraZone
+from src.config import CameraZone, load_thresholds_config
 from src.motion import TrackedObject, detect_clip
 
 HEIGHT, WIDTH = 48, 64
@@ -86,6 +86,7 @@ def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, z
 
     def capture_detect(*args, **kwargs):
         seen["ignore_polygons"] = kwargs.get("ignore_polygons")
+        seen["detector_settings"] = kwargs
         seen["detection"] = real_detect(*args, **kwargs)
         return seen["detection"]
 
@@ -101,16 +102,21 @@ def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, z
     monkeypatch.setattr(render_debug, "features_from_detection", capture_features)
     monkeypatch.setattr(render_debug, "classify_detailed", capture_classification)
 
+    configured_motion = load_thresholds_config("config/thresholds.yaml").motion_thresholds()
     out = render_clip(
         clip,
         zone,
         out_path=str(tmp_path / "out.mp4"),
         timestamp="2026-01-01T12:00:00Z",
+        motion_thresholds=configured_motion,
     )
 
     assert out is not None
     assert seen["scored_detection"] is seen["detection"]
     assert seen["ignore_polygons"] == zone.ignore
+    assert seen["detection"] is not None
+    assert seen["detector_settings"]["compensate_warmup"] is False
+    assert seen["detector_settings"]["anchor_refine"] is True
     assert seen["classified_features"]["is_daylight"] == 1.0
 
 

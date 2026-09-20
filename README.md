@@ -118,7 +118,8 @@ Events, System, and Site sections; camera and history entries are selectable but
 slash-command list keeps `/menu`, `/about`, `/event`, `/last`, and `/history` visible. Existing
 direct commands remain supported: `/about`, `/tonight`, `/health`, `/power [count]`, `/batteries`,
 `/panel [count]`, `/faults [count]`, `/animal`, `/animals [count]`, `/incidents [count]`,
-`/history <animal|incident> [page]`, `/event <id>`, `/map`, and `/last <camera_id>`; only trustees
+`/history <animal|incident> [page]`, `/event <id>`, `/debug <video-id>`, `/map`, and
+`/last <camera_id>`; only trustees
 can use `/patrols`. Power history separates failures from restorations and collapses identical
 repeated notifications. `/history` groups Initial/Stopped sibling clips into events and lists a
 stable representative message ID; `/event` retrieves that chosen video. Battery status pairs
@@ -126,6 +127,11 @@ low/restore messages where possible and flags unresolved device warnings for con
 alarm panel.
 Direct `/history` results include one-tap video buttons labelled with the local date, time, and
 camera, so mobile users do not need to copy message IDs.
+Every event or camera video sent by the bot includes a **Debug view** button. It renders the
+annotated detector video on demand with the clip's timestamp-specific camera geometry, reference
+background, and complete production motion configuration. Renders are cached under `data/debug`
+using an input fingerprint, so repeated taps are fast and detector or geometry changes invalidate
+the old result. `/debug <video-id>` provides the same operation directly.
 Panel history reports arm/disarm transitions; faults report tamper, supervision/device-missing,
 and control-room communication-test failures. Media commands restore a cleaned clip from the
 source channel through Telethon when it is not local. Media counts are capped at five per request.

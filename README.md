@@ -114,8 +114,9 @@ wanted. Never paste the token into source files, logs, or chat.
 
 The bot enforces `BOT_TRUSTEE_IDS` and `BOT_SECURITY_IDS` in every handler. Trustees and security
 can open the grouped inline interface with `/menu` or `/start`. The top level contains Monitoring,
-Events, System, and Site sections; camera and history entries are selectable buttons. The compact
-slash-command list keeps `/menu`, `/about`, `/event`, `/last`, and `/history` visible. Existing
+Events, System, and Site sections; camera and history entries are selectable buttons. Every visible
+slash command performs an immediate action: `/menu`, `/tonight`, `/health`, `/batteries`, and
+`/about`. Commands that need a camera, category, page, or video ID stay in the inline menu. Existing
 direct commands remain supported: `/about`, `/tonight`, `/health`, `/power [count]`, `/batteries`,
 `/panel [count]`, `/faults [count]`, `/animal`, `/animals [count]`, `/incidents [count]`,
 `/history <animal|incident> [page]`, `/event <id>`, `/debug <video-id>`, `/map`, and

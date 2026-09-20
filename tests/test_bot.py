@@ -497,8 +497,9 @@ async def test_grouped_menu_navigates_sections(tmp_path):
     assert query.edit_message_text.await_args.kwargs["text"] == "Alarm-system events"
 
 
-def test_visible_bot_commands_are_compact_menu_entry_points(tmp_path):
+def test_visible_bot_commands_are_immediate_actions(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     application = build_query_bot(queries, "123456:example-token")
     commands = [command.command for command in application.bot_data["commands"]]
-    assert commands == ["menu", "about", "event", "last", "history"]
+    assert commands == ["menu", "tonight", "health", "batteries", "about"]
+    assert not {"event", "last", "history", "debug"} & set(commands)

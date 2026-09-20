@@ -1114,9 +1114,9 @@ def build_query_bot(
     application.add_handler(CallbackQueryHandler(controller.menu_callback, pattern=r"^menu:"))
     application.bot_data["commands"] = [
         BotCommand("menu", "Open the grouped menu"),
-        BotCommand("about", "What this system reports"),
-        BotCommand("event", "Send a history video by ID"),
-        BotCommand("last", "Send the latest available camera video"),
-        BotCommand("history", "Browse animal or incident history"),
+        BotCommand("tonight", "Show tonight's event summary"),
+        BotCommand("health", "Show camera health now"),
+        BotCommand("batteries", "Show battery requirements"),
+        BotCommand("about", "Explain what the system reports"),
     ]
     return application

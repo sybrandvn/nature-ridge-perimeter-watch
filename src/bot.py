@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.config import AppConfig, CamerasConfig
+from src.message_parsing import classify_health_event
 from src.sequence import ClipEvent, segment_passes
 
 logger = logging.getLogger("query_bot")
@@ -54,6 +56,24 @@ def _utc_text(value: datetime) -> str:
 def _local_timestamp(value: str) -> str:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed.astimezone(LOCAL_ZONE).strftime("%Y-%m-%d %H:%M")
+
+
+def _stored_event_type(row: sqlite3.Row) -> str:
+    precise = classify_health_event(str(row["raw_text"] or ""))
+    if precise is not None:
+        return precise
+    legacy = {"battery_dead": "battery_low", "back_online": "power_restored"}
+    return legacy.get(str(row["event_type"]), str(row["event_type"]))
+
+
+def _battery_subject(raw_text: str) -> str:
+    match = re.search(r"\[([^]]+)\]", raw_text)
+    if match:
+        value = match.group(1).strip()
+        return "panel" if value.lower() == "panel" else f"device {value}"
+    if "panel battery" in raw_text.lower():
+        return "panel"
+    return "unspecified device"
 
 
 class BotQueries:
@@ -179,10 +199,10 @@ class BotQueries:
             )
         }
         latest_events = {
-            str(row["camera_id"]): (str(row["event_type"]), str(row["timestamp"]))
+            str(row["camera_id"]): (_stored_event_type(row), str(row["timestamp"]))
             for row in self.conn.execute(
                 """
-                SELECT s.camera_id, s.event_type, s.timestamp
+                SELECT s.camera_id, s.event_type, s.timestamp, s.raw_text
                 FROM system_events s
                 JOIN (
                     SELECT camera_id, MAX(timestamp) AS latest
@@ -200,11 +220,209 @@ class BotQueries:
                 status = f"last {_local_timestamp(latest)}"
                 if active and latest < _utc_text(start):
                     status = "no clip this window; " + status
-            if event and event[0] in {"battery_dead", "power_out"}:
+            if event and event[0] in {"battery_low", "power_out"}:
                 status = f"{event[0]} {_local_timestamp(event[1])}; {status}"
-            elif event and event[0] == "back_online":
+            elif event and event[0] in {"battery_restored", "power_restored"}:
                 status = f"online {_local_timestamp(event[1])}; {status}"
             lines.append(f"{camera.id}: {status}")
+        return "\n".join(lines)
+
+    def power(self, *, limit: int = 10) -> str:
+        rows = list(
+            self.conn.execute(
+                """
+                SELECT timestamp, event_type, raw_text FROM system_events
+                WHERE event_type IN ('power_out', 'power_restored', 'back_online')
+                   OR lower(COALESCE(raw_text, '')) LIKE '%power failure%'
+                ORDER BY timestamp DESC
+                """
+            )
+        )
+        unique: list[tuple[sqlite3.Row, str]] = []
+        seen: set[str] = set()
+        counts: dict[str, int] = {"power_out": 0, "power_restored": 0}
+        for row in rows:
+            event_type = _stored_event_type(row)
+            if event_type not in counts:
+                continue
+            counts[event_type] += 1
+            raw = " ".join(str(row["raw_text"] or "").lower().split())
+            if raw in seen:
+                continue
+            seen.add(raw)
+            if len(unique) < limit:
+                unique.append((row, event_type))
+        if not unique:
+            return "No power notifications are recorded."
+        latest = "failure" if unique[0][1] == "power_out" else "restored"
+        lines = [
+            f"Power notifications — latest: {latest}",
+            f"History: {counts['power_out']} failures, {counts['power_restored']} restores",
+        ]
+        labels = {"power_out": "POWER FAILURE", "power_restored": "restored"}
+        lines.extend(
+            f"{_local_timestamp(str(row['timestamp']))} — {labels[event_type]}"
+            for row, event_type in unique
+        )
+        lines.append("Duplicate notifications with identical source text are collapsed above.")
+        return "\n".join(lines)
+
+    def batteries(self) -> str:
+        rows = list(
+            self.conn.execute(
+                """
+                SELECT timestamp, event_type, raw_text FROM system_events
+                WHERE event_type IN ('battery_dead', 'battery_low', 'battery_restored')
+                   OR lower(COALESCE(raw_text, '')) LIKE '%battery low%'
+                ORDER BY timestamp
+                """
+            )
+        )
+        active: dict[str, sqlite3.Row] = {}
+        notifications: list[tuple[sqlite3.Row, str, str]] = []
+        for row in rows:
+            event_type = _stored_event_type(row)
+            if event_type not in {"battery_low", "battery_restored"}:
+                continue
+            subject = _battery_subject(str(row["raw_text"] or ""))
+            notifications.append((row, event_type, subject))
+            if event_type == "battery_low":
+                active[subject] = row
+            elif subject != "unspecified device":
+                active.pop(subject, None)
+            elif active:
+                # Older source messages omit the device on restore. Pair such
+                # a restore with the most recently warned unresolved device.
+                latest_subject = max(active, key=lambda key: str(active[key]["timestamp"]))
+                active.pop(latest_subject, None)
+        if not notifications:
+            return "No battery notifications are recorded."
+        lines = ["Battery replacement status"]
+        cutoff = self.now() - timedelta(days=365)
+        current = {
+            subject: row
+            for subject, row in active.items()
+            if datetime.fromisoformat(str(row["timestamp"]).replace("Z", "+00:00")) >= cutoff
+        }
+        older_count = len(active) - len(current)
+        if current:
+            lines.append("Current replacement candidates:")
+            for subject, row in sorted(
+                current.items(), key=lambda item: str(item[1]["timestamp"]), reverse=True
+            ):
+                lines.append(f"{subject}: {_local_timestamp(str(row['timestamp']))}")
+        else:
+            lines.append("No unresolved low-battery warnings from the last year.")
+        if older_count:
+            lines.append(
+                f"Older unmatched warnings: {older_count} "
+                "(historical uncertainty, not current work)"
+            )
+        lines.append("Recent notifications:")
+        seen: set[tuple[str, str]] = set()
+        recent = []
+        for row, event_type, subject in reversed(notifications):
+            key = (str(row["raw_text"] or ""), event_type)
+            if key in seen:
+                continue
+            seen.add(key)
+            recent.append((row, event_type, subject))
+            if len(recent) == 5:
+                break
+        for row, event_type, subject in recent:
+            label = "LOW" if event_type == "battery_low" else "restored"
+            lines.append(f"{_local_timestamp(str(row['timestamp']))} — {subject} {label}")
+        lines.append(
+            "Status is inferred from low/restore notifications; confirm replacements on the "
+            "alarm panel."
+        )
+        return "\n".join(lines)
+
+    def panel(self, *, limit: int = 10) -> str:
+        rows = list(
+            self.conn.execute(
+                """
+                SELECT timestamp, event_type, raw_text FROM system_events
+                WHERE event_type IN ('panel_armed', 'panel_disarmed')
+                ORDER BY timestamp DESC
+                """
+            )
+        )
+        if not rows:
+            return "No panel arm/disarm notifications are recorded."
+        latest = _stored_event_type(rows[0]).removeprefix("panel_")
+        counts = {"panel_armed": 0, "panel_disarmed": 0}
+        unique = []
+        seen: set[str] = set()
+        for row in rows:
+            event_type = _stored_event_type(row)
+            if event_type not in counts:
+                continue
+            counts[event_type] += 1
+            raw = " ".join(str(row["raw_text"] or "").lower().split())
+            if raw in seen:
+                continue
+            seen.add(raw)
+            if len(unique) < limit:
+                unique.append((row, event_type))
+        lines = [
+            f"Panel — latest: {latest}",
+            f"History: {counts['panel_armed']} armed, {counts['panel_disarmed']} disarmed",
+        ]
+        lines.extend(
+            f"{_local_timestamp(str(row['timestamp']))} — "
+            f"{event_type.removeprefix('panel_')}"
+            for row, event_type in unique
+        )
+        return "\n".join(lines)
+
+    def faults(self, *, limit: int = 10) -> str:
+        supported = {
+            "tamper": "TAMPER",
+            "tamper_restored": "tamper restored",
+            "supervision_error": "SUPERVISION / DEVICE MISSING",
+            "communication_failure": "CONTROL-ROOM COMMUNICATION FAILURE",
+        }
+        placeholders = ",".join("?" for _ in supported)
+        rows = list(
+            self.conn.execute(
+                f"""
+                SELECT timestamp, event_type, raw_text FROM system_events
+                WHERE event_type IN ({placeholders}) ORDER BY timestamp DESC
+                """,
+                tuple(supported),
+            )
+        )
+        if not rows:
+            return "No tamper, supervision, or communication faults are recorded."
+        counts = {event_type: 0 for event_type in supported}
+        unique = []
+        seen: set[str] = set()
+        for row in rows:
+            event_type = _stored_event_type(row)
+            if event_type not in supported:
+                continue
+            counts[event_type] += 1
+            raw = " ".join(str(row["raw_text"] or "").lower().split())
+            if raw in seen:
+                continue
+            seen.add(raw)
+            if len(unique) < limit:
+                unique.append((row, event_type, _battery_subject(str(row["raw_text"] or ""))))
+        lines = [
+            "System fault history",
+            (
+                f"tamper={counts['tamper']}, restored={counts['tamper_restored']}, "
+                f"supervision={counts['supervision_error']}, "
+                f"communication={counts['communication_failure']}"
+            ),
+        ]
+        for row, event_type, subject in unique:
+            suffix = f" — {subject}" if subject != "unspecified device" else ""
+            lines.append(
+                f"{_local_timestamp(str(row['timestamp']))} — {supported[event_type]}{suffix}"
+            )
+        lines.append("Fault history is advisory; confirm current state with the control room.")
         return "\n".join(lines)
 
     def animals(self) -> str:
@@ -331,6 +549,46 @@ class QueryBot:
 
     async def health(self, update: Any, context: Any) -> None:
         await self._reply(update, "health")
+
+    async def power(self, update: Any, context: Any) -> None:
+        authorized = await self._authorize(update, "power")
+        if authorized is None:
+            return
+        message, _role = authorized
+        count = 10
+        args = getattr(context, "args", ()) or ()
+        if args:
+            try:
+                count = int(args[0])
+            except ValueError:
+                await message.reply_text("Usage: /power [count]")
+                return
+        await message.reply_text(self.queries.power(limit=min(max(count, 1), 20)))
+
+    async def batteries(self, update: Any, context: Any) -> None:
+        await self._reply(update, "batteries")
+
+    async def panel(self, update: Any, context: Any) -> None:
+        await self._counted_text(update, context, command="panel")
+
+    async def faults(self, update: Any, context: Any) -> None:
+        await self._counted_text(update, context, command="faults")
+
+    async def _counted_text(self, update: Any, context: Any, *, command: str) -> None:
+        authorized = await self._authorize(update, command)
+        if authorized is None:
+            return
+        message, _role = authorized
+        count = 10
+        args = getattr(context, "args", ()) or ()
+        if args:
+            try:
+                count = int(args[0])
+            except ValueError:
+                await message.reply_text(f"Usage: /{command} [count]")
+                return
+        query = getattr(self.queries, command)
+        await message.reply_text(query(limit=min(max(count, 1), 20)))
 
     async def map(self, update: Any, context: Any) -> None:
         await self._reply(update, "map")
@@ -475,6 +733,10 @@ def build_query_bot(
         "about",
         "tonight",
         "health",
+        "power",
+        "batteries",
+        "panel",
+        "faults",
         "animal",
         "animals",
         "incidents",
@@ -487,6 +749,10 @@ def build_query_bot(
         BotCommand("about", "What this system reports"),
         BotCommand("tonight", "Tonight's event summary"),
         BotCommand("health", "Camera health and last activity"),
+        BotCommand("power", "Power failures and restorations"),
+        BotCommand("batteries", "Battery replacement warnings"),
+        BotCommand("panel", "Panel arm and disarm history"),
+        BotCommand("faults", "Tamper and communication faults"),
         BotCommand("animal", "Send the latest animal video"),
         BotCommand("animals", "Send recent animal videos"),
         BotCommand("incidents", "Send recent incident videos"),

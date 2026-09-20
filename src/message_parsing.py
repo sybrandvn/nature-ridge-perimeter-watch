@@ -16,9 +16,18 @@ from src.config import CamerasConfig
 # Order matters: checked in sequence, first match wins. Extend as real caption
 # formats are observed during Phase 0a.
 _HEALTH_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("battery_dead", ("battery low", "battery dead", "battery critical", "low battery")),
+    # Restore phrases contain the corresponding failure phrase, so they must
+    # be checked first.
+    ("battery_restored", ("battery low restore", "battery restored")),
+    ("power_restored", ("power failure restore", "power restored", "back online", "reconnected")),
+    ("battery_low", ("battery low", "battery dead", "battery critical", "low battery")),
     ("power_out", ("power out", "power loss", "power failure", "offline")),
-    ("back_online", ("back online", "power restored", "reconnected")),
+    ("tamper_restored", ("tamper restore",)),
+    ("tamper", ("tamper event",)),
+    ("supervision_error", ("supervision error", "supervision(device missing)")),
+    ("communication_failure", ("alert testing failure", "failure (ftt)")),
+    ("panel_disarmed", ("panel disarmed",)),
+    ("panel_armed", ("panel armed",)),
 )
 
 
@@ -35,7 +44,7 @@ def parse_message(*, text: str | None, has_media: bool, cameras: CamerasConfig) 
     if has_media:
         return ParsedMessage(kind="clip", camera_id=_resolve_camera(caption, cameras))
 
-    event_type = _match_health_event(caption)
+    event_type = classify_health_event(caption)
     if event_type is not None:
         return ParsedMessage(
             kind="system_event", camera_id=_resolve_camera(caption, cameras), event_type=event_type
@@ -58,7 +67,8 @@ def _resolve_camera(caption: str, cameras: CamerasConfig) -> str:
     return cameras.unknown_camera_id
 
 
-def _match_health_event(caption: str) -> str | None:
+def classify_health_event(caption: str) -> str | None:
+    """Return the precise health transition represented by a source caption."""
     lowered = caption.lower()
     for event_type, keywords in _HEALTH_KEYWORDS:
         if any(keyword in lowered for keyword in keywords):

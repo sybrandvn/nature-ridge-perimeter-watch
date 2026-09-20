@@ -113,10 +113,23 @@ to the alert destination, grant permission to post, and set `ALERT_CHANNEL_ID` i
 wanted. Never paste the token into source files, logs, or chat.
 
 The bot enforces `BOT_TRUSTEE_IDS` and `BOT_SECURITY_IDS` in every handler. Trustees and security
-can use `/about`, `/tonight`, `/health`, `/animal`, `/animals [count]`, `/incidents [count]`,
-`/map`, and `/last <camera_id>`; only trustees can use `/patrols`. Media commands restore a cleaned
-clip from the source channel through Telethon when it is not local. Counts are capped at five per
-request.
+can use `/about`, `/tonight`, `/health`, `/power [count]`, `/batteries`, `/panel [count]`,
+`/faults [count]`, `/animal`, `/animals [count]`, `/incidents [count]`, `/map`, and
+`/last <camera_id>`; only trustees can use `/patrols`. Power history separates failures from
+restorations and collapses identical repeated notifications. Battery status pairs low/restore
+messages where possible and flags unresolved device warnings for confirmation at the alarm panel.
+Panel history reports arm/disarm transitions; faults report tamper, supervision/device-missing,
+and control-room communication-test failures. Media commands restore a cleaned clip from the
+source channel through Telethon when it is not local. Media counts are capped at five per request.
+
+After adding or changing system-message parsing, safely import recognized non-video history without
+touching clip rows:
+
+```bash
+docker compose stop watcher
+docker compose --profile tools run --rm toolbox python -m scripts.sync_system_events
+docker compose up -d watcher
+```
 
 Media retention is **disabled by default** for analysis/development machines. Storage-constrained
 servers can opt in with `MEDIA_RETENTION_ENABLED=true`; cleanup then runs at startup and hourly by

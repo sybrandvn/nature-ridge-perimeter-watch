@@ -15,9 +15,10 @@ was completed.
 - Compose now runs `watcher` by default with `restart: unless-stopped`, persistent `./data`, and a
   readiness-plus-heartbeat healthcheck. The operator and session-bootstrap profiles remain.
 - `src/bot.py` supplies the role-restricted Phase 5 query bot. Both roles receive `/about`,
-  `/tonight`, `/health`, `/animal`, `/animals`, `/incidents`, the approximate `/map`, and
-  `/last <camera_id>`; missing media is restored from the source channel. `/patrols` is enforced as
-  trustee only in its handler. Bot registration and allowlist values remain deployment inputs.
+  `/tonight`, `/health`, `/power`, `/batteries`, `/panel`, `/faults`, `/animal`, `/animals`,
+  `/incidents`, the approximate `/map`, and `/last <camera_id>`; missing media is restored from the
+  source channel. `/patrols` is enforced as trustee only in its handler. Bot registration and
+  allowlist values remain deployment inputs.
 - `src/retention.py` keeps urgent evidence, pending events, and one newest local video per camera.
   When explicitly enabled, other managed videos are removed hourly while metadata remains
   available for live retrieval. It is opt-in via `MEDIA_RETENTION_ENABLED=true` and defaults off

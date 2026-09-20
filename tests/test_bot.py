@@ -111,6 +111,85 @@ def test_health_uses_system_events_and_marks_window_silence(tmp_path):
     assert "cam02: no clips recorded" in health
 
 
+def test_power_history_separates_restores_and_collapses_duplicates(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    for message_id, timestamp, text in (
+        (1, "2026-08-20T17:42:35Z", "Power Failure Restore @ 20-08-26 19:39:52"),
+        (2, "2026-08-20T17:43:32Z", "Power Failure @ 20-08-26 19:39:52"),
+        (3, "2026-08-20T17:44:32Z", "Power Failure @ 20-08-26 19:39:52"),
+    ):
+        db.upsert_system_event(
+            conn,
+            channel_id="source",
+            message_id=message_id,
+            timestamp=timestamp,
+            camera_id="unknown",
+            event_type="power_out",
+            raw_text=text,
+        )
+    report = queries.power(limit=10)
+    assert "2 failures, 1 restores" in report
+    assert report.count("POWER FAILURE") == 1
+    assert report.count("restored") == 1
+
+
+def test_battery_status_pairs_unscoped_restore_and_keeps_explicit_lows(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    events = (
+        (1, "2026-01-01T10:00:00Z", "Device Battery Low [5]"),
+        (2, "2026-01-02T10:00:00Z", "Device Battery Low Restore"),
+        (3, "2026-03-17T10:00:00Z", "Device Battery Low [6]"),
+        (4, "2026-03-18T10:00:00Z", "Device Battery Low Restore [Panel]"),
+    )
+    for message_id, timestamp, text in events:
+        db.upsert_system_event(
+            conn,
+            channel_id="source",
+            message_id=message_id,
+            timestamp=timestamp,
+            camera_id="unknown",
+            event_type="battery_dead",
+            raw_text=text,
+        )
+    report = queries.batteries()
+    assert "Current replacement candidates" in report
+    assert "device 6: 2026-03-17 12:00" in report
+    assert "device 5:" not in report
+    assert "panel:" not in report
+
+
+def test_panel_and_fault_reports_use_synced_events(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    events = (
+        (1, "2026-09-18T18:00:00Z", "panel_armed", "Panel Armed"),
+        (2, "2026-09-19T06:00:00Z", "panel_disarmed", "Panel Disarmed"),
+        (3, "2026-09-19T07:00:00Z", "tamper", "Tamper Event [17]"),
+        (4, "2026-09-19T08:00:00Z", "tamper_restored", "Tamper Restore Event"),
+        (
+            5,
+            "2026-09-19T09:00:00Z",
+            "communication_failure",
+            "ALERT TESTING FAILURE (FTT)",
+        ),
+    )
+    for message_id, timestamp, event_type, text in events:
+        db.upsert_system_event(
+            conn,
+            channel_id="source",
+            message_id=message_id,
+            timestamp=timestamp,
+            camera_id="unknown",
+            event_type=event_type,
+            raw_text=text,
+        )
+    panel = queries.panel(limit=10)
+    assert "latest: disarmed" in panel
+    assert "1 armed, 1 disarmed" in panel
+    faults = queries.faults(limit=10)
+    assert "tamper=1, restored=1" in faults
+    assert "CONTROL-ROOM COMMUNICATION FAILURE" in faults
+
+
 async def test_unknown_users_are_refused_every_command(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     controller = QueryBot(queries)

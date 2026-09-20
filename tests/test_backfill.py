@@ -87,7 +87,7 @@ async def test_run_backfill_classifies_and_persists_all_kinds(cameras, conn):
 
     events = list(db.iter_system_events(conn))
     assert len(events) == 1
-    assert events[0]["event_type"] == "battery_dead"
+    assert events[0]["event_type"] == "battery_low"
     assert events[0]["camera_id"] == "cam_north"
 
 

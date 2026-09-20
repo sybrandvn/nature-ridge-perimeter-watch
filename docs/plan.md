@@ -534,8 +534,9 @@ closed: its identity covers every current extraction input and corpus output was
 35. [done] Role-based access from a Telegram user-ID allowlist: `trustee` (full), `security`
     (restricted). Enforced server-side in every handler — hiding a menu button is not access
     control. Unknown IDs refused and logged.
-36. [done] Commands: `/about`, `/tonight`, `/health`, `/animals`, `/map` for both roles; `/patrols`
-    trustee only (passes per night, times, cameras covered, coverage gaps).
+36. [done] Commands: `/about`, `/tonight`, `/health`, `/animals`, `/map`, and `/last <camera_id>`
+    for both roles; `/patrols` trustee only (passes per night, times, cameras covered, coverage
+    gaps).
 37. [done] Camera health surfaces parsed `system_events` primarily, with schedule-aware silence detection
     as a backstop for a camera that dies without notifying. Silence outside the operating window
     is never a fault.

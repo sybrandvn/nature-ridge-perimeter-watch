@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -13,6 +15,13 @@ from src.sequence import ClipEvent, segment_passes
 
 logger = logging.getLogger("query_bot")
 LOCAL_ZONE = ZoneInfo("Africa/Johannesburg")
+
+
+@dataclass(frozen=True)
+class LastClip:
+    camera_id: str
+    timestamp: str
+    path: Path
 
 
 def _parse_hhmm(value: str) -> time:
@@ -63,6 +72,30 @@ class BotQueries:
             return "trustee"
         if user_id in self.config.bot_security_ids:
             return "security"
+        return None
+
+    def resolve_camera(self, value: str) -> str | None:
+        camera = self.cameras.resolve_alias(value)
+        return None if camera is None else camera.id
+
+    def last_clip(self, camera_id: str) -> LastClip | None:
+        """Return the newest downloaded clip whose file still exists."""
+        rows = self.conn.execute(
+            """
+            SELECT camera_id, timestamp, file_path FROM clips
+            WHERE camera_id = ? AND file_path IS NOT NULL
+            ORDER BY timestamp DESC
+            """,
+            (camera_id,),
+        )
+        for row in rows:
+            path = Path(str(row["file_path"]))
+            if path.is_file():
+                return LastClip(
+                    camera_id=str(row["camera_id"]),
+                    timestamp=str(row["timestamp"]),
+                    path=path,
+                )
         return None
 
     def about(self, role: str) -> str:
@@ -214,20 +247,35 @@ class QueryBot:
     def __init__(self, queries: BotQueries) -> None:
         self.queries = queries
 
-    async def _reply(self, update: Any, command: str, *, trustee_only: bool = False) -> None:
+    async def _authorize(
+        self, update: Any, command: str, *, trustee_only: bool = False
+    ) -> tuple[Any, str] | None:
         user = getattr(update, "effective_user", None)
         message = getattr(update, "effective_message", None)
         user_id = getattr(user, "id", None)
         if message is None or user_id is None:
-            return
+            return None
         role = self.queries.role(int(user_id))
         if role is None or (trustee_only and role != "trustee"):
+            chat = getattr(update, "effective_chat", None)
             logger.warning(
                 "query_bot_access_denied",
-                extra={"user_id": user_id, "command": command, "role": role},
+                extra={
+                    "user_id": user_id,
+                    "chat_id": getattr(chat, "id", None),
+                    "command": command,
+                    "role": role,
+                },
             )
             await message.reply_text("Not authorized.")
+            return None
+        return message, role
+
+    async def _reply(self, update: Any, command: str, *, trustee_only: bool = False) -> None:
+        authorized = await self._authorize(update, command, trustee_only=trustee_only)
+        if authorized is None:
             return
+        message, role = authorized
         if command == "about":
             text = self.queries.about(role)
         else:
@@ -252,6 +300,41 @@ class QueryBot:
     async def patrols(self, update: Any, context: Any) -> None:
         await self._reply(update, "patrols", trustee_only=True)
 
+    async def last(self, update: Any, context: Any) -> None:
+        authorized = await self._authorize(update, "last")
+        if authorized is None:
+            return
+        message, _role = authorized
+        raw_camera = " ".join(getattr(context, "args", ()) or ()).strip()
+        if not raw_camera:
+            camera_ids = ", ".join(camera.id for camera in self.queries.cameras.ordered())
+            await message.reply_text(f"Usage: /last <camera_id>\nCameras: {camera_ids}")
+            return
+        camera_id = self.queries.resolve_camera(raw_camera)
+        if camera_id is None:
+            await message.reply_text(f"Unknown camera: {raw_camera}")
+            return
+        clip = self.queries.last_clip(camera_id)
+        if clip is None:
+            await message.reply_text(f"No downloaded video is available for {camera_id}.")
+            return
+        caption = f"Latest available video: {camera_id}\n{_local_timestamp(clip.timestamp)}"
+        try:
+            with clip.path.open("rb") as video:
+                await message.reply_video(
+                    video=video,
+                    caption=caption,
+                    supports_streaming=True,
+                    read_timeout=60,
+                    write_timeout=60,
+                )
+        except Exception as exc:
+            logger.exception(
+                "query_bot_video_failed",
+                extra={"camera_id": camera_id, "error": str(exc)},
+            )
+            await message.reply_text(f"The latest {camera_id} video could not be sent.")
+
 
 def build_query_bot(queries: BotQueries, token: str) -> Any:
     from telegram import BotCommand
@@ -259,7 +342,7 @@ def build_query_bot(queries: BotQueries, token: str) -> Any:
 
     controller = QueryBot(queries)
     application = Application.builder().token(token).build()
-    for command in ("about", "tonight", "health", "animals", "map", "patrols"):
+    for command in ("about", "tonight", "health", "animals", "map", "patrols", "last"):
         application.add_handler(CommandHandler(command, getattr(controller, command)))
     application.bot_data["commands"] = [
         BotCommand("about", "What this system reports"),
@@ -267,6 +350,7 @@ def build_query_bot(queries: BotQueries, token: str) -> Any:
         BotCommand("health", "Camera health and last activity"),
         BotCommand("animals", "Recent animal candidates"),
         BotCommand("map", "Approximate camera order"),
+        BotCommand("last", "Send the latest available camera video"),
         BotCommand("patrols", "Guard-pass candidates (trustees only)"),
     ]
     return application

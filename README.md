@@ -111,7 +111,9 @@ to the alert destination, grant permission to post, and set `ALERT_CHANNEL_ID` i
 wanted. Never paste the token into source files, logs, or chat.
 
 The bot enforces `BOT_TRUSTEE_IDS` and `BOT_SECURITY_IDS` in every handler. Trustees and security
-can use `/about`, `/tonight`, `/health`, `/animals`, and `/map`; only trustees can use `/patrols`.
+can use `/about`, `/tonight`, `/health`, `/animals`, `/map`, and `/last <camera_id>`; only trustees
+can use `/patrols`. `/last` sends the newest downloaded video that still exists locally for the
+requested camera and reports clearly when no media is available.
 The map is deliberately an approximate ordered list, and patrol output carries a confidence
 caveat. Unlisted users receive only `Not authorized` and their numeric user ID is recorded in the
 structured watcher log. This provides a bootstrap path: configure the token, message `/about`,

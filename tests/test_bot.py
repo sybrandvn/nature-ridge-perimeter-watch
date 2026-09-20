@@ -142,3 +142,74 @@ async def test_trustee_can_access_patrols(tmp_path):
 def test_map_is_explicitly_approximate(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     assert queries.map() == "Approximate fence order (not geographic)\n1:cam01 — 2:cam02"
+
+
+def test_last_clip_uses_newest_file_that_still_exists(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    existing = tmp_path / "existing.mp4"
+    existing.write_bytes(b"video")
+    for message_id, timestamp, path in (
+        (1, "2026-09-19T18:00:00Z", existing),
+        (2, "2026-09-19T19:00:00Z", tmp_path / "missing.mp4"),
+        (3, "2026-09-19T20:00:00Z", None),
+    ):
+        db.upsert_clip(
+            conn,
+            channel_id="source",
+            message_id=message_id,
+            camera_id="cam01",
+            timestamp=timestamp,
+            caption="motion",
+            file_path=None if path is None else str(path),
+            source="live",
+        )
+    clip = queries.last_clip("cam01")
+    assert clip is not None
+    assert clip.timestamp == "2026-09-19T18:00:00Z"
+    assert clip.path == existing
+
+
+async def test_security_can_request_last_camera_video(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    path = tmp_path / "latest.mp4"
+    path.write_bytes(b"video")
+    db.upsert_clip(
+        conn,
+        channel_id="source",
+        message_id=1,
+        camera_id="cam01",
+        timestamp="2026-09-19T18:30:00Z",
+        caption="motion",
+        file_path=str(path),
+        source="live",
+    )
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=22), effective_message=message)
+    await controller.last(update, SimpleNamespace(args=["cam01"]))
+    kwargs = message.reply_video.await_args.kwargs
+    assert kwargs["video"].name == str(path)
+    assert "cam01" in kwargs["caption"]
+    assert kwargs["supports_streaming"] is True
+    message.reply_text.assert_not_awaited()
+
+
+async def test_last_rejects_unknown_camera_without_exposing_paths(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+    await controller.last(update, SimpleNamespace(args=["cam99"]))
+    message.reply_text.assert_awaited_once_with("Unknown camera: cam99")
+    message.reply_video.assert_not_awaited()
+
+
+async def test_last_requires_camera_argument(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+    await controller.last(update, SimpleNamespace(args=[]))
+    response = message.reply_text.await_args.args[0]
+    assert response.startswith("Usage: /last <camera_id>")
+    assert "cam01" in response

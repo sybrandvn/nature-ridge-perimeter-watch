@@ -36,9 +36,10 @@ Run:
     uv run python scripts/render_debug.py --clip data/history/cam06/21520.mp4 \
         --camera cam06 --out out.mp4
     uv run python scripts/render_debug.py --label incident --label animal \
-        --out data/reports/debug
+        --out data/reports/debug/2026-09-20/incident-animal-review
     uv run python scripts/render_debug.py \
-        --message-ids-file data/reports/candidates.message_ids --out data/reports/debug
+        --message-ids-file data/reports/candidates.message_ids \
+        --out data/reports/debug/2026-09-20/candidate-review
 """
 
 from __future__ import annotations
@@ -111,6 +112,8 @@ DEFAULTS = {
     "max_flare_fraction": 0.4,
 }
 DEBUG_RENDER_VERSION = 1
+REVIEW_DEBUG_ROOT = Path("data/reports/debug")
+UNFILED_DEBUG_ROOT = REVIEW_DEBUG_ROOT / "unfiled"
 
 COLOR_TRACKED = (255, 0, 255)
 COLOR_RECOVERED = (0, 165, 255)
@@ -1283,7 +1286,10 @@ def main(argv: list[str] | None = None) -> int:
         print("no clips matched; pass --clip, --message-id, --message-ids-file or --label")
         return 1
 
-    out_dir = Path(args.out) if args.out and len(clips) > 1 else Path("data/reports/debug")
+    # A named review directory keeps inspectable artifacts separate from the
+    # production cache under data/live/debug.  Keep the no-argument fallback
+    # contained too, rather than scattering files directly in data/reports.
+    out_dir = Path(args.out) if args.out and len(clips) > 1 else UNFILED_DEBUG_ROOT
     rendered = 0
     for clip in clips:
         camera = cameras.by_id(clip["camera_id"])
@@ -1293,7 +1299,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.out and len(clips) == 1:
             out_path = args.out
         else:
-            out_path = str(out_dir / f"{clip['camera_id']}_{clip['message_id']}.mp4")
+            out_path = str(out_dir / str(clip["camera_id"]) / f"{clip['message_id']}.mp4")
         title = f"{clip['camera_id']}/{clip['message_id']} {clip['label']}".strip()
         ts_match = _EVENT_TS_RE.search(clip.get("caption") or "")
         if ts_match:

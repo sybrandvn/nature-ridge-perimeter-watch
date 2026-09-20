@@ -34,7 +34,7 @@ was completed.
 - Every proactive Telegram alert and video returned by the query bot carries a `Debug view`
   callback. It restores missing source media, renders the exact production detector overlay in a
   worker thread, and caches it below
-  `data/debug` with the extraction fingerprint and renderer version. The secondary
+  `data/live/debug` with the extraction fingerprint and renderer version. The secondary
   `/debug <video-id>` command accepts any known clip, including a latest-camera video outside the
   animal/incident history. `scripts.watch.render_bot_debug_video` supplies the timestamp-specific
   zone, reference background, and full `MotionThresholds` record to `render_clip`.
@@ -42,7 +42,7 @@ was completed.
   animal and cam06/21520 incident clips to the configured Telegram alert destination.
 - `src/retention.py` keeps urgent evidence, pending events, and one newest local video per camera.
   When explicitly enabled, other managed videos are removed hourly while metadata remains
-  available for live retrieval. The same pass applies that policy to renderer-owned `data/debug`
+  available for live retrieval. The same pass applies that policy to renderer-owned `data/live/debug`
   videos and removes obsolete fingerprint/version variants. It is opt-in via
   `MEDIA_RETENTION_ENABLED=true` and defaults off on development machines.
 - `scripts/restore_media.py` resumably restores every missing database clip in Telegram batches.

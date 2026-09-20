@@ -84,19 +84,21 @@ irreplaceable source clips before upgrades. Rebuild with `docker compose --profi
 --pull toolbox`; the bind-mounted data survives image replacement. Stop active writers before a
 filesystem-level SQLite copy, or use SQLite's backup API.
 
-Before the first watcher start on an existing schema-v7 database, run both additive migrations,
+Before the first watcher start on an existing schema-v7 database, run all additive migrations,
 then start the default service:
 
 ```bash
 docker compose --profile tools run --rm --build toolbox python -m scripts.migrate_schema_v8
 docker compose --profile tools run --rm --build toolbox python -m scripts.migrate_schema_v9
+docker compose --profile tools run --rm --build toolbox python -m scripts.migrate_schema_v10
 docker compose up -d --build watcher
 docker compose ps
 docker compose logs -f watcher
 ```
 
-An existing schema-v8 deployment needs only `scripts.migrate_schema_v9`. Stop the watcher and back
-up the SQLite database before migrating; do not start schema-v9 watcher code against a v8 database.
+An existing schema-v8 deployment needs v9 followed by v10; an existing v9 deployment needs only
+v10. Stop the watcher and back up the SQLite database before migrating; do not start newer watcher
+code against an older database schema.
 
 `watcher` restarts unless stopped and is healthy only while configuration, SQLite, persistent
 storage, and its heartbeat are healthy. `toolbox` and `session-bootstrap` run only through their
@@ -105,8 +107,9 @@ explicit migration with `toolbox`, and start `watcher` again. Pending events and
 deliveries resume. Schema v9 adds staged preliminary, final, and resolution deliveries plus the
 event resolution state. A startup incident can therefore produce an early warning, a confirmation,
 or a clearly marked conflicting/likely-resolved update without replacing the original evidence. A
-delivery interrupted after its external call began is marked `ambiguous` for manual review so a
-restart cannot post a duplicate.
+schema-v10 system-event outbox durably delivers maintenance/security notifications and retries
+bounded failures independently of camera events. Any delivery interrupted after its external call
+began is marked `ambiguous` for manual review so a restart cannot post a duplicate.
 
 The default 300-second Initial-sibling window is measured from the local corpus: 8,268 of 8,274
 paired events completed within it, and 99.9% completed within 286 seconds. Stopped/Timeout clips
@@ -156,14 +159,16 @@ text-only Telegram and ntfy credential test.
 Panel history reports arm/disarm transitions; faults report tamper, supervision/device-missing,
 and control-room communication-test failures. Media commands restore a cleaned clip from the
 source channel through Telethon when it is not local. Media counts are capped at five per request.
-Incoming maintenance/system notifications remain stored in `system_events` and are available via
-`/health`, `/power`, `/batteries`, `/panel`, and `/faults`; they are not copied into the proactive
-camera-alert outbox. Detector-only `blinding_foreground` maintenance findings likewise remain in
-the offline maintenance review queue rather than paging Telegram or ntfy. Schema v9 changes only
-camera-event communication and does not remove either maintenance path.
+Incoming maintenance/system notifications remain stored in `system_events`, are available via
+`/health`, `/power`, `/batteries`, `/panel`, and `/faults`, and are also sent proactively through a
+separate durable outbox. Telegram receives every recognized transition. ntfy uses urgent priority
+for power, tamper, supervision, communication, and panel-disarmed failures; battery warnings and
+all recovery/armed updates use default priority. Detector-only `blinding_foreground` maintenance
+findings remain in the offline maintenance review queue rather than paging Telegram or ntfy.
 The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram
 receives all four live categories; ntfy remains restricted to urgent animal and incident alerts,
-so benign resident/neighbour observations do not trigger an urgent ntfy notification.
+so benign resident/neighbour observations do not trigger an urgent ntfy notification. This camera
+routing is separate from the system-event notifications described above.
 Info contains the system description and an environment-configured security contact directory.
 Fill `SECURITY_COMPANY_NAME`, `SECURITY_COMPANY_PHONE`, `CONTROL_ROOM_PHONE`, and
 `ARMED_RESPONSE_PHONE` in `.env`; blank values display as `Not configured` until the real details

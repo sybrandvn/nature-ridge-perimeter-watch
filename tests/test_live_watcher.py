@@ -278,23 +278,70 @@ async def test_late_completed_guard_reopens_unconfirmed_incident(tmp_path):
     assert "evidence confirmed" in bot.send_video.await_args_list[-1].kwargs["caption"]
 
 
-async def test_system_maintenance_message_stays_queryable_without_camera_delivery(tmp_path):
+async def test_system_maintenance_message_is_stored_and_sent_to_telegram(tmp_path):
     conn, watcher, bot = _runtime(tmp_path, [])
-    await asyncio.wait_for(
-        watcher.handle_message(
-            _message(
-                1,
-                "Power Failure @ 21-09-26 19:00:00",
-                mime="application/octet-stream",
-            )
-        ),
-        5,
+    message = _message(
+        1,
+        "Power Failure @ 21-09-26 19:00:00",
+        mime="application/octet-stream",
     )
+    await asyncio.wait_for(watcher.handle_message(message), 5)
+    await asyncio.wait_for(watcher.handle_message(message), 5)
 
     event = conn.execute("SELECT * FROM system_events").fetchone()
     assert event["event_type"] == "power_out"
     assert conn.execute("SELECT COUNT(*) FROM live_deliveries").fetchone()[0] == 0
+    delivery = conn.execute("SELECT * FROM system_deliveries").fetchone()
+    assert delivery["status"] == "delivered"
+    bot.send_message.assert_awaited_once()
+    assert "Security-system alert: Power failure" in bot.send_message.await_args.kwargs["text"]
     bot.send_video.assert_not_awaited()
+
+
+async def test_system_failure_routes_to_urgent_ntfy(tmp_path):
+    _conn, watcher, _bot = _runtime(tmp_path, [])
+    watcher.config = replace(
+        watcher.config,
+        ntfy_base_url="https://ntfy.example",
+        ntfy_topic="alerts",
+        ntfy_priority="urgent",
+    )
+    watcher.ntfy_session = MagicMock()
+    watcher.ntfy_session.post.return_value = MagicMock()
+
+    await asyncio.wait_for(
+        watcher.handle_message(
+            _message(1, "Tamper Event [17]", mime="application/octet-stream")
+        ),
+        5,
+    )
+
+    headers = watcher.ntfy_session.post.call_args.kwargs["headers"]
+    assert headers["Priority"] == "urgent"
+    assert headers["Title"] == "System: Tamper detected"
+
+
+async def test_system_restore_sends_low_priority_correction(tmp_path):
+    _conn, watcher, bot = _runtime(tmp_path, [])
+    watcher.config = replace(
+        watcher.config,
+        ntfy_base_url="https://ntfy.example",
+        ntfy_topic="alerts",
+    )
+    watcher.ntfy_session = MagicMock()
+    watcher.ntfy_session.post.return_value = MagicMock()
+
+    await asyncio.wait_for(
+        watcher.handle_message(
+            _message(1, "Power Failure Restore", mime="application/octet-stream")
+        ),
+        5,
+    )
+
+    assert "System update: Power restored" in bot.send_message.await_args.kwargs["text"]
+    headers = watcher.ntfy_session.post.call_args.kwargs["headers"]
+    assert headers["Priority"] == "default"
+    assert headers["Title"] == "System: Power restored"
 
 
 async def test_duplicate_message_is_not_downloaded_or_analyzed_twice(tmp_path):

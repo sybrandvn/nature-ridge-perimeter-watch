@@ -27,6 +27,31 @@ TELEGRAM_ALERT_CATEGORIES = frozenset(
     {"animal_candidate", "incident_candidate", "resident_candidate", "neighbour_candidate"}
 )
 NTFY_ALERT_CATEGORIES = frozenset({"animal_candidate", "incident_candidate"})
+SYSTEM_EVENT_LABELS = {
+    "battery_low": "Battery low",
+    "battery_restored": "Battery restored",
+    "power_out": "Power failure",
+    "power_restored": "Power restored",
+    "tamper": "Tamper detected",
+    "tamper_restored": "Tamper restored",
+    "supervision_error": "Device missing / supervision fault",
+    "communication_failure": "Control-room communication failure",
+    "panel_disarmed": "Panel disarmed",
+    "panel_armed": "Panel armed",
+}
+SYSTEM_FAILURE_EVENTS = frozenset(
+    {
+        "battery_low",
+        "power_out",
+        "tamper",
+        "supervision_error",
+        "communication_failure",
+        "panel_disarmed",
+    }
+)
+SYSTEM_URGENT_EVENTS = frozenset(
+    {"power_out", "tamper", "supervision_error", "communication_failure", "panel_disarmed"}
+)
 
 
 def _message_timestamp(message: Any) -> tuple[datetime, str]:
@@ -89,6 +114,21 @@ def alert_title(row: sqlite3.Row) -> str:
     if state == "unconfirmed":
         return "Perimeter update: unconfirmed"
     return f"Perimeter alert: {str(row['category']).removesuffix('_candidate')}"
+
+
+def format_system_alert(row: sqlite3.Row) -> str:
+    event_type = str(row["event_type"])
+    label = SYSTEM_EVENT_LABELS.get(event_type, event_type.replace("_", " ").title())
+    heading = "Security-system alert" if event_type in SYSTEM_FAILURE_EVENTS else "System update"
+    camera = str(row["camera_id"] or "unknown")
+    source = "Site / panel" if camera == "unknown" else camera
+    return (
+        f"{heading}: {label}\n"
+        f"Source: {source}\n"
+        f"Time: {row['timestamp']}\n"
+        f"Message: {row['raw_text'] or label}\n"
+        f"Source ID: {row['message_id']}"
+    )
 
 
 class LiveWatcher:
@@ -240,18 +280,22 @@ class LiveWatcher:
             cameras=self.cameras,
         )
         if parsed.kind == "system_event":
-            db.upsert_system_event(
+            event_type = str(parsed.event_type)
+            live_state.record_system_event(
                 self.conn,
                 channel_id=self.channel_id,
                 message_id=message_id,
                 timestamp=timestamp,
                 camera_id=parsed.camera_id,
-                event_type=parsed.event_type,
+                event_type=event_type,
                 raw_text=text,
+                transports=self._system_transports(event_type),
+                now=self.now(),
             )
             live_state.finish_message(
                 self.conn, self.channel_id, message_id, status="processed"
             )
+            await self.tick()
             return
         if parsed.kind != "clip":
             live_state.finish_message(self.conn, self.channel_id, message_id, status="ignored")
@@ -368,6 +412,18 @@ class LiveWatcher:
             transports.append("ntfy")
         return tuple(transports)
 
+    def _system_transports(self, event_type: str) -> tuple[str, ...]:
+        transports = []
+        if self.config.telegram_bot_token and self.config.alert_channel_id:
+            transports.append("telegram")
+        if (
+            event_type in SYSTEM_EVENT_LABELS
+            and self.config.ntfy_base_url
+            and self.config.ntfy_topic
+        ):
+            transports.append("ntfy")
+        return tuple(transports)
+
     def finalize_due_events(self) -> int:
         count = 0
         now = self.now()
@@ -470,9 +526,82 @@ class LiveWatcher:
                 delivered += 1
         return delivered
 
+    async def dispatch_due_system_events(self) -> int:
+        delivered = 0
+        now = self.now()
+        for row in live_state.due_system_deliveries(self.conn, now):
+            channel_id = str(row["channel_id"])
+            message_id = int(row["message_id"])
+            transport = str(row["transport"])
+            if not live_state.claim_system_delivery(
+                self.conn, channel_id, message_id, transport
+            ):
+                continue
+            try:
+                message = format_system_alert(row)
+                if transport == "telegram":
+                    await send_telegram_alert(
+                        message,
+                        bot_token=str(self.config.telegram_bot_token),
+                        chat_id=str(self.config.alert_channel_id),
+                        bot=self.telegram_bot,
+                    )
+                elif transport == "ntfy":
+                    event_type = str(row["event_type"])
+                    send_ntfy_alert(
+                        message,
+                        base_url=str(self.config.ntfy_base_url),
+                        topic=str(self.config.ntfy_topic),
+                        priority=(
+                            self.config.ntfy_priority
+                            if event_type in SYSTEM_URGENT_EVENTS
+                            else "default"
+                        ),
+                        title=f"System: {SYSTEM_EVENT_LABELS.get(event_type, event_type)}",
+                        token=self.config.ntfy_token,
+                        session=self.ntfy_session,
+                    )
+                else:
+                    raise RuntimeError(f"unknown delivery transport: {transport}")
+            except Exception as exc:
+                exponent = min(int(row["attempt_count"]), 20)
+                delay = min(
+                    self.config.delivery_retry_max_seconds,
+                    self.config.delivery_retry_base_seconds * (2**exponent),
+                )
+                live_state.finish_system_delivery(
+                    self.conn,
+                    channel_id,
+                    message_id,
+                    transport,
+                    delivered=False,
+                    next_attempt_at=now + timedelta(seconds=delay),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                logger.exception(
+                    "system_delivery_failed",
+                    extra={
+                        "message_id": message_id,
+                        "event_type": row["event_type"],
+                        "transport": transport,
+                    },
+                )
+            else:
+                live_state.finish_system_delivery(
+                    self.conn,
+                    channel_id,
+                    message_id,
+                    transport,
+                    delivered=True,
+                    next_attempt_at=now,
+                )
+                delivered += 1
+        return delivered
+
     async def tick(self) -> None:
         self.finalize_due_events()
         await self.dispatch_due()
+        await self.dispatch_due_system_events()
         self.clean_media_if_due()
 
     async def maintenance(self) -> None:

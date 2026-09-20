@@ -406,9 +406,10 @@ everything in `docs/handoff.md`.
     (`scripts/migrate_schema_v5.py`: rename, recreate from the current schema, copy+transform,
     bump `schema_version`, keep the old table rather than dropping it) is the proportionate
     approach for a change scoped to one table — done for the v4->v5 label split, 2026-08-29.
-    Schema v8 now includes `clips`, `labels`, `blob_tracks`, `system_events`, `backtest_runs`,
+    Schema v10 now includes `clips`, `labels`, `blob_tracks`, `system_events`, `backtest_runs`,
     `backtest_results`, `live_messages`, `live_events`, `live_event_clips`, and
-    `live_deliveries`. WAL, busy timeout, foreign keys, and narrow repository functions remain.
+    `live_deliveries`, plus the independent `system_deliveries` outbox. WAL, busy timeout,
+    foreign keys, and narrow repository functions remain.
     Targeted migration scripts cover the shipped schema changes; there is still no generic
     migration framework.
 18. [done] Label export/import to JSONL as the durability guarantee, so the database can be
@@ -626,16 +627,20 @@ worth recording here since they affect anyone touching `src/classify.py` or `src
 
 40. **[done]** `scripts/watch.py` receives source-channel messages through Telethon and delegates
     deterministic, serialized processing to `src.live_watcher.LiveWatcher`.
-41. **[done]** Schema v8 stores `live_messages`, pending/final `live_events`, analyzed
-    `live_event_clips`, and per-transport `live_deliveries` alongside the historical corpus.
+41. **[done]** Schema v8 introduced `live_messages`, pending/final `live_events`, analyzed
+    `live_event_clips`, and per-transport `live_deliveries`; v9 added staged camera resolutions and
+    v10 added the separate durable `system_deliveries` outbox.
 42. **[done]** Initial siblings wait up to the measured 300-second window; completion captions
-    finalize immediately, protected urgent siblings survive resolution, and late urgent evidence
-    can reopen a suppressed event.
-43. **[done]** Delivery state supports bounded retry and restart recovery. A process interrupted
-    after beginning an external send becomes `ambiguous` rather than risking an automatic duplicate.
+    finalize immediately, protected urgent siblings survive resolution, preliminary incident
+    warnings receive explicit confirmation/conflict/resolution updates, and late urgent evidence
+    can reopen a suppressed or likely-resolved event.
+43. **[done]** Camera and system delivery state supports bounded retry and restart recovery. A
+    process interrupted after beginning an external send becomes `ambiguous` rather than risking
+    an automatic duplicate.
 44. **[done]** Telegram receives animal, incident, resident, and neighbour events; ntfy remains
-    animal/incident-only. The role-enforced query bot restores missing media and renders the exact
-    production detector overlay on demand.
+    animal/incident-only for camera events. Recognized alarm-system transitions are sent through a
+    separate Telegram/ntfy policy. The role-enforced query bot restores missing media and renders
+    the exact production detector overlay on demand.
 45. **[done]** Compose runs the watcher with persistent data, restart policy, read-only container
     filesystem, readiness/heartbeat healthcheck, and separate tools/bootstrap profiles.
 46. **[done]** Opt-in retention preserves urgent/pending evidence and current camera media, cleans
@@ -829,7 +834,7 @@ deployment inputs, evidence-driven detector work, and optional tooling, use **Wh
 `docs/next_agent_handoff.md`; this historical plan keeps the broader deferred list only.
 
 - Run-comparison CLI and projected false-pages-per-night reporting.
-- Generic migration framework; targeted, versioned migration scripts exist through schema v9.
+- Generic migration framework; targeted, versioned migration scripts exist through schema v10.
 - Per-camera classification threshold sets.
 - Browser zone editor and optional zone-independent raw-track cache.
 - ARM64 runtime validation only if deployment moves away from the current verified AMD64 host;

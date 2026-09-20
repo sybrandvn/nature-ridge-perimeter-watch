@@ -13,6 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.config import AppConfig, CamerasConfig
+from src.event_keys import event_phase, message_event_key
 from src.message_parsing import classify_health_event
 from src.sequence import ClipEvent, segment_passes
 
@@ -27,6 +28,13 @@ class MediaClip:
     camera_id: str
     timestamp: str
     path: Path | None
+
+
+@dataclass(frozen=True)
+class HistoryEvent:
+    category: str
+    clip: MediaClip
+    sibling_count: int
 
 
 def _parse_hhmm(value: str) -> time:
@@ -120,38 +128,102 @@ class BotQueries:
             path=None if row["file_path"] is None else Path(str(row["file_path"])),
         )
 
-    def category_clips(self, category: str, *, limit: int) -> list[MediaClip]:
+    def _category_rows(self, category: str) -> list[sqlite3.Row]:
         if category not in {"animal", "incident"}:
             raise ValueError(f"unsupported media category: {category}")
         candidate = f"{category}_candidate"
-        rows = self.conn.execute(
-            """
-            WITH matching AS (
-                SELECT c.channel_id, c.message_id, c.camera_id, c.timestamp, c.file_path
-                FROM live_events e JOIN clips c
-                  ON c.channel_id = e.representative_channel_id
-                 AND c.message_id = e.representative_message_id
-                WHERE e.status = 'finalized' AND e.final_category = ?
-                UNION
-                SELECT c.channel_id, c.message_id, c.camera_id, c.timestamp, c.file_path
-                FROM labels l JOIN clips c
-                  ON c.channel_id = l.channel_id AND c.message_id = l.message_id
-                WHERE l.label = ?
+        return list(
+            self.conn.execute(
+                """
+                WITH matching AS (
+                    SELECT c.channel_id, c.message_id, c.camera_id, c.timestamp, c.file_path,
+                           c.caption
+                    FROM live_events e JOIN clips c
+                      ON c.channel_id = e.representative_channel_id
+                     AND c.message_id = e.representative_message_id
+                    WHERE e.status = 'finalized' AND e.final_category = ?
+                    UNION
+                    SELECT c.channel_id, c.message_id, c.camera_id, c.timestamp, c.file_path,
+                           c.caption
+                    FROM labels l JOIN clips c
+                      ON c.channel_id = l.channel_id AND c.message_id = l.message_id
+                    WHERE l.label = ?
+                )
+                SELECT * FROM matching ORDER BY timestamp DESC, message_id DESC
+                """,
+                (candidate, category),
             )
-            SELECT * FROM matching ORDER BY timestamp DESC, message_id DESC LIMIT ?
-            """,
-            (candidate, category, limit),
         )
-        return [
-            MediaClip(
-                channel_id=str(row["channel_id"]),
-                message_id=int(row["message_id"]),
-                camera_id=str(row["camera_id"]),
-                timestamp=str(row["timestamp"]),
-                path=None if row["file_path"] is None else Path(str(row["file_path"])),
+
+    @staticmethod
+    def _media_clip(row: sqlite3.Row) -> MediaClip:
+        return MediaClip(
+            channel_id=str(row["channel_id"]),
+            message_id=int(row["message_id"]),
+            camera_id=str(row["camera_id"]),
+            timestamp=str(row["timestamp"]),
+            path=None if row["file_path"] is None else Path(str(row["file_path"])),
+        )
+
+    def category_clips(self, category: str, *, limit: int) -> list[MediaClip]:
+        rows = self._category_rows(category)[:limit]
+        return [self._media_clip(row) for row in rows]
+
+    def category_events(self, category: str) -> list[HistoryEvent]:
+        groups: dict[str, list[sqlite3.Row]] = {}
+        for row in self._category_rows(category):
+            key = message_event_key(
+                str(row["camera_id"]), row["caption"], int(row["message_id"])
             )
-            for row in rows
-        ]
+            groups.setdefault(key, []).append(row)
+        events = []
+        for rows in groups.values():
+            representative = max(
+                rows,
+                key=lambda row: (
+                    event_phase(row["caption"]) == "complete",
+                    str(row["timestamp"]),
+                    int(row["message_id"]),
+                ),
+            )
+            events.append(
+                HistoryEvent(
+                    category=category,
+                    clip=self._media_clip(representative),
+                    sibling_count=len(rows),
+                )
+            )
+        return sorted(
+            events,
+            key=lambda event: (event.clip.timestamp, event.clip.message_id),
+            reverse=True,
+        )
+
+    def history(self, category: str, *, page: int, page_size: int = 8) -> str:
+        events = self.category_events(category)
+        if not events:
+            return f"No {category} history is recorded."
+        pages = max(1, (len(events) + page_size - 1) // page_size)
+        page = min(max(page, 1), pages)
+        selected = events[(page - 1) * page_size : page * page_size]
+        lines = [f"{category.title()} history — page {page}/{pages} ({len(events)} events)"]
+        for event in selected:
+            sibling_text = f", {event.sibling_count} clips" if event.sibling_count > 1 else ""
+            lines.append(
+                f"{event.clip.message_id} · {_local_timestamp(event.clip.timestamp)} · "
+                f"{event.clip.camera_id}{sibling_text}"
+            )
+        lines.append("Send /event <id> to receive a listed video.")
+        if pages > 1:
+            lines.append(f"Next page: /history {category} {min(page + 1, pages)}")
+        return "\n".join(lines)
+
+    def history_clip(self, message_id: int) -> HistoryEvent | None:
+        for category in ("incident", "animal"):
+            for event in self.category_events(category):
+                if event.clip.message_id == message_id:
+                    return event
+        return None
 
     def about(self, role: str) -> str:
         return (
@@ -717,6 +789,56 @@ class QueryBot:
     async def incidents(self, update: Any, context: Any) -> None:
         await self._category_videos(update, context, category="incident", default_count=3)
 
+    async def history(self, update: Any, context: Any) -> None:
+        authorized = await self._authorize(update, "history")
+        if authorized is None:
+            return
+        message, _role = authorized
+        args = list(getattr(context, "args", ()) or ())
+        if not args:
+            await message.reply_text("Usage: /history <animal|incident> [page]")
+            return
+        category = args[0].lower().removesuffix("s")
+        if category not in {"animal", "incident"}:
+            await message.reply_text("Usage: /history <animal|incident> [page]")
+            return
+        try:
+            page = 1 if len(args) < 2 else int(args[1])
+        except ValueError:
+            await message.reply_text("Usage: /history <animal|incident> [page]")
+            return
+        await message.reply_text(self.queries.history(category, page=max(page, 1)))
+
+    async def event(self, update: Any, context: Any) -> None:
+        authorized = await self._authorize(update, "event")
+        if authorized is None:
+            return
+        message, _role = authorized
+        args = list(getattr(context, "args", ()) or ())
+        try:
+            message_id = int(args[0]) if len(args) == 1 else None
+        except ValueError:
+            message_id = None
+        if message_id is None:
+            await message.reply_text(
+                "Usage: /event <id>\nFind IDs with /history animal or /history incident"
+            )
+            return
+        event = self.queries.history_clip(message_id)
+        if event is None:
+            await message.reply_text(f"No animal or incident event is listed with ID {message_id}.")
+            return
+        path = await self._ensure_media(event.clip)
+        if path is None:
+            await message.reply_text(f"Event {message_id} is unavailable at its source.")
+            return
+        await self._send_video(
+            message,
+            event.clip,
+            path,
+            heading=f"{event.category.title()} history event {message_id}",
+        )
+
 
 def build_query_bot(
     queries: BotQueries,
@@ -740,6 +862,8 @@ def build_query_bot(
         "animal",
         "animals",
         "incidents",
+        "history",
+        "event",
         "map",
         "patrols",
         "last",
@@ -756,6 +880,8 @@ def build_query_bot(
         BotCommand("animal", "Send the latest animal video"),
         BotCommand("animals", "Send recent animal videos"),
         BotCommand("incidents", "Send recent incident videos"),
+        BotCommand("history", "Browse animal or incident history"),
+        BotCommand("event", "Send a history video by ID"),
         BotCommand("map", "Approximate camera order"),
         BotCommand("last", "Send the latest available camera video"),
         BotCommand("patrols", "Guard-pass candidates (trustees only)"),

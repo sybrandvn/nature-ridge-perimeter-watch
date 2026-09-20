@@ -345,3 +345,50 @@ async def test_animal_and_incident_commands_send_labelled_videos(tmp_path):
     message.reply_video.reset_mock()
     await controller.incidents(update, SimpleNamespace(args=["1"]))
     assert "Incident candidate" in message.reply_video.await_args.kwargs["caption"]
+
+
+async def test_history_groups_siblings_and_event_sends_representative_video(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    for message_id, phase, timestamp in (
+        (10, "Initial", "2024-03-15T22:47:30Z"),
+        (11, "Stopped", "2024-03-15T22:50:18Z"),
+    ):
+        path = tmp_path / f"{message_id}.mp4"
+        path.write_bytes(b"video")
+        db.upsert_clip(
+            conn,
+            channel_id="source",
+            message_id=message_id,
+            camera_id="cam01",
+            timestamp=timestamp,
+            caption=f"({phase}) cam01 @ 16-03-24 00:47:00",
+            file_path=str(path),
+            source="backfill",
+        )
+        db.upsert_label(conn, channel_id="source", message_id=message_id, label="incident")
+    events = queries.category_events("incident")
+    assert len(events) == 1
+    assert events[0].clip.message_id == 11
+    assert events[0].sibling_count == 2
+    listing = queries.history("incident", page=1)
+    assert "11 · 2024-03-16 00:50 · cam01, 2 clips" in listing
+
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+    await controller.event(update, SimpleNamespace(args=["11"]))
+    assert "Incident history event 11" in message.reply_video.await_args.kwargs["caption"]
+
+
+async def test_history_validates_category_and_event_id(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+    await controller.history(update, SimpleNamespace(args=["cars"]))
+    message.reply_text.assert_awaited_once_with("Usage: /history <animal|incident> [page]")
+    message.reply_text.reset_mock()
+    await controller.event(update, SimpleNamespace(args=["999"]))
+    message.reply_text.assert_awaited_once_with(
+        "No animal or incident event is listed with ID 999."
+    )

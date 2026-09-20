@@ -52,6 +52,16 @@ was completed.
 - The resolver preserves any `animal_candidate` or `incident_candidate` sibling. The proposed
   completed-guard and longest-only overrides remain rejected because measured protected events
   lost alerts under those policies.
+- Warmup debug rendering now consumes the same `WarmupMotionAnalysis` instance as feature scoring.
+  It shows the scorer-corrected warmup frame, marks the selected object, valid-but-unselected
+  objects, ignore-region objects and size-gated objects, and reports their counts. Use
+  `scripts/render_debug.py --exact-message-id` for clip-level audits; ordinary `--message-id`
+  intentionally resolves to the clearer sibling.
+- A 2026-09-20 audit found five environment-labelled Telegram candidates with `blob_count <= 2`:
+  cam13/11877 (daylight inside-only), cam12/19244 (outside-colour bushes), cam12/6352 (the known
+  bright-branch lock), and cam15/16208 plus 16564 (loose-camera/fence motion). The first three are
+  geometry/daylight ambiguity, while only the cam15 pair has strong global-shift evidence. Blob
+  count is therefore not their alert cause, and no blanket low-count suppression was added.
 
 Independent code review, later the same day:
 [code_effectiveness_review_2026-09-19.md](code_effectiveness_review_2026-09-19.md).

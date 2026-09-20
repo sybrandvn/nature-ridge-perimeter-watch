@@ -2253,6 +2253,50 @@ def test_warmup_motion_reports_inside_bottom_left_dynamics():
     assert result["warmup_dynamic_frame_fraction"] == 1.0
     assert result["warmup_dynamic_inside_bottom_left_fraction"] == 1.0
 
+    analysis = scoring.warmup_motion_analysis(
+        detection, zone, size, size, threshold=18
+    )
+    used = [item for item in analysis.objects if item.disposition == "used"]
+    assert len(used) == len(dropped) - 1
+    assert all(item.verdict == "inside" for item in used)
+    assert len(analysis.corrected_frames) == len(dropped)
+
+
+def test_warmup_motion_exposes_objects_removed_by_ignore_region():
+    size = 100
+    rng = np.random.default_rng(11)
+    background = rng.integers(0, 256, size=(size, size), dtype=np.uint8)
+    dropped = []
+    for x in (24, 20, 16):
+        frame = cv2.cvtColor(background, cv2.COLOR_GRAY2BGR)
+        cv2.rectangle(frame, (x, 55), (x + 18, 90), (220, 220, 220), thickness=-1)
+        dropped.append(frame)
+    detection = motion.ClipDetection(
+        frames=[],
+        background=background,
+        frame_width=size,
+        frame_height=size,
+        warmup_dropped=len(dropped),
+        total_frames=len(dropped),
+        dropped_frames=dropped,
+        dropped_frame_boxes=[None] * len(dropped),
+        multi_tracks=[],
+    )
+    zone = CameraZone(
+        fence=((0.5, 0.0), (0.5, 1.0)),
+        outside="right",
+        depth_cutoff=0.0,
+        ignore=(((0.0, 0.45), (0.45, 0.45), (0.45, 1.0), (0.0, 1.0)),),
+    )
+
+    analysis = scoring.warmup_motion_analysis(
+        detection, zone, size, size, threshold=18
+    )
+
+    assert analysis.features["warmup_dynamic_frame_fraction"] == 0.0
+    assert any(item.disposition == "ignored_region" for item in analysis.objects)
+    assert not any(item.disposition == "used" for item in analysis.objects)
+
 
 def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tmp_path):
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]

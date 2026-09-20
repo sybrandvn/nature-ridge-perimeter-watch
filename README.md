@@ -137,6 +137,12 @@ reference background, and complete production motion configuration. Renders are 
 `data/live/debug/{camera_id}/` using an input fingerprint, so repeated taps are fast and detector
 or geometry changes invalidate the old result. `/debug <video-id>` provides the same operation
 directly.
+Warmup frames use the scorer's own brightness-corrected greyscale view. A solid yellow box is the
+object used by the warmup feature; dashed cyan boxes passed the gates but were not selected, and
+dashed grey boxes were excluded by a configured ignore region or the size gate. The HUD reports
+all three counts. For offline review, `scripts/render_debug.py --message-id ID` still selects the
+clearer event sibling; use `--exact-message-id ID` when auditing the named clip itself with its
+database timestamp, geometry, and reference background.
 To send clearly marked examples using the standing labelled animal and incident clips, run
 `uv run python scripts/send_test_alert.py --examples`. The normal no-argument form remains the
 text-only Telegram and ntfy credential test.

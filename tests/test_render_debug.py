@@ -80,10 +80,12 @@ def test_render_clip_frame_count_matches_the_detector(tmp_path, zone):
 
 
 def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, zone):
-    clip = _write_clip(tmp_path / "in.mp4")
+    clip = _write_clip(tmp_path / "in.mp4", frames=14, flare_at=2)
     real_detect = render_debug.detect_clip
     real_features = render_debug.features_from_detection
     real_classify = render_debug.classify_detailed
+    real_warmup = render_debug.warmup_motion_analysis
+    real_draw_warmup = render_debug._draw_warmup_motion_objects
     seen = {}
 
     def capture_detect(*args, **kwargs):
@@ -94,7 +96,16 @@ def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, z
 
     def capture_features(detection, *args, **kwargs):
         seen["scored_detection"] = detection
+        seen["scored_warmup"] = kwargs.get("warmup_motion")
         return real_features(detection, *args, **kwargs)
+
+    def capture_warmup(*args, **kwargs):
+        seen["warmup_analysis"] = real_warmup(*args, **kwargs)
+        return seen["warmup_analysis"]
+
+    def capture_draw_warmup(canvas, objects, **kwargs):
+        seen.setdefault("drawn_warmup_objects", []).extend(objects)
+        return real_draw_warmup(canvas, objects, **kwargs)
 
     def capture_classification(features):
         seen["classified_features"] = features
@@ -103,6 +114,8 @@ def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, z
     monkeypatch.setattr(render_debug, "detect_clip", capture_detect)
     monkeypatch.setattr(render_debug, "features_from_detection", capture_features)
     monkeypatch.setattr(render_debug, "classify_detailed", capture_classification)
+    monkeypatch.setattr(render_debug, "warmup_motion_analysis", capture_warmup)
+    monkeypatch.setattr(render_debug, "_draw_warmup_motion_objects", capture_draw_warmup)
 
     configured_motion = load_thresholds_config("config/thresholds.yaml").motion_thresholds()
     out = render_clip(
@@ -115,6 +128,8 @@ def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, z
 
     assert out is not None
     assert seen["scored_detection"] is seen["detection"]
+    assert seen["scored_warmup"] is seen["warmup_analysis"]
+    assert seen["drawn_warmup_objects"] == list(seen["warmup_analysis"].objects)
     assert seen["ignore_polygons"] == zone.ignore
     assert seen["detection"] is not None
     assert seen["detector_settings"]["compensate_warmup"] is False
@@ -532,6 +547,49 @@ def test_resolve_explicit_duplicate_id_loads_and_prefers_clear_sibling(tmp_path)
     result = render_debug._resolve_clips(args, conn)
 
     assert [row["message_id"] for row in result] == [2]
+
+
+def test_resolve_exact_message_id_keeps_requested_startup_clip(tmp_path):
+    duplicate = _write_clip(tmp_path / "duplicate.mp4", frames=10)
+    clear = _write_clip(tmp_path / "clear.mp4", frames=10)
+    conn = db.connect(tmp_path / "test.db")
+    for message_id, caption, path in (
+        (1, "Initial alert @ 26-08-30 01:02:03", duplicate),
+        (2, "Motion stopped @ 26-08-30 01:02:03", clear),
+    ):
+        db.upsert_clip(
+            conn,
+            channel_id="chan",
+            message_id=message_id,
+            camera_id="cam06",
+            timestamp="2026-08-30T01:02:03Z",
+            caption=caption,
+            file_path=path,
+            source="backfill",
+        )
+    db.upsert_label(
+        conn,
+        channel_id="chan",
+        message_id=1,
+        label="guard",
+        startup_state="duplicate",
+    )
+    db.upsert_label(conn, channel_id="chan", message_id=2, label="guard")
+    conn.commit()
+    args = SimpleNamespace(
+        clip=None,
+        camera=None,
+        message_id=[],
+        exact_message_id=[1],
+        message_ids_file=None,
+        label=[],
+        limit=None,
+    )
+
+    result = render_debug._resolve_clips(args, conn)
+
+    assert [row["message_id"] for row in result] == [1]
+    assert result[0]["timestamp"] == "2026-08-30T01:02:03Z"
 
 
 def test_prefer_longest_per_event_leaves_unrelated_clips_alone(tmp_path):

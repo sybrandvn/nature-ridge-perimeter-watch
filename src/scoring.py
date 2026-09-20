@@ -167,7 +167,27 @@ def _frame_is_merged(detection: ClipDetection, frame_index: int) -> bool:
     return any(track.merged_ids for track in overlapping)
 
 
-def _warmup_motion_features(
+@dataclass(frozen=True)
+class WarmupMotionObject:
+    """One visible contour from the consecutive-frame warmup scorer."""
+
+    frame_index: int
+    bbox: tuple[int, int, int, int]
+    area: float
+    disposition: str
+    verdict: str | None = None
+
+
+@dataclass(frozen=True)
+class WarmupMotionAnalysis:
+    """Shared warmup evidence for classification and the debug renderer."""
+
+    features: dict[str, float]
+    corrected_frames: tuple[np.ndarray, ...]
+    objects: tuple[WarmupMotionObject, ...]
+
+
+def warmup_motion_analysis(
     detection: ClipDetection,
     zone: CameraZone,
     frame_width: int,
@@ -239,7 +259,7 @@ def _warmup_motion_features(
     }
     dropped = detection.dropped_frames
     if len(dropped) < 2:
-        return zeros
+        return WarmupMotionAnalysis(zeros, (), ())
 
     background = detection.background
     reference = background
@@ -280,31 +300,74 @@ def _warmup_motion_features(
         ignore_region_mask(frame_width, frame_height, zone.ignore) if zone.ignore else None
     )
     dynamic_hits = 0
-    for previous, current in zip(corrected_frames, corrected_frames[1:], strict=False):
-        dynamic_mask = cv2.morphologyEx(
+    observations: list[WarmupMotionObject] = []
+    for frame_index, (previous, current) in enumerate(
+        zip(corrected_frames, corrected_frames[1:], strict=False), start=1
+    ):
+        raw_dynamic_mask = cv2.morphologyEx(
             (cv2.absdiff(previous, current) > threshold).astype(np.uint8) * 255,
             cv2.MORPH_OPEN,
             kernel,
         )
-        dynamic_mask = cv2.morphologyEx(
-            dynamic_mask, cv2.MORPH_CLOSE, close_kernel
+        raw_dynamic_mask = cv2.morphologyEx(
+            raw_dynamic_mask, cv2.MORPH_CLOSE, close_kernel
         )
+        dynamic_mask = raw_dynamic_mask.copy()
         if ignore_mask is not None:
+            ignored_mask = np.zeros_like(raw_dynamic_mask)
+            ignored_mask[ignore_mask] = raw_dynamic_mask[ignore_mask]
+            ignored_contours, _ = cv2.findContours(
+                ignored_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            for contour in ignored_contours:
+                x, y, width, height = cv2.boundingRect(contour)
+                observations.append(
+                    WarmupMotionObject(
+                        frame_index=frame_index,
+                        bbox=(x, y, x + width, y + height),
+                        area=float(cv2.contourArea(contour)),
+                        disposition="ignored_region",
+                    )
+                )
             dynamic_mask[ignore_mask] = 0
         contours, _ = cv2.findContours(
             dynamic_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
-        candidates = [
-            contour
-            for contour in contours
-            if 0.0005 * frame_area
-            <= cv2.contourArea(contour)
-            <= 0.25 * frame_area
-        ]
+        candidates = []
+        for contour in contours:
+            area = float(cv2.contourArea(contour))
+            if 0.0005 * frame_area <= area <= 0.25 * frame_area:
+                candidates.append(contour)
+                continue
+            x, y, width, height = cv2.boundingRect(contour)
+            observations.append(
+                WarmupMotionObject(
+                    frame_index=frame_index,
+                    bbox=(x, y, x + width, y + height),
+                    area=area,
+                    disposition="ignored_size",
+                )
+            )
         if not candidates:
             continue
         dynamic_hits += 1
-        x, y, width, height = cv2.boundingRect(max(candidates, key=cv2.contourArea))
+        selected = max(candidates, key=cv2.contourArea)
+        for contour in candidates:
+            x, y, width, height = cv2.boundingRect(contour)
+            base_centre = (
+                (x + width / 2.0) / frame_width,
+                (y + height) / frame_height,
+            )
+            observations.append(
+                WarmupMotionObject(
+                    frame_index=frame_index,
+                    bbox=(x, y, x + width, y + height),
+                    area=float(cv2.contourArea(contour)),
+                    disposition="used" if contour is selected else "not_selected",
+                    verdict=classify_zone(base_centre, zone),
+                )
+            )
+        x, y, width, height = cv2.boundingRect(selected)
         base_centre = (
             (x + width / 2.0) / frame_width,
             (y + height) / frame_height,
@@ -341,7 +404,9 @@ def _warmup_motion_features(
     }
 
     if not track:
-        return {**zeros, **dynamic_features}
+        return WarmupMotionAnalysis(
+            {**zeros, **dynamic_features}, tuple(corrected_frames), tuple(observations)
+        )
 
     # Same base-of-box convention and same geometry every scored side feature
     # uses, so a warmup verdict is directly comparable to outside_frame_fraction.
@@ -351,13 +416,33 @@ def _warmup_motion_features(
     ]
     classifiable = [v for v in verdicts if v in ("outside", "inside")]
     if not classifiable:
-        return {**zeros, **dynamic_features}
+        return WarmupMotionAnalysis(
+            {**zeros, **dynamic_features}, tuple(corrected_frames), tuple(observations)
+        )
 
-    return {
-        "warmup_outside_fraction": sum(1 for v in classifiable if v == "outside")
-        / len(classifiable),
-        **dynamic_features,
-    }
+    return WarmupMotionAnalysis(
+        {
+            "warmup_outside_fraction": sum(1 for v in classifiable if v == "outside")
+            / len(classifiable),
+            **dynamic_features,
+        },
+        tuple(corrected_frames),
+        tuple(observations),
+    )
+
+
+def _warmup_motion_features(
+    detection: ClipDetection,
+    zone: CameraZone,
+    frame_width: int,
+    frame_height: int,
+    *,
+    threshold: int = 18,
+) -> dict[str, float]:
+    """Compatibility wrapper returning the shared warmup analysis features."""
+    return warmup_motion_analysis(
+        detection, zone, frame_width, frame_height, threshold=threshold
+    ).features
 
 
 def _multi_object_outside_features(
@@ -1390,8 +1475,16 @@ def _warmup_features(
     exclude_mask: np.ndarray | None,
     daylight_color_fraction: float,
     daylight_hint: bool | None,
+    motion_analysis: WarmupMotionAnalysis | None = None,
 ) -> dict[str, float]:
     """Features sourced from, or explicitly describing, the warmup window."""
+    motion = motion_analysis or warmup_motion_analysis(
+        detection,
+        zone,
+        detection.frame_width,
+        detection.frame_height,
+        threshold=threshold,
+    )
     return {
         "warmup_flashlight_ratio": _warmup_flashlight_feature(
             detection,
@@ -1399,13 +1492,7 @@ def _warmup_features(
             daylight_color_fraction=daylight_color_fraction,
             daylight_hint=daylight_hint,
         ),
-        **_warmup_motion_features(
-            detection,
-            zone,
-            detection.frame_width,
-            detection.frame_height,
-            threshold=threshold,
-        ),
+        **motion.features,
         "long_flare_frames": float(detection.warmup_dropped),
     }
 
@@ -1568,6 +1655,7 @@ def features_from_detection(
     threshold: int = _DEFAULT_MOTION_THRESHOLDS.threshold,
     daylight_color_fraction: float = 0.15,
     daylight_hint: bool | None = None,
+    warmup_motion: WarmupMotionAnalysis | None = None,
 ) -> dict[str, float] | None:
     """Re-score an already-observed clip for a zone without rerunning detection.
 
@@ -1593,6 +1681,7 @@ def features_from_detection(
         exclude_mask=ignore_mask,
         daylight_color_fraction=daylight_color_fraction,
         daylight_hint=daylight_hint,
+        motion_analysis=warmup_motion,
     )
     if summary is None:
         if (

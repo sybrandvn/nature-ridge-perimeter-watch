@@ -33,6 +33,7 @@ ntfy-viewing clients alike -- this OpenCV build's own FFmpeg has no libx264.
 
 Run:
     uv run python scripts/render_debug.py --message-id 21520 --out out.mp4
+    uv run python scripts/render_debug.py --exact-message-id 22289 --out exact.mp4
     uv run python scripts/render_debug.py --clip data/history/cam06/21520.mp4 \
         --camera cam06 --out out.mp4
     uv run python scripts/render_debug.py --label incident --label animal \
@@ -90,10 +91,12 @@ from src.reference_bg import (  # noqa: E402
     reference_for,
 )
 from src.scoring import (  # noqa: E402
+    WarmupMotionObject,
     feature_exclude_mask,
     features_from_detection,
     multi_object_flashlight_scores,
     warmup_flashlight_diagnostics,
+    warmup_motion_analysis,
 )
 from src.video_encode import Mp4Writer  # noqa: E402
 from src.zones import (  # noqa: E402
@@ -111,7 +114,7 @@ DEFAULTS = {
     "flare_tolerance": 3.0,
     "max_flare_fraction": 0.4,
 }
-DEBUG_RENDER_VERSION = 1
+DEBUG_RENDER_VERSION = 2
 REVIEW_DEBUG_ROOT = Path("data/reports/debug")
 UNFILED_DEBUG_ROOT = REVIEW_DEBUG_ROOT / "unfiled"
 
@@ -139,6 +142,9 @@ COLOR_INSIDE = (0, 255, 0)
 COLOR_IGNORE = (110, 110, 110)
 COLOR_FLARE = (0, 90, 255)
 COLOR_WARMUP = (0, 200, 255)
+COLOR_WARMUP_USED = (0, 255, 255)
+COLOR_WARMUP_CANDIDATE = (255, 200, 0)
+COLOR_WARMUP_IGNORED = (110, 110, 110)
 COLOR_LIGHT = (0, 255, 140)
 COLOR_GATED_LIGHT = (80, 180, 255)
 COLOR_STATIONARY_LIGHT = (0, 140, 0)
@@ -183,6 +189,37 @@ def _draw_dashed_rect(
             px1 = int(round(xa + (xb - xa) * t1))
             py1 = int(round(ya + (yb - ya) * t1))
             cv2.line(img, (px0, py0), (px1, py1), color, thickness)
+
+
+def _draw_warmup_motion_objects(
+    canvas: np.ndarray,
+    objects: list[WarmupMotionObject],
+    *,
+    scale: int,
+) -> None:
+    """Draw the exact consecutive-frame objects used or gated by scoring."""
+    labelled_dispositions: set[str] = set()
+    for observed in sorted(objects, key=lambda item: item.area, reverse=True):
+        x0, y0, x1, y1 = (value * scale for value in observed.bbox)
+        if observed.disposition == "used":
+            color = COLOR_WARMUP_USED
+            label = f"WARMUP USED ({observed.verdict})"
+            cv2.rectangle(canvas, (x0, y0), (x1, y1), color, 2)
+        elif observed.disposition == "not_selected":
+            color = COLOR_WARMUP_CANDIDATE
+            label = f"WARMUP NOT SELECTED ({observed.verdict})"
+            _draw_dashed_rect(canvas, (x0, y0), (x1, y1), color, thickness=1)
+        elif observed.disposition == "ignored_region":
+            color = COLOR_WARMUP_IGNORED
+            label = "WARMUP IGNORED (configured region)"
+            _draw_dashed_rect(canvas, (x0, y0), (x1, y1), color, thickness=1)
+        else:
+            color = COLOR_WARMUP_IGNORED
+            label = "WARMUP IGNORED (size gate)"
+            _draw_dashed_rect(canvas, (x0, y0), (x1, y1), color, thickness=1)
+        if observed.disposition not in labelled_dispositions:
+            _text(canvas, label, (x0, max(11, y0 - 4)), color=color, scale=0.34)
+            labelled_dispositions.add(observed.disposition)
 
 
 def _draw_metric_ruler(
@@ -600,12 +637,20 @@ def render_clip(
     capture.release()
     timestamp_daylight = is_daylight(timestamp) if timestamp is not None else None
     timestamp_daylight_hint = daylight_hint(timestamp)
+    warmup_motion = warmup_motion_analysis(
+        detection,
+        zone,
+        detection.frame_width,
+        detection.frame_height,
+        threshold=threshold,
+    )
     features = features_from_detection(
         detection,
         zone,
         fps=source_fps,
         threshold=threshold,
         daylight_hint=timestamp_daylight_hint,
+        warmup_motion=warmup_motion,
     )
     if features is not None and timestamp_daylight is not None:
         features["is_daylight"] = float(timestamp_daylight)
@@ -658,11 +703,17 @@ def render_clip(
     max_area_px = max_area_fraction * detection.frame_height * detection.frame_width
 
     for warm_index, raw_frame in enumerate(detection.dropped_frames):
-        source_frame = (
-            detection.dropped_frame_compensated[warm_index]
-            if detection.dropped_frame_compensated
-            else raw_frame
-        )
+        if detection.dropped_frame_compensated:
+            source_frame = detection.dropped_frame_compensated[warm_index]
+            correction_label = "brightness/colour corrected"
+        elif warm_index < len(warmup_motion.corrected_frames):
+            source_frame = cv2.cvtColor(
+                warmup_motion.corrected_frames[warm_index], cv2.COLOR_GRAY2BGR
+            )
+            correction_label = "scorer's brightness-corrected greyscale"
+        else:
+            source_frame = raw_frame
+            correction_label = "raw"
         # Naive correction magnitude: mean absolute pixel change from the raw
         # capture, as a percentage of the full 0-255 range -- not a measurement
         # of accuracy, just a reminder that this is NOT the original frame.
@@ -672,7 +723,7 @@ def render_clip(
             )
             / 255.0
             * 100.0
-            if detection.dropped_frame_compensated
+            if correction_label != "raw"
             else 0.0
         )
         canvas = cv2.resize(source_frame, (width, height), interpolation=cv2.INTER_CUBIC)
@@ -695,13 +746,13 @@ def render_clip(
             scale=0.5,
             thickness=2,
         )
-        if detection.dropped_frame_compensated:
+        if correction_label != "raw":
             _text(
                 canvas,
-                f"~{correction_pct:.0f}% corrected -- NOT the original frame",
+                f"~{correction_pct:.0f}% {correction_label} -- NOT the original frame",
                 (10, 60),
                 color=COLOR_WARMUP,
-                scale=0.45,
+                scale=0.38,
                 thickness=1,
             )
         traced_box = detection.dropped_frame_boxes[warm_index]
@@ -729,6 +780,15 @@ def render_clip(
                 color=COLOR_REVERSE,
                 scale=0.4,
             )
+        frame_objects = [
+            observed
+            for observed in warmup_motion.objects
+            if observed.frame_index == warm_index
+        ]
+        _draw_warmup_motion_objects(canvas, frame_objects, scale=scale)
+        used = sum(observed.disposition == "used" for observed in frame_objects)
+        other = sum(observed.disposition == "not_selected" for observed in frame_objects)
+        ignored = len(frame_objects) - used - other
         panel = np.zeros((height + hud_height, width, 3), dtype=np.uint8)
         panel[:height] = canvas
         live = [
@@ -743,9 +803,13 @@ def render_clip(
                 "excluded from settled background; warmup features remain active"
                 + (
                     f"; ~{correction_pct:.0f}% corrected to the settled background"
-                    if detection.dropped_frame_compensated
+                    if correction_label != "raw"
                     else ""
                 ),
+            ),
+            (
+                "warmup motion (used / other / ignored)",
+                f"{used} / {other} / {ignored}",
             ),
             (
                 "raw flashlight ratio",
@@ -1130,7 +1194,8 @@ def _resolve_clips(args, conn) -> list[dict]:
             }
         ]
 
-    message_ids: set[int] = set(args.message_id or [])
+    exact_message_ids = set(getattr(args, "exact_message_id", None) or [])
+    message_ids: set[int] = set(args.message_id or []) | exact_message_ids
     if args.message_ids_file:
         for line in Path(args.message_ids_file).read_text().splitlines():
             entry = line.strip()
@@ -1184,6 +1249,7 @@ def _resolve_clips(args, conn) -> list[dict]:
     selected_event_keys = {
         key
         for clip in selected
+        if clip["message_id"] not in exact_message_ids
         if (key := _event_key(clip["camera_id"], clip.get("caption"))) is not None
     }
     if selected_event_keys:
@@ -1197,7 +1263,11 @@ def _resolve_clips(args, conn) -> list[dict]:
             if key in selected_event_keys:
                 take(row, labels.get(row["message_id"], ""))
 
-    selected = _prefer_longest_per_event(selected)
+    exact = [clip for clip in selected if clip["message_id"] in exact_message_ids]
+    representative = [
+        clip for clip in selected if clip["message_id"] not in exact_message_ids
+    ]
+    selected = exact + _prefer_longest_per_event(representative)
     return selected[: args.limit] if args.limit else selected
 
 
@@ -1231,6 +1301,12 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--clip", help="render one video file directly (needs --camera)")
     source.add_argument("--camera", help="camera id, e.g. cam06")
     source.add_argument("--message-id", type=int, action="append", help="repeatable")
+    source.add_argument(
+        "--exact-message-id",
+        type=int,
+        action="append",
+        help="render this exact clip instead of selecting its clearer event sibling",
+    )
     source.add_argument("--message-ids-file", help="one message_id per line")
     source.add_argument("--label", action="append", help="render all clips with this label")
     source.add_argument("--limit", type=int, help="cap how many clips are rendered")

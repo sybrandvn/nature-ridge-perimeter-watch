@@ -213,7 +213,7 @@ class BotQueries:
                 f"{event.clip.message_id} · {_local_timestamp(event.clip.timestamp)} · "
                 f"{event.clip.camera_id}{sibling_text}"
             )
-        lines.append("Send /event <id> to receive a listed video.")
+        lines.append("Tap a video button below, or send /event <id>.")
         if pages > 1:
             lines.append(f"Next page: /history {category} {min(page + 1, pages)}")
         return "\n".join(lines)
@@ -688,7 +688,7 @@ class QueryBot:
         rows = [
             [
                 (
-                    f"{event.clip.camera_id} · {event.clip.message_id}",
+                    f"▶ {_local_timestamp(event.clip.timestamp)} · {event.clip.camera_id}",
                     f"menu:event:{event.clip.message_id}",
                 )
             ]
@@ -965,7 +965,8 @@ class QueryBot:
         except ValueError:
             await message.reply_text("Usage: /history <animal|incident> [page]")
             return
-        await message.reply_text(self.queries.history(category, page=max(page, 1)))
+        text, markup = self._history_menu(category, max(page, 1))
+        await message.reply_text(text, reply_markup=markup)
 
     async def event(self, update: Any, context: Any) -> None:
         authorized = await self._authorize(update, "event")

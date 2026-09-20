@@ -379,6 +379,17 @@ async def test_history_groups_siblings_and_event_sends_representative_video(tmp_
     await controller.event(update, SimpleNamespace(args=["11"]))
     assert "Incident history event 11" in message.reply_video.await_args.kwargs["caption"]
 
+    message.reply_text.reset_mock()
+    await controller.history(update, SimpleNamespace(args=["incident", "1"]))
+    kwargs = message.reply_text.await_args.kwargs
+    buttons = [
+        button
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    video_button = next(button for button in buttons if button.callback_data == "menu:event:11")
+    assert video_button.text == "▶ 2024-03-16 00:50 · cam01"
+
 
 async def test_history_validates_category_and_event_id(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)

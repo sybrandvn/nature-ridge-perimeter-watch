@@ -124,6 +124,8 @@ repeated notifications. `/history` groups Initial/Stopped sibling clips into eve
 stable representative message ID; `/event` retrieves that chosen video. Battery status pairs
 low/restore messages where possible and flags unresolved device warnings for confirmation at the
 alarm panel.
+Direct `/history` results include one-tap video buttons labelled with the local date, time, and
+camera, so mobile users do not need to copy message IDs.
 Panel history reports arm/disarm transitions; faults report tamper, supervision/device-missing,
 and control-room communication-test failures. Media commands restore a cleaned clip from the
 source channel through Telethon when it is not local. Media counts are capped at five per request.

@@ -29,6 +29,8 @@ def test_load_app_config_minimal_valid_mapping():
     assert cfg.operating_window_end == "06:00"
     assert cfg.ntfy_priority == "urgent"
     assert cfg.bot_trustee_ids == ()
+    assert cfg.security_company_name is None
+    assert cfg.control_room_phone is None
     assert cfg.event_wait_seconds == 300.0
     assert cfg.delivery_retry_base_seconds == 30.0
     assert cfg.delivery_retry_max_seconds == 900.0
@@ -141,6 +143,24 @@ def test_bot_id_list_rejects_non_integer():
                 "BOT_SECURITY_IDS": "abc",
             }
         )
+
+
+def test_security_contact_template_loads_optional_values():
+    cfg = load_app_config_from_mapping(
+        {
+            "TELEGRAM_API_ID": "1",
+            "TELEGRAM_API_HASH": "x",
+            "SOURCE_CHANNEL": "x",
+            "SECURITY_COMPANY_NAME": "Example Security",
+            "SECURITY_COMPANY_PHONE": "+27110000001",
+            "CONTROL_ROOM_PHONE": "+27110000002",
+            "ARMED_RESPONSE_PHONE": "+27110000003",
+        }
+    )
+    assert cfg.security_company_name == "Example Security"
+    assert cfg.security_company_phone == "+27110000001"
+    assert cfg.control_room_phone == "+27110000002"
+    assert cfg.armed_response_phone == "+27110000003"
 
 
 # --------------------------------------------------------------------------

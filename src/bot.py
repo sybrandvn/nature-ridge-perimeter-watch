@@ -246,6 +246,18 @@ class BotQueries:
             "not identity claims. Times are Africa/Johannesburg."
         )
 
+    def contacts(self) -> str:
+        def value(raw: str | None) -> str:
+            return raw or "Not configured"
+
+        return (
+            "Security contacts\n"
+            f"Company: {value(self.config.security_company_name)}\n"
+            f"Company phone: {value(self.config.security_company_phone)}\n"
+            f"Control room: {value(self.config.control_room_phone)}\n"
+            f"Armed response: {value(self.config.armed_response_phone)}"
+        )
+
     def tonight(self) -> str:
         start, end, active = operating_period(self.config, self.now())
         rows = list(
@@ -646,7 +658,7 @@ class QueryBot:
                 [
                     [("Monitoring", "menu:monitor"), ("Events", "menu:events")],
                     [("System", "menu:system"), ("Site", "menu:site")],
-                    [("About", "menu:show:about")],
+                    [("Info", "menu:info")],
                 ]
             ),
         )
@@ -683,6 +695,13 @@ class QueryBot:
             "site": (
                 "Site information",
                 [[("Camera order", "menu:show:map"), ("Patrols", "menu:show:patrols")]],
+            ),
+            "info": (
+                "Information",
+                [
+                    [("Security contacts", "menu:show:contacts")],
+                    [("About this system", "menu:show:about")],
+                ],
             ),
         }
         title, rows = menus[section]
@@ -748,7 +767,7 @@ class QueryBot:
         data = str(getattr(query, "data", ""))
         if data == "menu:home":
             text, markup = self._home_menu()
-        elif data in {"menu:monitor", "menu:events", "menu:system", "menu:site"}:
+        elif data in {"menu:monitor", "menu:events", "menu:system", "menu:site", "menu:info"}:
             text, markup = self._section_menu(data.removeprefix("menu:"))
         elif data == "menu:cameras":
             text, markup = self._camera_menu()
@@ -784,6 +803,7 @@ class QueryBot:
                 "faults": "system",
                 "map": "site",
                 "patrols": "site",
+                "contacts": "info",
             }[command]
             markup = self._keyboard(
                 [[("Back", f"menu:{section}"), ("Main menu", "menu:home")]]
@@ -794,6 +814,9 @@ class QueryBot:
 
     async def about(self, update: Any, context: Any) -> None:
         await self._reply(update, "about")
+
+    async def contacts(self, update: Any, context: Any) -> None:
+        await self._reply(update, "contacts")
 
     async def tonight(self, update: Any, context: Any) -> None:
         await self._reply(update, "tonight")
@@ -1111,6 +1134,7 @@ def build_query_bot(
     application = Application.builder().token(token).build()
     for command in (
         "about",
+        "contacts",
         "start",
         "menu",
         "tonight",

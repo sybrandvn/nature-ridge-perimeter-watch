@@ -28,6 +28,9 @@ was completed.
   Events has paged Animal, Incident, Resident, and Neighbour histories. All four categories are
   delivered to the configured Telegram channel; ntfy remains animal/incident-only because its
   configured priority is urgent.
+  The Info section contains About and Security contacts. Contact values are optional environment
+  inputs (`SECURITY_COMPANY_NAME`, `SECURITY_COMPANY_PHONE`, `CONTROL_ROOM_PHONE`, and
+  `ARMED_RESPONSE_PHONE`) and deliberately render as `Not configured` until supplied.
 - Every proactive Telegram alert and video returned by the query bot carries a `Debug view`
   callback. It restores missing source media, renders the exact production detector overlay in a
   worker thread, and caches it below

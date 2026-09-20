@@ -493,7 +493,7 @@ async def test_grouped_menu_navigates_sections(tmp_path):
     await controller.menu(update, None)
     kwargs = message.reply_text.await_args.kwargs
     labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
-    assert labels == ["Monitoring", "Events", "System", "Site", "About"]
+    assert labels == ["Monitoring", "Events", "System", "Site", "Info"]
 
     query = SimpleNamespace(
         data="menu:system",
@@ -518,6 +518,25 @@ async def test_grouped_menu_navigates_sections(tmp_path):
         "Neighbour history",
         "Back",
     ]
+
+    text, markup = controller._section_menu("info")
+    assert text == "Information"
+    assert [button.text for row in markup.inline_keyboard for button in row] == [
+        "Security contacts",
+        "About this system",
+        "Back",
+    ]
+
+
+def test_contacts_show_template_until_numbers_are_configured(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    assert queries.contacts() == (
+        "Security contacts\n"
+        "Company: Not configured\n"
+        "Company phone: Not configured\n"
+        "Control room: Not configured\n"
+        "Armed response: Not configured"
+    )
 
 
 def test_visible_bot_commands_are_immediate_actions(tmp_path):

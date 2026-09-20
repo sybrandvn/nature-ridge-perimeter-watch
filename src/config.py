@@ -49,6 +49,10 @@ class AppConfig:
     operating_window_end: str
     bot_trustee_ids: tuple[int, ...]
     bot_security_ids: tuple[int, ...]
+    security_company_name: str | None
+    security_company_phone: str | None
+    control_room_phone: str | None
+    armed_response_phone: str | None
     event_wait_seconds: float
     delivery_retry_base_seconds: float
     delivery_retry_max_seconds: float
@@ -85,6 +89,10 @@ _KNOWN_KEYS = {
     "OPERATING_WINDOW_END",
     "BOT_TRUSTEE_IDS",
     "BOT_SECURITY_IDS",
+    "SECURITY_COMPANY_NAME",
+    "SECURITY_COMPANY_PHONE",
+    "CONTROL_ROOM_PHONE",
+    "ARMED_RESPONSE_PHONE",
     "EVENT_WAIT_SECONDS",
     "DELIVERY_RETRY_BASE_SECONDS",
     "DELIVERY_RETRY_MAX_SECONDS",
@@ -177,6 +185,10 @@ def load_app_config_from_mapping(
         operating_window_end=end,
         bot_trustee_ids=_parse_id_list("BOT_TRUSTEE_IDS", _get("BOT_TRUSTEE_IDS")),
         bot_security_ids=_parse_id_list("BOT_SECURITY_IDS", _get("BOT_SECURITY_IDS")),
+        security_company_name=_get("SECURITY_COMPANY_NAME"),
+        security_company_phone=_get("SECURITY_COMPANY_PHONE"),
+        control_room_phone=_get("CONTROL_ROOM_PHONE"),
+        armed_response_phone=_get("ARMED_RESPONSE_PHONE"),
         event_wait_seconds=_positive_float("EVENT_WAIT_SECONDS", 300.0),
         delivery_retry_base_seconds=retry_base,
         delivery_retry_max_seconds=retry_max,

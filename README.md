@@ -114,10 +114,10 @@ wanted. Never paste the token into source files, logs, or chat.
 
 The bot enforces `BOT_TRUSTEE_IDS` and `BOT_SECURITY_IDS` in every handler. Trustees and security
 can open the grouped inline interface with `/menu` or `/start`. The top level contains Monitoring,
-Events, System, and Site sections; camera and history entries are selectable buttons. Every visible
+Events, System, Site, and Info sections; camera and history entries are selectable buttons. Every visible
 slash command performs an immediate action: `/menu`, `/tonight`, `/health`, and `/about`.
 Specialized status and parameterized commands stay in the inline menu. Existing
-direct commands remain supported: `/about`, `/tonight`, `/health`, `/power [count]`, `/batteries`,
+direct commands remain supported: `/about`, `/contacts`, `/tonight`, `/health`, `/power [count]`, `/batteries`,
 `/panel [count]`, `/faults [count]`, `/animal`, `/animals [count]`, `/incidents [count]`,
 `/residents [count]`, `/neighbours [count]`,
 `/history <animal|incident|resident|neighbour> [page]`, `/event <id>`, `/debug <video-id>`,
@@ -144,6 +144,10 @@ source channel through Telethon when it is not local. Media counts are capped at
 The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram
 receives all four live categories; ntfy remains restricted to urgent animal and incident alerts,
 so benign resident/neighbour observations do not trigger an urgent ntfy notification.
+Info contains the system description and an environment-configured security contact directory.
+Fill `SECURITY_COMPANY_NAME`, `SECURITY_COMPANY_PHONE`, `CONTROL_ROOM_PHONE`, and
+`ARMED_RESPONSE_PHONE` in `.env`; blank values display as `Not configured` until the real details
+are available. Store phone numbers in international `+27...` format for mobile clients.
 
 After adding or changing system-message parsing, safely import recognized non-video history without
 touching clip rows:

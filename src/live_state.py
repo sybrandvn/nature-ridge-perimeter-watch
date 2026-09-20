@@ -92,7 +92,13 @@ def add_analyzed_clip(
                      )
                      OR (
                          ? = 'complete'
-                         AND live_events.resolution_state IN ('unconfirmed', 'conflicting')
+                         AND (
+                             live_events.resolution_state IN ('unconfirmed', 'conflicting')
+                             OR (
+                                 live_events.resolution_state = 'likely_resolved'
+                                 AND ? IN ('animal_candidate', 'incident_candidate')
+                             )
+                         )
                      )
                  )
                 THEN 'pending' ELSE live_events.status
@@ -107,7 +113,13 @@ def add_analyzed_clip(
                       )
                       OR (
                           ? = 'complete'
-                          AND live_events.resolution_state IN ('unconfirmed', 'conflicting')
+                          AND (
+                              live_events.resolution_state IN ('unconfirmed', 'conflicting')
+                              OR (
+                                  live_events.resolution_state = 'likely_resolved'
+                                  AND ? IN ('animal_candidate', 'incident_candidate')
+                              )
+                          )
                       )
                   )
                 THEN excluded.deadline_at
@@ -115,7 +127,17 @@ def add_analyzed_clip(
             END,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         """,
-        (event_key, camera_id, deadline, category, phase, category, phase),
+        (
+            event_key,
+            camera_id,
+            deadline,
+            category,
+            phase,
+            category,
+            category,
+            phase,
+            category,
+        ),
     )
     conn.execute(
         """
@@ -182,7 +204,17 @@ def enqueue_preliminary(
                 event_key, transport, notification_kind, category, reason,
                 resolution_state, representative_channel_id,
                 representative_message_id, status, next_attempt_at
-            ) VALUES (?, ?, 'preliminary', ?, ?, 'pending', ?, ?, 'pending', ?)
+            )
+            SELECT ?, ?, 'preliminary', ?, ?, 'pending', ?, ?, 'pending', ?
+            WHERE EXISTS (
+                SELECT 1 FROM live_events e
+                WHERE e.event_key = ? AND e.status = 'pending'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM live_event_clips complete
+                      WHERE complete.event_key = e.event_key
+                        AND complete.phase = 'complete'
+                  )
+            )
             """,
             (
                 event_key,
@@ -192,6 +224,7 @@ def enqueue_preliminary(
                 representative_channel_id,
                 representative_message_id,
                 utc_text(now),
+                event_key,
             ),
         ).rowcount
     return inserted

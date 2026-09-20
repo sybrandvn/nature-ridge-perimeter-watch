@@ -433,6 +433,12 @@ def test_history_keeps_both_live_siblings_and_resolution_details(tmp_path):
             blinding_foreground=False,
             features=None,
         )
+        db.upsert_label(
+            conn,
+            channel_id="source",
+            message_id=message_id,
+            label="incident",
+        )
     live_state.finalize_event(
         conn,
         event_key="cam01|2026-09-19T18:00:00Z",
@@ -453,6 +459,7 @@ def test_history_keeps_both_live_siblings_and_resolution_details(tmp_path):
     assert events[0].resolution_state == "likely_resolved"
     assert events[0].initial_category == "incident_candidate"
     assert events[0].complete_category == "guard_candidate"
+    assert queries.category_clips("incident", limit=3) == [events[0].clip]
 
 
 async def test_sent_video_offers_on_demand_debug_view(tmp_path):

@@ -14,7 +14,7 @@ from src import db, live_state
 from src.clip_analysis import ClipAnalysis, analyze_clip
 from src.config import AppConfig, CamerasConfig, ThresholdsConfig, resolve_channel_ref
 from src.event_keys import event_phase, message_event_key
-from src.event_resolution import URGENT_CATEGORIES, resolve_event
+from src.event_resolution import PRELIMINARY_CATEGORIES, resolve_event
 from src.media_download import download_media_atomic, is_video_message
 from src.message_parsing import parse_message
 from src.ntfy_alert import send_ntfy_alert
@@ -51,13 +51,15 @@ def format_alert(row: sqlite3.Row) -> str:
         heading = f"Update: {category} evidence confirmed"
         status = f"Startup: {initial}; completed clip: {complete}."
     elif state == "likely_resolved":
-        heading = "Update: likely guard activity"
+        prefix = "Update" if kind == "resolution" else "Review"
+        heading = f"{prefix}: likely guard activity"
         status = (
             f"Startup: {initial}; completed clip: {complete}. "
             "The original urgent evidence remains recorded for review."
         )
     elif state == "conflicting":
-        heading = "Update: conflicting evidence — review required"
+        prefix = "Update" if kind == "resolution" else "Alert"
+        heading = f"{prefix}: conflicting evidence — review required"
         status = f"Startup: {initial}; completed clip: {complete}. This has not been cleared."
     elif state == "unconfirmed":
         heading = f"Unconfirmed {category}"
@@ -295,9 +297,12 @@ class LiveWatcher:
         )
         phase = event_phase(text)
         key = message_event_key(camera_id, text, message_id)
+        completed_sibling_exists = phase == "initial" and any(
+            row["phase"] == "complete" for row in live_state.event_clips(self.conn, key)
+        )
         deadline = (
             received_at + timedelta(seconds=self.config.event_wait_seconds)
-            if phase == "initial"
+            if phase == "initial" and not completed_sibling_exists
             else self.now()
         )
         live_state.add_analyzed_clip(
@@ -313,7 +318,7 @@ class LiveWatcher:
             blinding_foreground=analysis.blinding_foreground,
             features=analysis.features,
         )
-        if phase == "initial" and analysis.classification.category in URGENT_CATEGORIES:
+        if phase == "initial" and analysis.classification.category in PRELIMINARY_CATEGORIES:
             live_state.enqueue_preliminary(
                 self.conn,
                 event_key=key,
@@ -424,7 +429,10 @@ class LiveWatcher:
                         base_url=str(self.config.ntfy_base_url),
                         topic=str(self.config.ntfy_topic),
                         priority=(
-                            "default" if kind == "resolution" else self.config.ntfy_priority
+                            "default"
+                            if kind == "resolution"
+                            or (kind == "final" and row["resolution_state"] != "confirmed")
+                            else self.config.ntfy_priority
                         ),
                         title=alert_title(row),
                         token=self.config.ntfy_token,

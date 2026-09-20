@@ -95,6 +95,9 @@ docker compose ps
 docker compose logs -f watcher
 ```
 
+An existing schema-v8 deployment needs only `scripts.migrate_schema_v9`. Stop the watcher and back
+up the SQLite database before migrating; do not start schema-v9 watcher code against a v8 database.
+
 `watcher` restarts unless stopped and is healthy only while configuration, SQLite, persistent
 storage, and its heartbeat are healthy. `toolbox` and `session-bootstrap` run only through their
 profiles. For an upgrade, stop `watcher`, back up SQLite and the session, rebuild, run any new
@@ -153,6 +156,11 @@ text-only Telegram and ntfy credential test.
 Panel history reports arm/disarm transitions; faults report tamper, supervision/device-missing,
 and control-room communication-test failures. Media commands restore a cleaned clip from the
 source channel through Telethon when it is not local. Media counts are capped at five per request.
+Incoming maintenance/system notifications remain stored in `system_events` and are available via
+`/health`, `/power`, `/batteries`, `/panel`, and `/faults`; they are not copied into the proactive
+camera-alert outbox. Detector-only `blinding_foreground` maintenance findings likewise remain in
+the offline maintenance review queue rather than paging Telegram or ntfy. Schema v9 changes only
+camera-event communication and does not remove either maintenance path.
 The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram
 receives all four live categories; ntfy remains restricted to urgent animal and incident alerts,
 so benign resident/neighbour observations do not trigger an urgent ntfy notification.

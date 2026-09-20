@@ -51,4 +51,3 @@ def test_completed_incident_promotes_guard_startup_and_is_confirmed():
     assert result.category == "incident_candidate"
     assert result.resolution_state == "confirmed"
     assert result.representative["message_id"] == 2
-

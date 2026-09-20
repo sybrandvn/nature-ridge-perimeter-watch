@@ -164,6 +164,11 @@ class BotQueries:
                     FROM labels l JOIN clips c
                       ON c.channel_id = l.channel_id AND c.message_id = l.message_id
                     WHERE l.label = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM live_event_clips existing
+                          WHERE existing.channel_id = c.channel_id
+                            AND existing.message_id = c.message_id
+                      )
                 )
                 SELECT * FROM matching ORDER BY timestamp DESC, message_id DESC
                 """,
@@ -182,8 +187,7 @@ class BotQueries:
         )
 
     def category_clips(self, category: str, *, limit: int) -> list[MediaClip]:
-        rows = self._category_rows(category)[:limit]
-        return [self._media_clip(row) for row in rows]
+        return [event.clip for event in self.category_events(category)[:limit]]
 
     def category_events(self, category: str) -> list[HistoryEvent]:
         groups: dict[str, list[sqlite3.Row]] = {}

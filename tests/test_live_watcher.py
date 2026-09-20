@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from src import db
 from src.bot import MediaClip
@@ -152,6 +152,66 @@ async def test_startup_incident_warns_early_then_reports_likely_guard(tmp_path):
     assert second["video"].name.endswith("/2.mp4")
 
 
+async def test_startup_animal_waits_for_completed_sibling_before_alerting(tmp_path):
+    conn, watcher, bot = _runtime(
+        tmp_path,
+        [("animal_candidate", "outside_colour"), ("animal_candidate", "outside_colour")],
+    )
+    suffix = "Camera 1 @ 19-09-26 20:00:00"
+
+    await asyncio.wait_for(watcher.handle_message(_message(1, f"(Initial) {suffix}")), 5)
+    assert conn.execute("SELECT status FROM live_events").fetchone()[0] == "pending"
+    bot.send_video.assert_not_awaited()
+
+    await asyncio.wait_for(watcher.handle_message(_message(2, f"(Stopped) {suffix}")), 5)
+    bot.send_video.assert_awaited_once()
+    assert "Perimeter alert: animal" in bot.send_video.await_args.kwargs["caption"]
+
+
+async def test_out_of_order_initial_uses_existing_completion_without_preliminary(tmp_path):
+    conn, watcher, bot = _runtime(
+        tmp_path,
+        [("guard_candidate", "green_light"), ("incident_candidate", "outside_no_colour")],
+    )
+    suffix = "Camera 1 @ 19-09-26 20:00:00"
+
+    await asyncio.wait_for(watcher.handle_message(_message(1, f"(Stopped) {suffix}")), 5)
+    bot.send_video.assert_not_awaited()
+    await asyncio.wait_for(watcher.handle_message(_message(2, f"(Initial) {suffix}")), 5)
+
+    event = conn.execute("SELECT * FROM live_events").fetchone()
+    assert event["status"] == "finalized"
+    assert event["resolution_state"] == "likely_resolved"
+    bot.send_video.assert_awaited_once()
+    assert "Possible incident" not in bot.send_video.await_args.kwargs["caption"]
+    assert "Review: likely guard activity" in bot.send_video.await_args.kwargs["caption"]
+
+
+async def test_likely_resolved_final_uses_nonurgent_ntfy_priority(tmp_path):
+    _conn, watcher, bot = _runtime(
+        tmp_path,
+        [("animal_candidate", "outside_colour"), ("guard_candidate", "green_light")],
+    )
+    watcher.config = replace(
+        watcher.config,
+        ntfy_base_url="https://ntfy.example",
+        ntfy_topic="alerts",
+        ntfy_priority="urgent",
+    )
+    response = MagicMock()
+    watcher.ntfy_session = MagicMock()
+    watcher.ntfy_session.post.return_value = response
+    suffix = "Camera 1 @ 19-09-26 20:00:00"
+
+    await asyncio.wait_for(watcher.handle_message(_message(1, f"(Initial) {suffix}")), 5)
+    bot.send_video.assert_not_awaited()
+    await asyncio.wait_for(watcher.handle_message(_message(2, f"(Stopped) {suffix}")), 5)
+
+    headers = watcher.ntfy_session.post.call_args.kwargs["headers"]
+    assert headers["Priority"] == "default"
+    assert "likely guard" in headers["Title"]
+
+
 async def test_startup_incident_with_environment_completion_requests_review(tmp_path):
     conn, watcher, bot = _runtime(
         tmp_path,
@@ -191,7 +251,11 @@ async def test_startup_incident_timeout_is_reported_as_unconfirmed(tmp_path):
 async def test_late_completed_guard_reopens_unconfirmed_incident(tmp_path):
     conn, watcher, bot = _runtime(
         tmp_path,
-        [("incident_candidate", "outside_no_colour"), ("guard_candidate", "green_light")],
+        [
+            ("incident_candidate", "outside_no_colour"),
+            ("guard_candidate", "green_light"),
+            ("incident_candidate", "outside_no_colour"),
+        ],
     )
     suffix = "Camera 1 @ 19-09-26 20:00:00"
     await asyncio.wait_for(watcher.handle_message(_message(1, f"(Initial) {suffix}")), 5)
@@ -206,6 +270,31 @@ async def test_late_completed_guard_reopens_unconfirmed_incident(tmp_path):
     assert event["resolution_state"] == "likely_resolved"
     assert len(bot.send_video.await_args_list) == 3
     assert "likely guard activity" in bot.send_video.await_args_list[-1].kwargs["caption"]
+
+    await asyncio.wait_for(watcher.handle_message(_message(3, f"(Stopped) {suffix}")), 5)
+    event = conn.execute("SELECT * FROM live_events").fetchone()
+    assert event["resolution_state"] == "confirmed"
+    assert len(bot.send_video.await_args_list) == 4
+    assert "evidence confirmed" in bot.send_video.await_args_list[-1].kwargs["caption"]
+
+
+async def test_system_maintenance_message_stays_queryable_without_camera_delivery(tmp_path):
+    conn, watcher, bot = _runtime(tmp_path, [])
+    await asyncio.wait_for(
+        watcher.handle_message(
+            _message(
+                1,
+                "Power Failure @ 21-09-26 19:00:00",
+                mime="application/octet-stream",
+            )
+        ),
+        5,
+    )
+
+    event = conn.execute("SELECT * FROM system_events").fetchone()
+    assert event["event_type"] == "power_out"
+    assert conn.execute("SELECT COUNT(*) FROM live_deliveries").fetchone()[0] == 0
+    bot.send_video.assert_not_awaited()
 
 
 async def test_duplicate_message_is_not_downloaded_or_analyzed_twice(tmp_path):

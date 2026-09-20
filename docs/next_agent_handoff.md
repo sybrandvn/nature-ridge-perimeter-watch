@@ -1,14 +1,14 @@
 # Next-agent handoff: operate and improve the production watcher
 
-Updated 2026-09-20 on `main` after the detector, Docker, Telegram, retention, and restoration work
-was completed.
+Updated 2026-09-21 after the staged event-communication lifecycle was implemented and reviewed.
 
 ## Completed production path
 
 - `src/clip_analysis.py` is the shared production/backtest analysis entry point.
 - `src/event_keys.py` owns embedded timestamp grouping and lifecycle parsing.
-- schema v8 durably stores processed messages, pending/final events, analyzed siblings, and
-  per-transport delivery attempts; migrate v7 with `scripts/migrate_schema_v8.py`.
+- schema v9 durably stores processed messages, pending/final events, analyzed siblings, event
+  resolution state, and staged per-transport delivery attempts. Migrate v7 with
+  `scripts/migrate_schema_v8.py` followed by `scripts/migrate_schema_v9.py`; v8 needs only v9.
 - `src/live_watcher.py` and `scripts/watch.py` provide live Telethon ingestion, atomic media
   downloads, measured sibling buffering, conservative urgent-event resolution, Telegram video
   delivery, ntfy delivery, bounded retry, restart recovery, and heartbeat maintenance.
@@ -47,8 +47,11 @@ was completed.
   `MEDIA_RETENTION_ENABLED=true` and defaults off on development machines.
 - `scripts/restore_media.py` resumably restores every missing database clip in Telegram batches.
 - The measured sibling wait is 300 seconds: only 6 of 8,274 observed sibling groups exceeded it;
-  99.9% completed within 286 seconds. Completion captions finalize immediately, and a late urgent
-  sibling reopens an already-finalized suppressed event.
+  99.9% completed within 286 seconds. An Initial incident now sends a clearly marked preliminary
+  warning immediately. Completion captions finalize immediately and send a confirmed,
+  conflicting, or likely-resolved update; timeout sends an unconfirmed update. Late completions
+  reopen unconfirmed/conflicting events, and late urgent evidence also reopens likely-resolved
+  events.
 - The resolver preserves any `animal_candidate` or `incident_candidate` sibling. The proposed
   completed-guard and longest-only overrides remain rejected because measured protected events
   lost alerts under those policies.
@@ -84,7 +87,7 @@ but do not promote the existing backtest or debug scripts into the service.
 - Detector review and production work are committed logically on `main`.
 - `EXTRACTOR_VERSION` is `motion-features-v8` (2026-09-20: added
   `warmup_dynamic_inside_bottom_left_fraction`).
-- Ruff is clean and the full suite is **853 passing tests** as of 2026-09-20; rerun both
+- Ruff is clean and the full suite is **867 passing tests** as of 2026-09-21; rerun both
   before changing behavior because the count grows with each layer.
 - `DEBUG_RENDER_VERSION` is 2. Version 2 shares warmup observations with scoring and invalidates
   older cached overlays without changing `EXTRACTOR_VERSION` or classifier outputs.
@@ -101,6 +104,11 @@ but do not promote the existing backtest or debug scripts into the service.
   reports `DEBUG_RENDER_VERSION=2`; its Docker server is `x86_64` and its image is Linux `amd64`.
   This deployment therefore does not require ARM64 validation. Validate on real ARM64 hardware if
   the watcher is later moved to an ARM64 server. No security-role user is configured.
+- The staged-alert code and schema-v9 migration are complete but are not in the currently running
+  schema-v8 container. Before deploying them, stop the watcher, back up SQLite, run
+  `scripts.migrate_schema_v9.py` with the newly built toolbox image, then rebuild/recreate and
+  verify the watcher. Do not rebuild the watcher first: schema-v9 code intentionally refuses a v8
+  database.
 - The representative Telegram smoke test successfully sent cam08/7360 (animal) and cam06/21520
   (incident), including their `Debug view` buttons. Telegram has normal or silent delivery but no
   Bot API priority level; ntfy is configured as `urgent` and receives only animal/incident alerts.
@@ -249,7 +257,7 @@ do not appear in `git status`.
 - `src/media_download.py` — video-type validation and atomic downloads.
 - `src/backfill.py`, `src/message_parsing.py` — reusable Telegram message ingestion/parsing pieces.
 - `src/telegram_alert.py`, `src/ntfy_alert.py` — injectable Telegram video/text and ntfy transports.
-- `src/db.py` — schema v8 persistence, including live event and delivery state.
+- `src/db.py` — schema v9 persistence, including live event resolution and staged delivery state.
 - `src/config.py`, `config/thresholds.yaml` — typed classification thresholds.
 - `config/cameras.yaml` — dated geometry and camera configuration.
 - `scripts/backtest.py` — labelled/full-corpus evaluation harness.
@@ -258,7 +266,8 @@ do not appear in `git status`.
   `--exact-message-id` for a named clip and `--message-id` for its clearer event representative.
 - `scripts/label.py` — label workflow using the shared production event key.
 - `scripts/watch.py` — Telethon process entry point and heartbeat loop.
-- `scripts/migrate_schema_v8.py` — additive v7-to-v8 migration.
+- `scripts/migrate_schema_v8.py` and `scripts/migrate_schema_v9.py` — additive v7-to-v9 migration
+  chain.
 - `scripts/send_test_alert.py` — manual text-transport smoke test; `--examples` sends the standing
   labelled animal and incident videos with debug buttons.
 - `.env.example` — existing Telegram, Bot API, ntfy, DB, and operating-window settings.
@@ -275,11 +284,12 @@ operational setup, evidence-driven follow-up, or optional tooling.
 
 ### Deployment inputs and housekeeping
 
-1. Fill the optional security-company/control-room/armed-response contact values when known, and
+1. Deploy schema v9 and the staged-alert watcher using the stop/backup/migrate/rebuild order above.
+2. Fill the optional security-company/control-room/armed-response contact values when known, and
    add a `security` role user if trustees want that access tier. One trustee is already configured.
-2. Decide whether the storage-constrained server should enable `MEDIA_RETENTION_ENABLED`; leave it
+3. Decide whether the storage-constrained server should enable `MEDIA_RETENTION_ENABLED`; leave it
    off on analysis machines.
-3. Retry Telegram restoration for `cam02/15475` and `cam01b/17386`. They are the only two known
+4. Retry Telegram restoration for `cam02/15475` and `cam01b/17386`. They are the only two known
    missing local clips out of 16,899 and do not block live operation.
 
 ARM64 is not the current deployment architecture: both the live Docker server and rebuilt image
@@ -301,7 +311,7 @@ than treating a cross-build alone as runtime validation.
 
 - Run-comparison CLI and projected false-pages-per-night reporting.
 - Browser zone editor and a compact zone-independent raw-track cache.
-- Generic migration framework; targeted migrations already cover schema v8.
+- Generic migration framework; targeted migrations already cover schema v9.
 - Per-camera classifier thresholds only if labelled evidence supports them.
 - YOLO/ONNX resolver, activity heatmap, trend analytics, and retrospective probe reporting.
 - Automatic proactive attachment of rendered debug video; on-demand `Debug view` is already live.

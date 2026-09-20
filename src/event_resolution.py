@@ -9,6 +9,7 @@ from typing import Any
 from src.classify import classify_event
 
 URGENT_CATEGORIES = frozenset({"animal_candidate", "incident_candidate"})
+PRELIMINARY_CATEGORIES = frozenset({"incident_candidate"})
 
 
 @dataclass(frozen=True)

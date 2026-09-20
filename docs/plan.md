@@ -829,7 +829,7 @@ deployment inputs, evidence-driven detector work, and optional tooling, use **Wh
 `docs/next_agent_handoff.md`; this historical plan keeps the broader deferred list only.
 
 - Run-comparison CLI and projected false-pages-per-night reporting.
-- Generic migration framework; targeted, versioned migration scripts exist through schema v8.
+- Generic migration framework; targeted, versioned migration scripts exist through schema v9.
 - Per-camera classification threshold sets.
 - Browser zone editor and optional zone-independent raw-track cache.
 - ARM64 runtime validation only if deployment moves away from the current verified AMD64 host;

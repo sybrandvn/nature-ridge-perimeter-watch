@@ -75,6 +75,7 @@ async def run(argv: list[str] | None = None) -> None:  # pragma: no cover - real
             query_application = build_query_bot(
                 BotQueries(conn=conn, config=config, cameras=cameras),
                 config.telegram_bot_token,
+                media_loader=watcher.retrieve_media,
             )
             await query_application.initialize()
             query_initialized = True

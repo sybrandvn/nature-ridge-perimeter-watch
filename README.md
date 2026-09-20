@@ -111,9 +111,17 @@ to the alert destination, grant permission to post, and set `ALERT_CHANNEL_ID` i
 wanted. Never paste the token into source files, logs, or chat.
 
 The bot enforces `BOT_TRUSTEE_IDS` and `BOT_SECURITY_IDS` in every handler. Trustees and security
-can use `/about`, `/tonight`, `/health`, `/animals`, `/map`, and `/last <camera_id>`; only trustees
-can use `/patrols`. `/last` sends the newest downloaded video that still exists locally for the
-requested camera and reports clearly when no media is available.
+can use `/about`, `/tonight`, `/health`, `/animal`, `/animals [count]`, `/incidents [count]`,
+`/map`, and `/last <camera_id>`; only trustees can use `/patrols`. Media commands restore a cleaned
+clip from the source channel through Telethon when it is not local. Counts are capped at five per
+request.
+
+Media retention runs at startup and hourly by default. It keeps human-labelled or live-finalized
+animal/incident evidence, pending live events until they are resolved, and the newest local video
+for each camera. Other database-referenced videos under the configured data directory are deleted
+and their `file_path` is cleared; message metadata remains, so a bot request can retrieve the video
+again. Paths outside the data directory are never deleted. Configure the interval with
+`MEDIA_RETENTION_INTERVAL_SECONDS`.
 The map is deliberately an approximate ordered list, and patrol output carries a confidence
 caveat. Unlisted users receive only `Not authorized` and their numeric user ID is recorded in the
 structured watcher log. This provides a bootstrap path: configure the token, message `/about`,

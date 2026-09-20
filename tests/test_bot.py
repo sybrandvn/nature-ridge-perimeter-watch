@@ -144,7 +144,7 @@ def test_map_is_explicitly_approximate(tmp_path):
     assert queries.map() == "Approximate fence order (not geographic)\n1:cam01 — 2:cam02"
 
 
-def test_last_clip_uses_newest_file_that_still_exists(tmp_path):
+def test_last_clip_returns_newest_metadata_even_when_media_needs_retrieval(tmp_path):
     conn, _config, _cameras, queries = _setup(tmp_path)
     existing = tmp_path / "existing.mp4"
     existing.write_bytes(b"video")
@@ -165,8 +165,9 @@ def test_last_clip_uses_newest_file_that_still_exists(tmp_path):
         )
     clip = queries.last_clip("cam01")
     assert clip is not None
-    assert clip.timestamp == "2026-09-19T18:00:00Z"
-    assert clip.path == existing
+    assert clip.message_id == 3
+    assert clip.timestamp == "2026-09-19T20:00:00Z"
+    assert clip.path is None
 
 
 async def test_security_can_request_last_camera_video(tmp_path):
@@ -213,3 +214,55 @@ async def test_last_requires_camera_argument(tmp_path):
     response = message.reply_text.await_args.args[0]
     assert response.startswith("Usage: /last <camera_id>")
     assert "cam01" in response
+
+
+async def test_last_retrieves_missing_source_media(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    db.upsert_clip(
+        conn,
+        channel_id="source",
+        message_id=8,
+        camera_id="cam01",
+        timestamp="2026-09-19T20:30:00Z",
+        caption="motion",
+        file_path=None,
+        source="backfill",
+    )
+    downloaded = tmp_path / "retrieved.mp4"
+
+    async def loader(clip):
+        assert clip.message_id == 8
+        downloaded.write_bytes(b"video")
+        return downloaded
+
+    controller = QueryBot(queries, media_loader=loader)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+    await controller.last(update, SimpleNamespace(args=["cam01"]))
+    assert message.reply_video.await_args.kwargs["video"].name == str(downloaded)
+
+
+async def test_animal_and_incident_commands_send_labelled_videos(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    for message_id, camera, label in ((1, "cam01", "animal"), (2, "cam02", "incident")):
+        path = tmp_path / f"{message_id}.mp4"
+        path.write_bytes(b"video")
+        db.upsert_clip(
+            conn,
+            channel_id="source",
+            message_id=message_id,
+            camera_id=camera,
+            timestamp=f"2026-09-19T18:{message_id:02d}:00Z",
+            caption="motion",
+            file_path=str(path),
+            source="backfill",
+        )
+        db.upsert_label(conn, channel_id="source", message_id=message_id, label=label)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=22), effective_message=message)
+    await controller.animal(update, SimpleNamespace(args=[]))
+    assert "Animal candidate" in message.reply_video.await_args.kwargs["caption"]
+    message.reply_video.reset_mock()
+    await controller.incidents(update, SimpleNamespace(args=["1"]))
+    assert "Incident candidate" in message.reply_video.await_args.kwargs["caption"]

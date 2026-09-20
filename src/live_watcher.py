@@ -13,12 +13,13 @@ from typing import Any
 from src import db, live_state
 from src.classify import classify_event
 from src.clip_analysis import ClipAnalysis, analyze_clip
-from src.config import AppConfig, CamerasConfig, ThresholdsConfig
+from src.config import AppConfig, CamerasConfig, ThresholdsConfig, resolve_channel_ref
 from src.event_keys import event_phase, message_event_key
 from src.media_download import download_media_atomic, is_video_message
 from src.message_parsing import parse_message
 from src.ntfy_alert import send_ntfy_alert
 from src.reference_bg import load_manifest
+from src.retention import RetentionResult, clean_local_media
 from src.telegram_alert import send_telegram_alert
 
 logger = logging.getLogger("live_watcher")
@@ -77,6 +78,7 @@ class LiveWatcher:
         self.telegram_bot = telegram_bot
         self.ntfy_session = ntfy_session
         self._lock = asyncio.Lock()
+        self._next_retention_at: datetime | None = None
 
     def recover(self) -> int:
         ambiguous = live_state.recover_interrupted(self.conn)
@@ -85,7 +87,62 @@ class LiveWatcher:
             transports=self._transports("incident_candidate"),
             now=self.now(),
         )
+        self.clean_media_if_due(force=True)
         return ambiguous
+
+    def clean_media_if_due(self, *, force: bool = False) -> RetentionResult | None:
+        now = self.now()
+        if not force and self._next_retention_at is not None and now < self._next_retention_at:
+            return None
+        result = clean_local_media(self.conn, data_root=self.db_path.parent)
+        self._next_retention_at = now + timedelta(
+            seconds=self.config.media_retention_interval_seconds
+        )
+        if result.deleted or result.missing or result.unsafe:
+            logger.info(
+                "live_media_retention",
+                extra={
+                    "scanned": result.scanned,
+                    "kept": result.kept,
+                    "deleted": result.deleted,
+                    "missing": result.missing,
+                    "unsafe": result.unsafe,
+                },
+            )
+        return result
+
+    async def retrieve_media(self, clip: Any) -> Path | None:
+        """Restore one DB-known source clip through Telethon after retention."""
+        async with self._lock:
+            if str(clip.channel_id) != self.channel_id:
+                return None
+            row = db.get_clip(self.conn, self.channel_id, int(clip.message_id))
+            if row is None:
+                return None
+            if row["file_path"]:
+                existing = Path(str(row["file_path"]))
+                if existing.is_file():
+                    return existing
+            message = await self.client.get_messages(
+                resolve_channel_ref(str(self.config.source_channel)), ids=int(clip.message_id)
+            )
+            if message is None or not is_video_message(message):
+                return None
+            destination = (
+                self.config.live_media_dir / str(clip.camera_id) / f"{clip.message_id}.mp4"
+            )
+            await download_media_atomic(self.client, message, destination)
+            db.set_clip_file_path(
+                self.conn,
+                channel_id=self.channel_id,
+                message_id=int(clip.message_id),
+                file_path=str(destination),
+            )
+            logger.info(
+                "live_media_retrieved",
+                extra={"camera_id": clip.camera_id, "message_id": clip.message_id},
+            )
+            return destination
 
     def _analyze(
         self, *, channel_id: str, message_id: int, path: Path, timestamp: str, camera: Any
@@ -325,6 +382,7 @@ class LiveWatcher:
     async def tick(self) -> None:
         self.finalize_due_events()
         await self.dispatch_due()
+        self.clean_media_if_due()
 
     async def maintenance(self) -> None:
         async with self._lock:

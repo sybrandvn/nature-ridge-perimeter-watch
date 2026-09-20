@@ -55,6 +55,7 @@ class AppConfig:
     watcher_poll_seconds: float
     watcher_heartbeat_path: Path
     live_media_dir: Path
+    media_retention_interval_seconds: float
 
 
 def load_app_config(env_path: str | Path = ".env", *, require_telegram: bool = True) -> AppConfig:
@@ -89,6 +90,7 @@ _KNOWN_KEYS = {
     "WATCHER_POLL_SECONDS",
     "WATCHER_HEARTBEAT_PATH",
     "LIVE_MEDIA_DIR",
+    "MEDIA_RETENTION_INTERVAL_SECONDS",
 }
 
 
@@ -170,6 +172,9 @@ def load_app_config_from_mapping(
             _get("WATCHER_HEARTBEAT_PATH") or "data/live/watcher.heartbeat"
         ),
         live_media_dir=Path(_get("LIVE_MEDIA_DIR") or "data/live/clips"),
+        media_retention_interval_seconds=_positive_float(
+            "MEDIA_RETENTION_INTERVAL_SECONDS", 3600.0
+        ),
     )
 
 

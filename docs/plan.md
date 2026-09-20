@@ -534,9 +534,9 @@ closed: its identity covers every current extraction input and corpus output was
 35. [done] Role-based access from a Telegram user-ID allowlist: `trustee` (full), `security`
     (restricted). Enforced server-side in every handler — hiding a menu button is not access
     control. Unknown IDs refused and logged.
-36. [done] Commands: `/about`, `/tonight`, `/health`, `/animals`, `/map`, and `/last <camera_id>`
-    for both roles; `/patrols` trustee only (passes per night, times, cameras covered, coverage
-    gaps).
+36. [done] Commands: `/about`, `/tonight`, `/health`, `/animal`, `/animals`, `/incidents`, `/map`,
+    and `/last <camera_id>` for both roles; media is restored from the source after local cleanup;
+    `/patrols` trustee only (passes per night, times, cameras covered, coverage gaps).
 37. [done] Camera health surfaces parsed `system_events` primarily, with schedule-aware silence detection
     as a backstop for a camera that dies without notifying. Silence outside the operating window
     is never a fault.
@@ -733,7 +733,7 @@ access before the bot ships.
 
 ## Explicitly deferred
 `main.py` live loop, listener queueing, delivery outbox and crash recovery, Dockerfile/compose and
-ARM64 build, live clip retention policy, run-comparison CLI, migration framework, per-camera
+ARM64 build, run-comparison CLI, migration framework, per-camera
 threshold sets, YOLO/ONNX, activity heatmap, trend analytics, probe-sequence live escalation.
 
 ## Relevant files

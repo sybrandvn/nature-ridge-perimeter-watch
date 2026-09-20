@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -18,10 +19,12 @@ LOCAL_ZONE = ZoneInfo("Africa/Johannesburg")
 
 
 @dataclass(frozen=True)
-class LastClip:
+class MediaClip:
+    channel_id: str
+    message_id: int
     camera_id: str
     timestamp: str
-    path: Path
+    path: Path | None
 
 
 def _parse_hhmm(value: str) -> time:
@@ -78,25 +81,57 @@ class BotQueries:
         camera = self.cameras.resolve_alias(value)
         return None if camera is None else camera.id
 
-    def last_clip(self, camera_id: str) -> LastClip | None:
-        """Return the newest downloaded clip whose file still exists."""
-        rows = self.conn.execute(
+    def last_clip(self, camera_id: str) -> MediaClip | None:
+        """Return the newest known clip; its media may need live retrieval."""
+        row = self.conn.execute(
             """
-            SELECT camera_id, timestamp, file_path FROM clips
-            WHERE camera_id = ? AND file_path IS NOT NULL
-            ORDER BY timestamp DESC
+            SELECT channel_id, message_id, camera_id, timestamp, file_path FROM clips
+            WHERE camera_id = ? ORDER BY timestamp DESC, message_id DESC LIMIT 1
             """,
             (camera_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return MediaClip(
+            channel_id=str(row["channel_id"]),
+            message_id=int(row["message_id"]),
+            camera_id=str(row["camera_id"]),
+            timestamp=str(row["timestamp"]),
+            path=None if row["file_path"] is None else Path(str(row["file_path"])),
         )
-        for row in rows:
-            path = Path(str(row["file_path"]))
-            if path.is_file():
-                return LastClip(
-                    camera_id=str(row["camera_id"]),
-                    timestamp=str(row["timestamp"]),
-                    path=path,
-                )
-        return None
+
+    def category_clips(self, category: str, *, limit: int) -> list[MediaClip]:
+        if category not in {"animal", "incident"}:
+            raise ValueError(f"unsupported media category: {category}")
+        candidate = f"{category}_candidate"
+        rows = self.conn.execute(
+            """
+            WITH matching AS (
+                SELECT c.channel_id, c.message_id, c.camera_id, c.timestamp, c.file_path
+                FROM live_events e JOIN clips c
+                  ON c.channel_id = e.representative_channel_id
+                 AND c.message_id = e.representative_message_id
+                WHERE e.status = 'finalized' AND e.final_category = ?
+                UNION
+                SELECT c.channel_id, c.message_id, c.camera_id, c.timestamp, c.file_path
+                FROM labels l JOIN clips c
+                  ON c.channel_id = l.channel_id AND c.message_id = l.message_id
+                WHERE l.label = ?
+            )
+            SELECT * FROM matching ORDER BY timestamp DESC, message_id DESC LIMIT ?
+            """,
+            (candidate, category, limit),
+        )
+        return [
+            MediaClip(
+                channel_id=str(row["channel_id"]),
+                message_id=int(row["message_id"]),
+                camera_id=str(row["camera_id"]),
+                timestamp=str(row["timestamp"]),
+                path=None if row["file_path"] is None else Path(str(row["file_path"])),
+            )
+            for row in rows
+        ]
 
     def about(self, role: str) -> str:
         return (
@@ -244,8 +279,14 @@ class BotQueries:
 
 
 class QueryBot:
-    def __init__(self, queries: BotQueries) -> None:
+    def __init__(
+        self,
+        queries: BotQueries,
+        *,
+        media_loader: Callable[[MediaClip], Awaitable[Path | None]] | None = None,
+    ) -> None:
         self.queries = queries
+        self.media_loader = media_loader
 
     async def _authorize(
         self, update: Any, command: str, *, trustee_only: bool = False
@@ -291,9 +332,6 @@ class QueryBot:
     async def health(self, update: Any, context: Any) -> None:
         await self._reply(update, "health")
 
-    async def animals(self, update: Any, context: Any) -> None:
-        await self._reply(update, "animals")
-
     async def map(self, update: Any, context: Any) -> None:
         await self._reply(update, "map")
 
@@ -316,11 +354,41 @@ class QueryBot:
             return
         clip = self.queries.last_clip(camera_id)
         if clip is None:
-            await message.reply_text(f"No downloaded video is available for {camera_id}.")
+            await message.reply_text(f"No video metadata is available for {camera_id}.")
             return
-        caption = f"Latest available video: {camera_id}\n{_local_timestamp(clip.timestamp)}"
+        path = await self._ensure_media(clip)
+        if path is None:
+            await message.reply_text(f"The latest {camera_id} video is unavailable at its source.")
+            return
+        await self._send_video(message, clip, path, heading="Latest camera video")
+
+    async def _ensure_media(self, clip: MediaClip) -> Path | None:
+        if clip.path is not None and clip.path.is_file():
+            return clip.path
+        if self.media_loader is None:
+            return None
         try:
-            with clip.path.open("rb") as video:
+            return await self.media_loader(clip)
+        except Exception as exc:
+            logger.exception(
+                "query_bot_media_retrieval_failed",
+                extra={
+                    "camera_id": clip.camera_id,
+                    "message_id": clip.message_id,
+                    "error": str(exc),
+                },
+            )
+            return None
+
+    async def _send_video(
+        self, message: Any, clip: MediaClip, path: Path, *, heading: str
+    ) -> bool:
+        caption = (
+            f"{heading}: {clip.camera_id}\n"
+            f"{_local_timestamp(clip.timestamp)}"
+        )
+        try:
+            with path.open("rb") as video:
                 await message.reply_video(
                     video=video,
                     caption=caption,
@@ -331,24 +399,97 @@ class QueryBot:
         except Exception as exc:
             logger.exception(
                 "query_bot_video_failed",
-                extra={"camera_id": camera_id, "error": str(exc)},
+                extra={"camera_id": clip.camera_id, "error": str(exc)},
             )
-            await message.reply_text(f"The latest {camera_id} video could not be sent.")
+            await message.reply_text(f"The {clip.camera_id} video could not be sent.")
+            return False
+        return True
+
+    async def _category_videos(
+        self,
+        update: Any,
+        context: Any,
+        *,
+        category: str,
+        default_count: int,
+    ) -> None:
+        command = "animals" if category == "animal" else "incidents"
+        authorized = await self._authorize(update, command)
+        if authorized is None:
+            return
+        message, _role = authorized
+        count = default_count
+        args = getattr(context, "args", ()) or ()
+        if args:
+            try:
+                count = int(args[0])
+            except ValueError:
+                await message.reply_text(f"Usage: /{command} [count]")
+                return
+        count = min(max(count, 1), 5)
+        clips = self.queries.category_clips(category, limit=count)
+        if not clips:
+            await message.reply_text(f"No {category} videos are recorded yet.")
+            return
+        sent = 0
+        for clip in clips:
+            path = await self._ensure_media(clip)
+            if path is None:
+                continue
+            sent += int(
+                await self._send_video(
+                    message,
+                    clip,
+                    path,
+                    heading=f"{category.title()} candidate",
+                )
+            )
+        if sent == 0:
+            await message.reply_text(
+                f"{len(clips)} {category} event(s) are recorded, but their source videos "
+                "could not be retrieved."
+            )
+
+    async def animal(self, update: Any, context: Any) -> None:
+        await self._category_videos(update, context, category="animal", default_count=1)
+
+    async def animals(self, update: Any, context: Any) -> None:
+        await self._category_videos(update, context, category="animal", default_count=3)
+
+    async def incidents(self, update: Any, context: Any) -> None:
+        await self._category_videos(update, context, category="incident", default_count=3)
 
 
-def build_query_bot(queries: BotQueries, token: str) -> Any:
+def build_query_bot(
+    queries: BotQueries,
+    token: str,
+    *,
+    media_loader: Callable[[MediaClip], Awaitable[Path | None]] | None = None,
+) -> Any:
     from telegram import BotCommand
     from telegram.ext import Application, CommandHandler
 
-    controller = QueryBot(queries)
+    controller = QueryBot(queries, media_loader=media_loader)
     application = Application.builder().token(token).build()
-    for command in ("about", "tonight", "health", "animals", "map", "patrols", "last"):
+    for command in (
+        "about",
+        "tonight",
+        "health",
+        "animal",
+        "animals",
+        "incidents",
+        "map",
+        "patrols",
+        "last",
+    ):
         application.add_handler(CommandHandler(command, getattr(controller, command)))
     application.bot_data["commands"] = [
         BotCommand("about", "What this system reports"),
         BotCommand("tonight", "Tonight's event summary"),
         BotCommand("health", "Camera health and last activity"),
-        BotCommand("animals", "Recent animal candidates"),
+        BotCommand("animal", "Send the latest animal video"),
+        BotCommand("animals", "Send recent animal videos"),
+        BotCommand("incidents", "Send recent incident videos"),
         BotCommand("map", "Approximate camera order"),
         BotCommand("last", "Send the latest available camera video"),
         BotCommand("patrols", "Guard-pass candidates (trustees only)"),

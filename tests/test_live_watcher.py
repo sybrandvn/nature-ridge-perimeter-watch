@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from src import db
+from src.bot import MediaClip
 from src.classify import ClassificationResult
 from src.clip_analysis import ClipAnalysis
 from src.config import (
@@ -19,11 +20,17 @@ NOW = datetime(2026, 9, 19, 18, 0, tzinfo=UTC)
 
 
 class Client:
+    def __init__(self):
+        self.messages = {}
+
     async def download_media(self, message, *, file):
         from pathlib import Path
 
         Path(file).write_bytes(b"video")
         return file
+
+    async def get_messages(self, channel, *, ids):
+        return self.messages.get(ids)
 
 
 def _message(message_id, caption, *, mime="video/mp4"):
@@ -119,3 +126,23 @@ async def test_non_video_document_is_ignored(tmp_path):
     )
     assert conn.execute("SELECT status FROM live_messages").fetchone()[0] == "ignored"
     assert conn.execute("SELECT count(*) FROM clips").fetchone()[0] == 0
+
+
+async def test_retrieve_media_restores_retained_clip_from_source(tmp_path):
+    conn, watcher, _bot = _runtime(tmp_path, [])
+    db.upsert_clip(
+        conn,
+        channel_id="source",
+        message_id=9,
+        camera_id="cam01",
+        timestamp="2026-09-19T17:00:00Z",
+        caption="Camera 1 motion",
+        file_path=None,
+        source="backfill",
+    )
+    watcher.client.messages[9] = _message(9, "Camera 1 motion")
+    path = await watcher.retrieve_media(
+        MediaClip("source", 9, "cam01", "2026-09-19T17:00:00Z", None)
+    )
+    assert path is not None and path.read_bytes() == b"video"
+    assert db.get_clip(conn, "source", 9)["file_path"] == str(path)

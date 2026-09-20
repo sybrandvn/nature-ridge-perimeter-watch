@@ -286,6 +286,15 @@ def set_clip_file_path(
     )
 
 
+def clear_clip_file_path(
+    conn: sqlite3.Connection, *, channel_id: str, message_id: int
+) -> None:
+    conn.execute(
+        "UPDATE clips SET file_path = NULL WHERE channel_id = ? AND message_id = ?",
+        (channel_id, message_id),
+    )
+
+
 def iter_clips(
     conn: sqlite3.Connection, *, camera_id: str | None = None
 ) -> Iterator[sqlite3.Row]:

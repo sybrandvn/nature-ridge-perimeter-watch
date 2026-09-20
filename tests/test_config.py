@@ -33,6 +33,7 @@ def test_load_app_config_minimal_valid_mapping():
     assert cfg.delivery_retry_base_seconds == 30.0
     assert cfg.delivery_retry_max_seconds == 900.0
     assert cfg.watcher_poll_seconds == 5.0
+    assert cfg.media_retention_interval_seconds == 3600.0
 
 
 def test_live_runtime_durations_validate_and_parse():

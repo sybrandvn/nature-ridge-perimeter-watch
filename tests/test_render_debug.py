@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -12,6 +13,7 @@ from scripts.render_debug import (
     _draw_multi_tracks,
     render_clip,
 )
+from src import db
 from src.config import CameraZone, load_thresholds_config
 from src.motion import TrackedObject, detect_clip
 
@@ -461,6 +463,75 @@ def test_prefer_longest_per_event_keeps_only_the_longer_sibling(tmp_path):
 
     assert len(result) == 1
     assert result[0]["message_id"] == 2
+
+
+def test_prefer_longest_per_event_tie_prefers_clear_over_duplicate(tmp_path):
+    from scripts.render_debug import _prefer_longest_per_event
+
+    duplicate = _write_clip(tmp_path / "duplicate.mp4", frames=10)
+    clear = _write_clip(tmp_path / "clear.mp4", frames=10)
+    caption = "Initial alert @ 26-08-30 01:02:03"
+    clips = [
+        {
+            "camera_id": "cam06",
+            "message_id": 1,
+            "caption": caption,
+            "file_path": duplicate,
+            "label": "guard",
+            "startup_state": "duplicate",
+        },
+        {
+            "camera_id": "cam06",
+            "message_id": 2,
+            "caption": caption,
+            "file_path": clear,
+            "label": "guard",
+            "startup_state": None,
+        },
+    ]
+
+    assert _prefer_longest_per_event(clips)[0]["message_id"] == 2
+
+
+def test_resolve_explicit_duplicate_id_loads_and_prefers_clear_sibling(tmp_path):
+    duplicate = _write_clip(tmp_path / "duplicate.mp4", frames=10)
+    clear = _write_clip(tmp_path / "clear.mp4", frames=10)
+    conn = db.connect(tmp_path / "test.db")
+    for message_id, caption, path in (
+        (1, "Initial alert @ 26-08-30 01:02:03", duplicate),
+        (2, "Motion stopped @ 26-08-30 01:02:03", clear),
+    ):
+        db.upsert_clip(
+            conn,
+            channel_id="chan",
+            message_id=message_id,
+            camera_id="cam06",
+            timestamp="2026-08-30T01:02:03Z",
+            caption=caption,
+            file_path=path,
+            source="backfill",
+        )
+    db.upsert_label(
+        conn,
+        channel_id="chan",
+        message_id=1,
+        label="guard",
+        startup_state="duplicate",
+    )
+    db.upsert_label(conn, channel_id="chan", message_id=2, label="guard")
+    conn.commit()
+    args = SimpleNamespace(
+        clip=None,
+        camera=None,
+        message_id=[1],
+        message_ids_file=None,
+        label=[],
+        limit=None,
+    )
+
+    result = render_debug._resolve_clips(args, conn)
+
+    assert [row["message_id"] for row in result] == [2]
 
 
 def test_prefer_longest_per_event_leaves_unrelated_clips_alone(tmp_path):

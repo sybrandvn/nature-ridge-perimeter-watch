@@ -1007,6 +1007,10 @@ def render_clip(
                         f"{features.get('warmup_dynamic_outside_fraction', 0.0):.2f}",
                     ),
                     (
+                        "warmup inside bottom-left",
+                        f"{features.get('warmup_dynamic_inside_bottom_left_fraction', 0.0):.2f}",
+                    ),
+                    (
                         "rect B/W artifact evidence",
                         f"{features.get('rectangular_black_white_balance', 0.0):.3f}"
                         + (
@@ -1091,9 +1095,17 @@ def _prefer_longest_per_event(clips: list[dict]) -> list[dict]:
         if existing is None:
             best_by_key[key] = clip
             result.append(clip)
-        elif _clip_duration_seconds(clip["file_path"]) > _clip_duration_seconds(
-            existing["file_path"]
-        ):
+        else:
+            clip_duration = _clip_duration_seconds(clip["file_path"])
+            existing_duration = _clip_duration_seconds(existing["file_path"])
+            durations_tied = abs(clip_duration - existing_duration) <= 0.05
+            clip_clear = clip.get("startup_state") not in ("blank", "duplicate")
+            existing_clear = existing.get("startup_state") not in ("blank", "duplicate")
+            replace = clip_duration > existing_duration + 0.05 or (
+                durations_tied and clip_clear and not existing_clear
+            )
+            if not replace:
+                continue
             result[result.index(existing)] = clip
             best_by_key[key] = clip
     return result
@@ -1159,6 +1171,27 @@ def _resolve_clips(args, conn) -> list[dict]:
         }
         for row in db.iter_clips(conn, camera_id=args.camera):
             if row["message_id"] in message_ids:
+                take(row, labels.get(row["message_id"], ""))
+
+    # An explicit startup message id is only an event pointer, not a request
+    # to render that inferior file literally. Pull every file-backed sibling
+    # for the selected event before collapsing, so the representative policy
+    # can choose the clear/complete clip even when only the duplicate id was
+    # present in a queue file (cam01/9097 -> 9098 is the motivating case).
+    selected_event_keys = {
+        key
+        for clip in selected
+        if (key := _event_key(clip["camera_id"], clip.get("caption"))) is not None
+    }
+    if selected_event_keys:
+        labels = {
+            mid: lab
+            for mid, lab in conn.execute("SELECT message_id, label FROM labels")
+            if lab
+        }
+        for row in db.iter_clips(conn, camera_id=args.camera):
+            key = _event_key(row["camera_id"], row["caption"])
+            if key in selected_event_keys:
                 take(row, labels.get(row["message_id"], ""))
 
     selected = _prefer_longest_per_event(selected)

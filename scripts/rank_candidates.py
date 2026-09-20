@@ -419,9 +419,17 @@ def prefer_longest_per_event(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         if existing is None:
             best_by_key[key] = row
             result.append(row)
-        elif clip_duration_seconds(row.get("file_path") or "") > clip_duration_seconds(
-            existing.get("file_path") or ""
-        ):
+        else:
+            row_duration = clip_duration_seconds(row.get("file_path") or "")
+            existing_duration = clip_duration_seconds(existing.get("file_path") or "")
+            durations_tied = abs(row_duration - existing_duration) <= 0.05
+            row_clear = row.get("startup_state") not in ("blank", "duplicate")
+            existing_clear = existing.get("startup_state") not in ("blank", "duplicate")
+            replace = row_duration > existing_duration + 0.05 or (
+                durations_tied and row_clear and not existing_clear
+            )
+            if not replace:
+                continue
             result[result.index(existing)] = row
             best_by_key[key] = row
     return result

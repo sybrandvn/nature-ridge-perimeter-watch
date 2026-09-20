@@ -188,6 +188,29 @@ def _write_video(path: Path, num_frames: int, fps: float = 5.0) -> str:
     return str(path)
 
 
+def test_prefer_longest_per_event_tie_prefers_clear_over_duplicate(monkeypatch):
+    caption = "Cam Alert: (Initial) MOTIONVIEWER 1 @ 01-01-26 00:00:00"
+    rows = [
+        {
+            "camera_id": "cam01",
+            "message_id": 1,
+            "caption": caption,
+            "file_path": "duplicate.mp4",
+            "startup_state": "duplicate",
+        },
+        {
+            "camera_id": "cam01",
+            "message_id": 2,
+            "caption": caption,
+            "file_path": "clear.mp4",
+            "startup_state": None,
+        },
+    ]
+    monkeypatch.setattr(rc, "clip_duration_seconds", lambda _path: 1.0)
+
+    assert rc.prefer_longest_per_event(rows)[0]["message_id"] == 2
+
+
 def test_rank_and_write_drops_sub_1s_clip_with_an_event_sibling(tmp_path: Path):
     short_path = _write_video(tmp_path / "short.mp4", num_frames=2)  # 0.4s @ 5fps
     long_path = _write_video(tmp_path / "long.mp4", num_frames=10)  # 2.0s @ 5fps

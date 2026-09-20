@@ -72,13 +72,15 @@ but do not promote the existing backtest or debug scripts into the service.
 ## Current state
 
 - Detector review and production work are committed logically on `main`.
-- `EXTRACTOR_VERSION` is `motion-features-v7`.
-- Ruff is clean and the full suite is **839 passing tests** at handoff commit `a1f0857`; rerun both
+- `EXTRACTOR_VERSION` is `motion-features-v8` (2026-09-20: added
+  `warmup_dynamic_inside_bottom_left_fraction`).
+- Ruff is clean and the full suite is **851 passing tests** as of 2026-09-20; rerun both
   before changing behavior because the count grows with each layer.
-- Cold labelled backtest plus final classifier replay: **708 clips**, TP 32 / FP 24 /
-  FN 15 / TN 637, precision 0.571, recall 0.681, F1 0.621 (unknowns counted negative).
-- Protected-event regression: all 5 incident and 20 animal events pass with all 49
-  protected sibling clips present and no exception.
+- Fresh labelled extraction plus final classifier replay: **817 clips**, TP 23 / FP 29 /
+  FN 25 / TN 740, precision 0.442, recall 0.479, F1 0.460 (unknowns counted negative).
+  This is the current, expanded ground-truth corpus and is not directly comparable to the
+  older 708-clip snapshot.
+- Protected-event regression remains green for all 5 incident and 20 animal events.
 - cam12/9162 remains `animal_candidate`: it is labelled `unknown`, but the user's
   review says it may contain a small animal as well as a camera artifact.
 - Telegram and Docker production paths are implemented as summarized above. BotFather setup is

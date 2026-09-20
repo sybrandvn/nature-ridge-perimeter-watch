@@ -2831,6 +2831,43 @@ the detail:
 
 ## Conventions
 
+### 2026-09-20 deep-night and flashlight follow-up
+
+- A fresh deep-night search excluded daylight and a full 60-minute margin on
+  both sides of dawn/dusk, excluded any event already labelled or previously
+  queued, selected the longest file-backed sibling, and rescored 103 balanced
+  events with the current extractor. The current classifier rejected 95 as
+  guard and one as environment. Visual review of the seven survivors found
+  flashlight/illumination patterns rather than a credible animal, neighbour,
+  or incident; they remain unlabelled in
+  `data/reports/deep_night_outside_review_2026-09-20.message_ids` for human
+  confirmation.
+- The full-sibling audit showed four of eight reported flashlight cases were
+  already caught when the representative clip was scored. Two more
+  (cam02/10256 and cam04/18264) had `post_flash_red_shift` 0.207 and 0.190 but
+  lost to the earlier blob-count environment rule. A new guard rule at >0.12
+  recovers both. On the current labelled corpus it matches 36 guards and no
+  animal, incident, neighbour, resident, unknown, or environment clips (the
+  highest environment value is 0.116). The incident regression remains green.
+- cam05/9823 is a mixed spider-web/guard clip and stays safely suppressed as
+  environment; cam13/5502 has no reliable aggregate flashlight signal and is
+  intentionally not forced through a weaker heuristic.
+- Eight user-narrated guards that leave low/left during IR warmup motivated a
+  measured consecutive-frame geometry feature,
+  `warmup_dynamic_inside_bottom_left_fraction`. With dynamic motion in >=80%
+  of warmup pairs, >=80% classifiable, <=30% outside, and >=60% low/left
+  inside, the new `warmup_bottom_left_exit` rule recovers 33 additional guard
+  clips across the fresh 817-clip labelled corpus. It changes zero labelled
+  animal, incident, neighbour, or resident clips; four environment and one
+  unknown clip also move to guard suppression, including one prior
+  environment-to-incident leak.
+- `EXTRACTOR_VERSION` is now `motion-features-v8`, so cached v7 feature maps
+  cannot silently omit the new warmup geometry input.
+- Review/debug event collapsing now treats durations within 0.05 seconds as a
+  tie and prefers a clear sibling over one marked `blank` or `duplicate`.
+  This fixes equal-duration pairs such as cam01/9097-9098 without allowing a
+  materially shorter clip to displace the real longest representative.
+
 - `uv` for everything: `uv run ruff check . --fix && uv run pytest -q` after every module change
   and before every commit.
 - Commit logically per change, stay on `feat/phase1-finalisation`, never auto-merge.

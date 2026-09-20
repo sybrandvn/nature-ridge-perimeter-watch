@@ -121,6 +121,93 @@ async def test_initial_and_complete_resolve_to_urgent_sibling_and_send_video(tmp
     assert conn.execute("SELECT status FROM live_deliveries").fetchone()[0] == "delivered"
 
 
+async def test_startup_incident_warns_early_then_reports_likely_guard(tmp_path):
+    conn, watcher, bot = _runtime(
+        tmp_path,
+        [("incident_candidate", "outside_no_colour"), ("guard_candidate", "green_light")],
+    )
+    suffix = "Camera 1 @ 19-09-26 20:00:00"
+
+    await asyncio.wait_for(watcher.handle_message(_message(1, f"(Initial) {suffix}")), 5)
+    event = conn.execute("SELECT * FROM live_events").fetchone()
+    assert event["status"] == "pending"
+    first = bot.send_video.await_args_list[0].kwargs
+    assert "Possible incident" in first["caption"]
+    assert "unconfirmed evidence" in first["caption"]
+
+    await asyncio.wait_for(watcher.handle_message(_message(2, f"(Stopped) {suffix}")), 5)
+    event = conn.execute("SELECT * FROM live_events").fetchone()
+    assert event["final_category"] == "incident_candidate"
+    assert event["resolution_state"] == "likely_resolved"
+    deliveries = list(
+        conn.execute("SELECT * FROM live_deliveries ORDER BY notification_kind")
+    )
+    assert {row["notification_kind"] for row in deliveries} == {
+        "preliminary",
+        "resolution",
+    }
+    assert all(row["status"] == "delivered" for row in deliveries)
+    second = bot.send_video.await_args_list[1].kwargs
+    assert "likely guard activity" in second["caption"]
+    assert second["video"].name.endswith("/2.mp4")
+
+
+async def test_startup_incident_with_environment_completion_requests_review(tmp_path):
+    conn, watcher, bot = _runtime(
+        tmp_path,
+        [
+            ("incident_candidate", "outside_no_colour"),
+            ("environment_candidate", "outside_vegetation"),
+        ],
+    )
+    suffix = "Camera 1 @ 19-09-26 20:00:00"
+    await asyncio.wait_for(watcher.handle_message(_message(1, f"(Initial) {suffix}")), 5)
+    await asyncio.wait_for(watcher.handle_message(_message(2, f"(Stopped) {suffix}")), 5)
+
+    event = conn.execute("SELECT * FROM live_events").fetchone()
+    assert event["resolution_state"] == "conflicting"
+    caption = bot.send_video.await_args_list[1].kwargs["caption"]
+    assert "conflicting evidence" in caption
+    assert "has not been cleared" in caption
+
+
+async def test_startup_incident_timeout_is_reported_as_unconfirmed(tmp_path):
+    conn, watcher, bot = _runtime(
+        tmp_path, [("incident_candidate", "outside_no_colour")]
+    )
+    await asyncio.wait_for(
+        watcher.handle_message(_message(1, "(Initial) Camera 1 @ 19-09-26 20:00:00")), 5
+    )
+    watcher.now = lambda: NOW.replace(minute=6)
+    await watcher.tick()
+
+    event = conn.execute("SELECT * FROM live_events").fetchone()
+    assert event["resolution_state"] == "unconfirmed"
+    assert "completed sibling was not received" in bot.send_video.await_args_list[1].kwargs[
+        "caption"
+    ]
+
+
+async def test_late_completed_guard_reopens_unconfirmed_incident(tmp_path):
+    conn, watcher, bot = _runtime(
+        tmp_path,
+        [("incident_candidate", "outside_no_colour"), ("guard_candidate", "green_light")],
+    )
+    suffix = "Camera 1 @ 19-09-26 20:00:00"
+    await asyncio.wait_for(watcher.handle_message(_message(1, f"(Initial) {suffix}")), 5)
+
+    watcher.now = lambda: NOW.replace(minute=6)
+    await watcher.tick()
+    assert conn.execute("SELECT resolution_state FROM live_events").fetchone()[0] == "unconfirmed"
+
+    await asyncio.wait_for(watcher.handle_message(_message(2, f"(Stopped) {suffix}")), 5)
+    event = conn.execute("SELECT * FROM live_events").fetchone()
+    assert event["status"] == "finalized"
+    assert event["resolution_state"] == "likely_resolved"
+    assert len(bot.send_video.await_args_list) == 3
+    assert "likely guard activity" in bot.send_video.await_args_list[-1].kwargs["caption"]
+
+
 async def test_duplicate_message_is_not_downloaded_or_analyzed_twice(tmp_path):
     analyses = [("guard_candidate", "green_light")]
     conn, watcher, bot = _runtime(tmp_path, analyses)

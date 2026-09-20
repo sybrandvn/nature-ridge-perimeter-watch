@@ -84,11 +84,12 @@ irreplaceable source clips before upgrades. Rebuild with `docker compose --profi
 --pull toolbox`; the bind-mounted data survives image replacement. Stop active writers before a
 filesystem-level SQLite copy, or use SQLite's backup API.
 
-Before the first watcher start on an existing schema-v7 database, run the additive migration, then
-start the default service:
+Before the first watcher start on an existing schema-v7 database, run both additive migrations,
+then start the default service:
 
 ```bash
 docker compose --profile tools run --rm --build toolbox python -m scripts.migrate_schema_v8
+docker compose --profile tools run --rm --build toolbox python -m scripts.migrate_schema_v9
 docker compose up -d --build watcher
 docker compose ps
 docker compose logs -f watcher
@@ -98,8 +99,11 @@ docker compose logs -f watcher
 storage, and its heartbeat are healthy. `toolbox` and `session-bootstrap` run only through their
 profiles. For an upgrade, stop `watcher`, back up SQLite and the session, rebuild, run any new
 explicit migration with `toolbox`, and start `watcher` again. Pending events and known failed
-deliveries resume. A delivery interrupted after its external call began is marked `ambiguous` for
-manual review so a restart cannot post a duplicate.
+deliveries resume. Schema v9 adds staged preliminary, final, and resolution deliveries plus the
+event resolution state. A startup incident can therefore produce an early warning, a confirmation,
+or a clearly marked conflicting/likely-resolved update without replacing the original evidence. A
+delivery interrupted after its external call began is marked `ambiguous` for manual review so a
+restart cannot post a duplicate.
 
 The default 300-second Initial-sibling window is measured from the local corpus: 8,268 of 8,274
 paired events completed within it, and 99.9% completed within 286 seconds. Stopped/Timeout clips

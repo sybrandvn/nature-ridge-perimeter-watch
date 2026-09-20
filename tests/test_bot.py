@@ -402,6 +402,59 @@ async def test_history_groups_siblings_and_event_sends_representative_video(tmp_
     assert video_button.text == "▶ 2024-03-16 00:50 · cam01"
 
 
+def test_history_keeps_both_live_siblings_and_resolution_details(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    for message_id, phase, category, timestamp in (
+        (10, "initial", "incident_candidate", "2026-09-19T18:00:00Z"),
+        (11, "complete", "guard_candidate", "2026-09-19T18:05:00Z"),
+    ):
+        path = tmp_path / f"live-{message_id}.mp4"
+        path.write_bytes(b"video")
+        db.upsert_clip(
+            conn,
+            channel_id="source",
+            message_id=message_id,
+            camera_id="cam01",
+            timestamp=timestamp,
+            caption=f"({phase.title()}) Camera 1 @ 19-09-26 20:00:00",
+            file_path=str(path),
+            source="live",
+        )
+        live_state.add_analyzed_clip(
+            conn,
+            event_key="cam01|2026-09-19T18:00:00Z",
+            camera_id="cam01",
+            deadline_at=datetime.fromisoformat(timestamp.replace("Z", "+00:00")),
+            channel_id="source",
+            message_id=message_id,
+            phase=phase,
+            category=category,
+            reason="reason",
+            blinding_foreground=False,
+            features=None,
+        )
+    live_state.finalize_event(
+        conn,
+        event_key="cam01|2026-09-19T18:00:00Z",
+        category="incident_candidate",
+        reason="reason",
+        representative_channel_id="source",
+        representative_message_id=10,
+        notification_channel_id="source",
+        notification_message_id=11,
+        resolution_state="likely_resolved",
+        transports=(),
+        now=datetime(2026, 9, 19, 18, 5, tzinfo=UTC),
+    )
+
+    events = queries.category_events("incident")
+    assert len(events) == 1
+    assert events[0].sibling_count == 2
+    assert events[0].resolution_state == "likely_resolved"
+    assert events[0].initial_category == "incident_candidate"
+    assert events[0].complete_category == "guard_candidate"
+
+
 async def test_sent_video_offers_on_demand_debug_view(tmp_path):
     conn, _config, _cameras, queries = _setup(tmp_path)
     source = tmp_path / "42.mp4"

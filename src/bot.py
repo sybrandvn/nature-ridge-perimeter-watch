@@ -37,6 +37,9 @@ class HistoryEvent:
     category: str
     clip: MediaClip
     sibling_count: int
+    resolution_state: str | None = None
+    initial_category: str | None = None
+    complete_category: str | None = None
 
 
 def _parse_hhmm(value: str) -> time:
@@ -149,15 +152,15 @@ class BotQueries:
             self.conn.execute(
                 """
                 WITH matching AS (
-                    SELECT c.channel_id, c.message_id, c.camera_id, c.timestamp, c.file_path,
-                           c.caption
-                    FROM live_events e JOIN clips c
-                      ON c.channel_id = e.representative_channel_id
-                     AND c.message_id = e.representative_message_id
+                      SELECT lec.event_key, c.channel_id, c.message_id, c.camera_id,
+                          c.timestamp, c.file_path, c.caption
+                      FROM live_events e JOIN live_event_clips lec USING (event_key)
+                      JOIN clips c
+                     ON c.channel_id = lec.channel_id AND c.message_id = lec.message_id
                     WHERE e.status = 'finalized' AND e.final_category = ?
                     UNION
-                    SELECT c.channel_id, c.message_id, c.camera_id, c.timestamp, c.file_path,
-                           c.caption
+                      SELECT NULL AS event_key, c.channel_id, c.message_id, c.camera_id,
+                          c.timestamp, c.file_path, c.caption
                     FROM labels l JOIN clips c
                       ON c.channel_id = l.channel_id AND c.message_id = l.message_id
                     WHERE l.label = ?
@@ -185,9 +188,9 @@ class BotQueries:
     def category_events(self, category: str) -> list[HistoryEvent]:
         groups: dict[str, list[sqlite3.Row]] = {}
         for row in self._category_rows(category):
-            key = message_event_key(
+            key = str(row["event_key"] or message_event_key(
                 str(row["camera_id"]), row["caption"], int(row["message_id"])
-            )
+            ))
             groups.setdefault(key, []).append(row)
         events = []
         for rows in groups.values():
@@ -199,11 +202,23 @@ class BotQueries:
                     int(row["message_id"]),
                 ),
             )
+            resolution = self._resolution_details(
+                str(representative["channel_id"]), int(representative["message_id"])
+            )
             events.append(
                 HistoryEvent(
                     category=category,
                     clip=self._media_clip(representative),
                     sibling_count=len(rows),
+                    resolution_state=(
+                        None if resolution is None else str(resolution["resolution_state"])
+                    ),
+                    initial_category=(
+                        None if resolution is None else resolution["initial_category"]
+                    ),
+                    complete_category=(
+                        None if resolution is None else resolution["complete_category"]
+                    ),
                 )
             )
         return sorted(
@@ -211,6 +226,25 @@ class BotQueries:
             key=lambda event: (event.clip.timestamp, event.clip.message_id),
             reverse=True,
         )
+
+    def _resolution_details(
+        self, channel_id: str, message_id: int
+    ) -> sqlite3.Row | None:
+        return self.conn.execute(
+            """
+            SELECT e.resolution_state,
+                   (SELECT category FROM live_event_clips initial
+                    WHERE initial.event_key = e.event_key AND initial.phase = 'initial'
+                    ORDER BY initial.message_id DESC LIMIT 1) AS initial_category,
+                   (SELECT category FROM live_event_clips complete
+                    WHERE complete.event_key = e.event_key AND complete.phase = 'complete'
+                    ORDER BY complete.message_id DESC LIMIT 1) AS complete_category
+            FROM live_events e JOIN live_event_clips selected USING (event_key)
+            WHERE selected.channel_id = ? AND selected.message_id = ?
+            LIMIT 1
+            """,
+            (channel_id, message_id),
+        ).fetchone()
 
     def history(self, category: str, *, page: int, page_size: int = 8) -> str:
         events = self.category_events(category)
@@ -222,9 +256,14 @@ class BotQueries:
         lines = [f"{category.title()} history — page {page}/{pages} ({len(events)} events)"]
         for event in selected:
             sibling_text = f", {event.sibling_count} clips" if event.sibling_count > 1 else ""
+            resolution_text = (
+                f", {event.resolution_state.replace('_', ' ')}"
+                if event.resolution_state not in (None, "confirmed")
+                else ""
+            )
             lines.append(
                 f"{event.clip.message_id} · {_local_timestamp(event.clip.timestamp)} · "
-                f"{event.clip.camera_id}{sibling_text}"
+                f"{event.clip.camera_id}{sibling_text}{resolution_text}"
             )
         lines.append("Tap a video button below, or send /event <id>.")
         if pages > 1:
@@ -1112,11 +1151,18 @@ class QueryBot:
         if path is None:
             await message.reply_text(f"Event {message_id} is unavailable at its source.")
             return
+        heading = f"{event.category.title()} history event {message_id}"
+        if event.resolution_state not in (None, "confirmed"):
+            heading += f"\nResolution: {event.resolution_state.replace('_', ' ')}"
+            if event.initial_category is not None:
+                heading += f"\nStartup: {event.initial_category.removesuffix('_candidate')}"
+            if event.complete_category is not None:
+                heading += f"\nCompleted: {event.complete_category.removesuffix('_candidate')}"
         await self._send_video(
             message,
             event.clip,
             path,
-            heading=f"{event.category.title()} history event {message_id}",
+            heading=heading,
         )
 
 

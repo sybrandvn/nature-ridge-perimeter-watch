@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from src import db, live_state
-from src.classify import classify_event
 from src.clip_analysis import ClipAnalysis, analyze_clip
 from src.config import AppConfig, CamerasConfig, ThresholdsConfig, resolve_channel_ref
 from src.event_keys import event_phase, message_event_key
+from src.event_resolution import URGENT_CATEGORIES, resolve_event
 from src.media_download import download_media_atomic, is_video_message
 from src.message_parsing import parse_message
 from src.ntfy_alert import send_ntfy_alert
@@ -38,13 +38,55 @@ def _message_timestamp(message: Any) -> tuple[datetime, str]:
 
 
 def format_alert(row: sqlite3.Row) -> str:
+    category = str(row["category"]).removesuffix("_candidate").replace("_", " ")
+    initial = str(row["initial_category"] or "not recorded").removesuffix("_candidate")
+    complete = str(row["complete_category"] or "not received").removesuffix("_candidate")
+    kind = str(row["notification_kind"])
+    state = str(row["resolution_state"])
+
+    if kind == "preliminary":
+        heading = f"Possible {category} — startup clip"
+        status = "Awaiting the completed clip; this is early, unconfirmed evidence."
+    elif state == "confirmed" and kind == "resolution":
+        heading = f"Update: {category} evidence confirmed"
+        status = f"Startup: {initial}; completed clip: {complete}."
+    elif state == "likely_resolved":
+        heading = "Update: likely guard activity"
+        status = (
+            f"Startup: {initial}; completed clip: {complete}. "
+            "The original urgent evidence remains recorded for review."
+        )
+    elif state == "conflicting":
+        heading = "Update: conflicting evidence — review required"
+        status = f"Startup: {initial}; completed clip: {complete}. This has not been cleared."
+    elif state == "unconfirmed":
+        heading = f"Unconfirmed {category}"
+        status = "The completed sibling was not received before the wait expired."
+    else:
+        heading = f"Perimeter alert: {category}"
+        status = "Completed or standalone evidence."
+
     return (
-        f"Perimeter alert: {row['final_category']}\n"
+        f"{heading}\n"
+        f"Status: {status}\n"
         f"Camera: {row['camera_id']}\n"
         f"Time: {row['timestamp']}\n"
-        f"Reason: {row['final_reason']}\n"
+        f"Reason: {row['evidence_reason'] or row['reason']}\n"
         f"Event: {row['event_key']}"
     )
+
+
+def alert_title(row: sqlite3.Row) -> str:
+    state = str(row["resolution_state"])
+    if str(row["notification_kind"]) == "preliminary":
+        return f"Possible perimeter {str(row['category']).removesuffix('_candidate')}"
+    if state == "likely_resolved":
+        return "Perimeter update: likely guard"
+    if state == "conflicting":
+        return "Perimeter update: review required"
+    if state == "unconfirmed":
+        return "Perimeter update: unconfirmed"
+    return f"Perimeter alert: {str(row['category']).removesuffix('_candidate')}"
 
 
 class LiveWatcher:
@@ -271,6 +313,17 @@ class LiveWatcher:
             blinding_foreground=analysis.blinding_foreground,
             features=analysis.features,
         )
+        if phase == "initial" and analysis.classification.category in URGENT_CATEGORIES:
+            live_state.enqueue_preliminary(
+                self.conn,
+                event_key=key,
+                category=analysis.classification.category,
+                reason=analysis.classification.reason,
+                representative_channel_id=self.channel_id,
+                representative_message_id=message_id,
+                transports=self._transports(analysis.classification.category),
+                now=self.now(),
+            )
         live_state.finish_message(
             self.conn,
             self.channel_id,
@@ -317,27 +370,31 @@ class LiveWatcher:
             clips = live_state.event_clips(self.conn, key)
             if not clips:
                 continue
-            category = classify_event(row["category"] for row in clips)
-            matches = [row for row in clips if row["category"] == category]
-            representative = max(
-                matches,
-                key=lambda row: (row["phase"] == "complete", row["message_id"]),
-            )
-            reason = str(representative["reason"])
+            resolution = resolve_event(clips)
+            representative = resolution.representative
+            notification = resolution.notification_representative
             if live_state.finalize_event(
                 self.conn,
                 event_key=key,
-                category=category,
-                reason=reason,
+                category=resolution.category,
+                reason=resolution.reason,
                 representative_channel_id=str(representative["channel_id"]),
                 representative_message_id=int(representative["message_id"]),
-                transports=self._transports(category),
+                notification_channel_id=str(notification["channel_id"]),
+                notification_message_id=int(notification["message_id"]),
+                resolution_state=resolution.resolution_state,
+                transports=self._transports(resolution.category),
                 now=now,
             ):
                 count += 1
                 logger.info(
                     "live_event_finalized",
-                    extra={"event_key": key, "category": category, "clip_count": len(clips)},
+                    extra={
+                        "event_key": key,
+                        "category": resolution.category,
+                        "resolution_state": resolution.resolution_state,
+                        "clip_count": len(clips),
+                    },
                 )
         return count
 
@@ -345,8 +402,10 @@ class LiveWatcher:
         delivered = 0
         now = self.now()
         for row in live_state.due_deliveries(self.conn, now):
-            key, transport = str(row["event_key"]), str(row["transport"])
-            if not live_state.claim_delivery(self.conn, key, transport):
+            key = str(row["event_key"])
+            transport = str(row["transport"])
+            kind = str(row["notification_kind"])
+            if not live_state.claim_delivery(self.conn, key, transport, kind):
                 continue
             try:
                 message = format_alert(row)
@@ -364,8 +423,10 @@ class LiveWatcher:
                         message,
                         base_url=str(self.config.ntfy_base_url),
                         topic=str(self.config.ntfy_topic),
-                        priority=self.config.ntfy_priority,
-                        title=f"Perimeter alert: {row['camera_id']}",
+                        priority=(
+                            "default" if kind == "resolution" else self.config.ntfy_priority
+                        ),
+                        title=alert_title(row),
                         token=self.config.ntfy_token,
                         session=self.ntfy_session,
                     )
@@ -381,6 +442,7 @@ class LiveWatcher:
                     self.conn,
                     key,
                     transport,
+                    kind,
                     delivered=False,
                     next_attempt_at=now + timedelta(seconds=delay),
                     error=f"{type(exc).__name__}: {exc}",
@@ -393,6 +455,7 @@ class LiveWatcher:
                     self.conn,
                     key,
                     transport,
+                    kind,
                     delivered=True,
                     next_attempt_at=now,
                 )

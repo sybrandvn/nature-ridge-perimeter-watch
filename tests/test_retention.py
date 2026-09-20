@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from src import db, live_state
-from src.retention import clean_local_media
+from src.retention import clean_debug_cache, clean_local_media
 
 
 def _clip(conn, root, *, message_id, camera="cam01", timestamp, label=None):
@@ -110,3 +110,35 @@ def test_retention_refuses_to_delete_outside_data_root(tmp_path):
     assert result.unsafe == 2
     assert outside.exists()
     assert outside_new.exists()
+
+
+def test_debug_retention_keeps_urgent_and_latest_renders(tmp_path):
+    conn = db.connect(tmp_path / "db.sqlite")
+    _clip(conn, tmp_path, message_id=1, timestamp="2026-09-19T18:00:00Z")
+    _clip(
+        conn,
+        tmp_path,
+        message_id=2,
+        timestamp="2026-09-19T18:10:00Z",
+        label="animal",
+    )
+    _clip(conn, tmp_path, message_id=3, timestamp="2026-09-19T18:20:00Z")
+    debug = tmp_path / "debug" / "cam01"
+    debug.mkdir(parents=True)
+    old = debug / "1-aaaaaaaaaaaa-r1.mp4"
+    animal_old = debug / "2-aaaaaaaaaaaa-r1.mp4"
+    animal_new = debug / "2-bbbbbbbbbbbb-r2.mp4"
+    latest = debug / "3-aaaaaaaaaaaa-r1.mp4"
+    unknown = debug / "operator-copy.mp4"
+    for path in (old, animal_old, animal_new, latest, unknown):
+        path.write_bytes(b"debug")
+    animal_old.touch()
+    animal_new.touch()
+
+    result = clean_debug_cache(conn, debug_root=tmp_path / "debug")
+
+    assert result.scanned == 4
+    assert result.kept == 2
+    assert result.deleted == 2
+    assert not old.exists() and not animal_old.exists()
+    assert animal_new.exists() and latest.exists() and unknown.exists()

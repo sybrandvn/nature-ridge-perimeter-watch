@@ -79,6 +79,9 @@ def render_bot_debug_video(
         temporary.unlink(missing_ok=True)
         return None
     Path(result).replace(destination)
+    for old in destination.parent.glob(f"{clip.message_id}-*-r*.mp4"):
+        if old != destination:
+            old.unlink()
     return destination
 
 

@@ -19,7 +19,7 @@ from src.media_download import download_media_atomic, is_video_message
 from src.message_parsing import parse_message
 from src.ntfy_alert import send_ntfy_alert
 from src.reference_bg import load_manifest
-from src.retention import RetentionResult, clean_local_media
+from src.retention import RetentionResult, clean_debug_cache, clean_local_media
 from src.telegram_alert import send_telegram_alert
 
 logger = logging.getLogger("live_watcher")
@@ -97,10 +97,13 @@ class LiveWatcher:
         if not force and self._next_retention_at is not None and now < self._next_retention_at:
             return None
         result = clean_local_media(self.conn, data_root=self.db_path.parent)
+        debug_result = clean_debug_cache(
+            self.conn, debug_root=self.db_path.parent / "debug"
+        )
         self._next_retention_at = now + timedelta(
             seconds=self.config.media_retention_interval_seconds
         )
-        if result.deleted or result.missing or result.unsafe:
+        if result.deleted or result.missing or result.unsafe or debug_result.deleted:
             logger.info(
                 "live_media_retention",
                 extra={
@@ -109,6 +112,9 @@ class LiveWatcher:
                     "deleted": result.deleted,
                     "missing": result.missing,
                     "unsafe": result.unsafe,
+                    "debug_scanned": debug_result.scanned,
+                    "debug_kept": debug_result.kept,
+                    "debug_deleted": debug_result.deleted,
                 },
             )
         return result
@@ -339,6 +345,7 @@ class LiveWatcher:
                         bot_token=str(self.config.telegram_bot_token),
                         chat_id=str(self.config.alert_channel_id),
                         video_path=row["file_path"],
+                        debug_message_id=int(row["representative_message_id"]),
                         bot=self.telegram_bot,
                     )
                 elif transport == "ntfy":

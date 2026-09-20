@@ -19,6 +19,9 @@ was completed.
   `/incidents`, paged `/history`, direct `/event <id>`, the approximate `/map`, and
   `/last <camera_id>`; missing media is restored from the source channel. `/patrols` is enforced as
   trustee only in its handler. Bot registration and allowlist values remain deployment inputs.
+  `/menu` and `/start` provide a four-section inline interface with camera buttons, paged event
+  buttons, and back navigation; the visible slash list is intentionally limited to five entry
+  points while direct command handlers remain available.
 - `src/retention.py` keeps urgent evidence, pending events, and one newest local video per camera.
   When explicitly enabled, other managed videos are removed hourly while metadata remains
   available for live retrieval. It is opt-in via `MEDIA_RETENTION_ENABLED=true` and defaults off

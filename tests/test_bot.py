@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from src import db, live_state
-from src.bot import BotQueries, QueryBot, operating_period
+from src.bot import BotQueries, QueryBot, build_query_bot, operating_period
 from src.config import Camera, CamerasConfig, CameraZone, load_app_config_from_mapping
 
 
@@ -392,3 +392,35 @@ async def test_history_validates_category_and_event_id(tmp_path):
     message.reply_text.assert_awaited_once_with(
         "No animal or incident event is listed with ID 999."
     )
+
+
+async def test_grouped_menu_navigates_sections(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+    await controller.menu(update, None)
+    kwargs = message.reply_text.await_args.kwargs
+    labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
+    assert labels == ["Monitoring", "Events", "System", "Site", "About"]
+
+    query = SimpleNamespace(
+        data="menu:system",
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    callback_update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=11),
+        effective_message=message,
+        callback_query=query,
+    )
+    await controller.menu_callback(callback_update, None)
+    query.answer.assert_awaited_once()
+    assert query.edit_message_text.await_args.kwargs["text"] == "Alarm-system events"
+
+
+def test_visible_bot_commands_are_compact_menu_entry_points(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    application = build_query_bot(queries, "123456:example-token")
+    commands = [command.command for command in application.bot_data["commands"]]
+    assert commands == ["menu", "about", "event", "last", "history"]

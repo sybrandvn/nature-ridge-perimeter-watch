@@ -613,6 +613,161 @@ class QueryBot:
             text = getattr(self.queries, command)()
         await message.reply_text(text)
 
+    @staticmethod
+    def _keyboard(rows: list[list[tuple[str, str]]]) -> Any:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        return InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton(label, callback_data=data) for label, data in row]
+                for row in rows
+            ]
+        )
+
+    def _home_menu(self) -> tuple[str, Any]:
+        return (
+            "Nature Ridge Perimeter Watch\nChoose a section:",
+            self._keyboard(
+                [
+                    [("Monitoring", "menu:monitor"), ("Events", "menu:events")],
+                    [("System", "menu:system"), ("Site", "menu:site")],
+                    [("About", "menu:show:about")],
+                ]
+            ),
+        )
+
+    def _section_menu(self, section: str) -> tuple[str, Any]:
+        menus = {
+            "monitor": (
+                "Monitoring",
+                [
+                    [("Tonight", "menu:show:tonight"), ("Camera health", "menu:show:health")],
+                    [("Latest camera video", "menu:cameras")],
+                ],
+            ),
+            "events": (
+                "Animal and incident events",
+                [
+                    [("Animal history", "menu:history:animal:1")],
+                    [("Incident history", "menu:history:incident:1")],
+                ],
+            ),
+            "system": (
+                "Alarm-system events",
+                [
+                    [("Power", "menu:show:power"), ("Batteries", "menu:show:batteries")],
+                    [("Panel", "menu:show:panel"), ("Faults", "menu:show:faults")],
+                ],
+            ),
+            "site": (
+                "Site information",
+                [[("Camera order", "menu:show:map"), ("Patrols", "menu:show:patrols")]],
+            ),
+        }
+        title, rows = menus[section]
+        return title, self._keyboard([*rows, [("Back", "menu:home")]])
+
+    def _camera_menu(self) -> tuple[str, Any]:
+        cameras = self.queries.cameras.ordered()
+        rows = [
+            [
+                (camera.id, f"menu:last:{camera.id}")
+                for camera in cameras[index : index + 3]
+            ]
+            for index in range(0, len(cameras), 3)
+        ]
+        rows.append([("Back", "menu:monitor")])
+        return "Choose a camera for its latest video:", self._keyboard(rows)
+
+    def _history_menu(self, category: str, page: int) -> tuple[str, Any]:
+        page_size = 8
+        events = self.queries.category_events(category)
+        pages = max(1, (len(events) + page_size - 1) // page_size)
+        page = min(max(page, 1), pages)
+        selected = events[(page - 1) * page_size : page * page_size]
+        rows = [
+            [
+                (
+                    f"{event.clip.camera_id} · {event.clip.message_id}",
+                    f"menu:event:{event.clip.message_id}",
+                )
+            ]
+            for event in selected
+        ]
+        navigation = []
+        if page > 1:
+            navigation.append(("Previous", f"menu:history:{category}:{page - 1}"))
+        if page < pages:
+            navigation.append(("Next", f"menu:history:{category}:{page + 1}"))
+        if navigation:
+            rows.append(navigation)
+        rows.append([("Back", "menu:events"), ("Main menu", "menu:home")])
+        return self.queries.history(category, page=page, page_size=page_size), self._keyboard(rows)
+
+    async def menu(self, update: Any, context: Any) -> None:
+        authorized = await self._authorize(update, "menu")
+        if authorized is None:
+            return
+        message, _role = authorized
+        text, markup = self._home_menu()
+        await message.reply_text(text, reply_markup=markup)
+
+    async def start(self, update: Any, context: Any) -> None:
+        await self.menu(update, context)
+
+    async def menu_callback(self, update: Any, context: Any) -> None:
+        query = getattr(update, "callback_query", None)
+        if query is None:
+            return
+        await query.answer()
+        authorized = await self._authorize(update, "menu")
+        if authorized is None:
+            return
+        message, role = authorized
+        data = str(getattr(query, "data", ""))
+        if data == "menu:home":
+            text, markup = self._home_menu()
+        elif data in {"menu:monitor", "menu:events", "menu:system", "menu:site"}:
+            text, markup = self._section_menu(data.removeprefix("menu:"))
+        elif data == "menu:cameras":
+            text, markup = self._camera_menu()
+        elif data.startswith("menu:history:"):
+            _prefix, _history, category, raw_page = data.split(":", 3)
+            text, markup = self._history_menu(category, int(raw_page))
+        elif data.startswith("menu:event:"):
+            await self._send_history_event(message, int(data.rsplit(":", 1)[1]))
+            return
+        elif data.startswith("menu:last:"):
+            await self._send_last_camera(message, data.rsplit(":", 1)[1])
+            return
+        elif data.startswith("menu:show:"):
+            command = data.rsplit(":", 1)[1]
+            if command == "patrols" and role != "trustee":
+                await message.reply_text("Not authorized.")
+                return
+            text = (
+                self.queries.about(role)
+                if command == "about"
+                else getattr(self.queries, command)()
+            )
+            section = {
+                "about": "home",
+                "tonight": "monitor",
+                "health": "monitor",
+                "power": "system",
+                "batteries": "system",
+                "panel": "system",
+                "faults": "system",
+                "map": "site",
+                "patrols": "site",
+            }[command]
+            markup = self._keyboard(
+                [[("Back", f"menu:{section}"), ("Main menu", "menu:home")]]
+            )
+        else:
+            text, markup = self._home_menu()
+        await query.edit_message_text(text=text, reply_markup=markup)
+
     async def about(self, update: Any, context: Any) -> None:
         await self._reply(update, "about")
 
@@ -682,6 +837,9 @@ class QueryBot:
         if camera_id is None:
             await message.reply_text(f"Unknown camera: {raw_camera}")
             return
+        await self._send_last_camera(message, camera_id)
+
+    async def _send_last_camera(self, message: Any, camera_id: str) -> None:
         clip = self.queries.last_clip(camera_id)
         if clip is None:
             await message.reply_text(f"No video metadata is available for {camera_id}.")
@@ -824,6 +982,9 @@ class QueryBot:
                 "Usage: /event <id>\nFind IDs with /history animal or /history incident"
             )
             return
+        await self._send_history_event(message, message_id)
+
+    async def _send_history_event(self, message: Any, message_id: int) -> None:
         event = self.queries.history_clip(message_id)
         if event is None:
             await message.reply_text(f"No animal or incident event is listed with ID {message_id}.")
@@ -847,12 +1008,14 @@ def build_query_bot(
     media_loader: Callable[[MediaClip], Awaitable[Path | None]] | None = None,
 ) -> Any:
     from telegram import BotCommand
-    from telegram.ext import Application, CommandHandler
+    from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
     controller = QueryBot(queries, media_loader=media_loader)
     application = Application.builder().token(token).build()
     for command in (
         "about",
+        "start",
+        "menu",
         "tonight",
         "health",
         "power",
@@ -869,21 +1032,12 @@ def build_query_bot(
         "last",
     ):
         application.add_handler(CommandHandler(command, getattr(controller, command)))
+    application.add_handler(CallbackQueryHandler(controller.menu_callback, pattern=r"^menu:"))
     application.bot_data["commands"] = [
+        BotCommand("menu", "Open the grouped menu"),
         BotCommand("about", "What this system reports"),
-        BotCommand("tonight", "Tonight's event summary"),
-        BotCommand("health", "Camera health and last activity"),
-        BotCommand("power", "Power failures and restorations"),
-        BotCommand("batteries", "Battery replacement warnings"),
-        BotCommand("panel", "Panel arm and disarm history"),
-        BotCommand("faults", "Tamper and communication faults"),
-        BotCommand("animal", "Send the latest animal video"),
-        BotCommand("animals", "Send recent animal videos"),
-        BotCommand("incidents", "Send recent incident videos"),
-        BotCommand("history", "Browse animal or incident history"),
         BotCommand("event", "Send a history video by ID"),
-        BotCommand("map", "Approximate camera order"),
         BotCommand("last", "Send the latest available camera video"),
-        BotCommand("patrols", "Guard-pass candidates (trustees only)"),
+        BotCommand("history", "Browse animal or incident history"),
     ]
     return application

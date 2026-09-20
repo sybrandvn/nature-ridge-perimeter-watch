@@ -49,9 +49,6 @@ SYSTEM_FAILURE_EVENTS = frozenset(
         "panel_disarmed",
     }
 )
-SYSTEM_URGENT_EVENTS = frozenset(
-    {"power_out", "tamper", "supervision_error", "communication_failure", "panel_disarmed"}
-)
 
 
 def _message_timestamp(message: Any) -> tuple[datetime, str]:
@@ -485,10 +482,13 @@ class LiveWatcher:
                         base_url=str(self.config.ntfy_base_url),
                         topic=str(self.config.ntfy_topic),
                         priority=(
-                            "default"
-                            if kind == "resolution"
-                            or (kind == "final" and row["resolution_state"] != "confirmed")
-                            else self.config.ntfy_priority
+                            self.config.ntfy_priority
+                            if row["category"] == "incident_candidate"
+                            and (
+                                kind == "preliminary"
+                                or (kind == "final" and row["resolution_state"] == "confirmed")
+                            )
+                            else "default"
                         ),
                         title=alert_title(row),
                         token=self.config.ntfy_token,
@@ -552,11 +552,7 @@ class LiveWatcher:
                         message,
                         base_url=str(self.config.ntfy_base_url),
                         topic=str(self.config.ntfy_topic),
-                        priority=(
-                            self.config.ntfy_priority
-                            if event_type in SYSTEM_URGENT_EVENTS
-                            else "default"
-                        ),
+                        priority="default",
                         title=f"System: {SYSTEM_EVENT_LABELS.get(event_type, event_type)}",
                         token=self.config.ntfy_token,
                         session=self.ntfy_session,

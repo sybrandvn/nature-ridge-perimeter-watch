@@ -27,8 +27,8 @@ implemented and reviewed.
   `/batteries` and parameterized commands remain available through inline navigation and direct
   handlers but are omitted from Telegram's command list.
   Events has paged Animal, Incident, Resident, and Neighbour histories. All four categories are
-  delivered to the configured Telegram channel; ntfy remains animal/incident-only because its
-  configured priority is urgent.
+  delivered to the configured Telegram channel. ntfy receives animal and incident camera events,
+  with urgent priority applied only to incidents.
   The Info section contains About and Security contacts. Contact values are optional environment
   inputs (`SECURITY_COMPANY_NAME`, `SECURITY_COMPANY_PHONE`, `CONTROL_ROOM_PHONE`, and
   `ARMED_RESPONSE_PHONE`) and deliberately render as `Not configured` until supplied.
@@ -54,9 +54,9 @@ implemented and reviewed.
   reopen unconfirmed/conflicting events, and late urgent evidence also reopens likely-resolved
   events.
 - Recognized system events are proactively delivered as well as retained for bot queries. Telegram
-  receives battery, power, tamper, supervision, communication, and panel transitions. ntfy pages
-  security-impacting failures urgently and sends battery/recovery/armed updates at default
-  priority. Detector-only `blinding_foreground` findings remain an offline maintenance queue.
+  receives battery, power, tamper, supervision, communication, and panel transitions. ntfy sends
+  every system transition at default priority; only camera incidents use urgent priority.
+  Detector-only `blinding_foreground` findings remain an offline maintenance queue.
 - The resolver preserves any `animal_candidate` or `incident_candidate` sibling. The proposed
   completed-guard and longest-only overrides remain rejected because measured protected events
   lost alerts under those policies.
@@ -92,7 +92,7 @@ but do not promote the existing backtest or debug scripts into the service.
 - Detector review and production work are committed logically on `main`.
 - `EXTRACTOR_VERSION` is `motion-features-v8` (2026-09-20: added
   `warmup_dynamic_inside_bottom_left_fraction`).
-- Ruff is clean and the full suite is **871 passing tests** as of 2026-09-21; rerun both before
+- Ruff is clean and the full suite is **872 passing tests** as of 2026-09-21; rerun both before
   deployment or changing behavior because the count grows with each layer.
 - `DEBUG_RENDER_VERSION` is 2. Version 2 shares warmup observations with scoring and invalidates
   older cached overlays without changing `EXTRACTOR_VERSION` or classifier outputs.
@@ -116,9 +116,9 @@ but do not promote the existing backtest or debug scripts into the service.
   newer code intentionally refuses an older database schema.
 - The representative Telegram smoke test successfully sent cam08/7360 (animal) and cam06/21520
   (incident), including their `Debug view` buttons. Telegram has normal or silent delivery but no
-  Bot API priority level. For camera events, ntfy is configured as `urgent` and receives only
-  animal/incident alerts; the separate system outbox also sends recognized system transitions at
-  the priorities described above.
+  Bot API priority level. For camera events, ntfy receives animals at default priority and
+  incidents at its configured `urgent` priority; the separate system outbox sends every recognized
+  transition at default priority.
 - The new security contact directory is deployed but its four optional values are still blank.
   Populate them in `.env` when the user obtains the security company, control-room, and armed
   response details, then recreate the watcher so Compose reloads the environment.

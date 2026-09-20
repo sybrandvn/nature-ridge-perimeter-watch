@@ -212,6 +212,27 @@ async def test_likely_resolved_final_uses_nonurgent_ntfy_priority(tmp_path):
     assert "likely guard" in headers["Title"]
 
 
+async def test_only_incident_camera_events_use_urgent_ntfy_priority(tmp_path):
+    for name, category, expected in (
+        ("incident", "incident_candidate", "urgent"),
+        ("animal", "animal_candidate", "default"),
+    ):
+        _conn, watcher, _bot = _runtime(tmp_path / name, [(category, "reason")])
+        watcher.config = replace(
+            watcher.config,
+            ntfy_base_url="https://ntfy.example",
+            ntfy_topic="alerts",
+            ntfy_priority="urgent",
+        )
+        watcher.ntfy_session = MagicMock()
+        watcher.ntfy_session.post.return_value = MagicMock()
+
+        await asyncio.wait_for(watcher.handle_message(_message(1, "Camera 1 motion")), 5)
+
+        headers = watcher.ntfy_session.post.call_args.kwargs["headers"]
+        assert headers["Priority"] == expected
+
+
 async def test_startup_incident_with_environment_completion_requests_review(tmp_path):
     conn, watcher, bot = _runtime(
         tmp_path,
@@ -298,7 +319,7 @@ async def test_system_maintenance_message_is_stored_and_sent_to_telegram(tmp_pat
     bot.send_video.assert_not_awaited()
 
 
-async def test_system_failure_routes_to_urgent_ntfy(tmp_path):
+async def test_system_failure_routes_to_default_priority_ntfy(tmp_path):
     _conn, watcher, _bot = _runtime(tmp_path, [])
     watcher.config = replace(
         watcher.config,
@@ -317,7 +338,7 @@ async def test_system_failure_routes_to_urgent_ntfy(tmp_path):
     )
 
     headers = watcher.ntfy_session.post.call_args.kwargs["headers"]
-    assert headers["Priority"] == "urgent"
+    assert headers["Priority"] == "default"
     assert headers["Title"] == "System: Tamper detected"
 
 

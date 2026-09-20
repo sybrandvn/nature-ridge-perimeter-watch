@@ -162,12 +162,12 @@ source channel through Telethon when it is not local. Media counts are capped at
 Incoming maintenance/system notifications remain stored in `system_events`, are available via
 `/health`, `/power`, `/batteries`, `/panel`, and `/faults`, and are also sent proactively through a
 separate durable outbox. Telegram receives every recognized transition. ntfy uses urgent priority
-for power, tamper, supervision, communication, and panel-disarmed failures; battery warnings and
-all recovery/armed updates use default priority. Detector-only `blinding_foreground` maintenance
-findings remain in the offline maintenance review queue rather than paging Telegram or ntfy.
+only for incident alerts; animal and system-event notifications, including failures and recovery
+updates, use default priority. Detector-only `blinding_foreground` maintenance findings remain in
+the offline maintenance review queue rather than paging Telegram or ntfy.
 The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram
-receives all four live categories; ntfy remains restricted to urgent animal and incident alerts,
-so benign resident/neighbour observations do not trigger an urgent ntfy notification. This camera
+receives all four live categories; ntfy receives animal and incident camera events, but only
+incidents use urgent priority. Resident/neighbour observations remain Telegram-only. This camera
 routing is separate from the system-event notifications described above.
 Info contains the system description and an environment-configured security contact directory.
 Fill `SECURITY_COMPANY_NAME`, `SECURITY_COMPANY_PHONE`, `CONTROL_ROOM_PHONE`, and
@@ -216,8 +216,8 @@ docker compose --profile tools run --rm toolbox python scripts/send_test_alert.p
 ```
 
 When an alert transport is configured after events were already finalized, the restart recovery
-step creates missing delivery rows for urgent events. Existing delivered or ambiguous rows are not
-duplicated.
+step creates missing delivery rows for animal/incident camera events. Existing delivered or
+ambiguous rows are not duplicated.
 
 ## Setup and calibration workflow
 

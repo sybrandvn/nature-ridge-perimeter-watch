@@ -9,14 +9,16 @@ For a new coding agent, start with
 [docs/next_agent_handoff.md](docs/next_agent_handoff.md). It describes the current detector state,
 the measured detector behavior, completed service integration, and remaining improvement work.
 
-Two gates decide whether the rest of the pipeline gets built:
+The original development sequence used two gates before building the production pipeline:
 
 1. **Gate 1 — camera order.** The fence camera order is unknown and must be inferred from patrol
    timestamp patterns alone (`src/sequence.py`).
 2. **Gate 2 — CV feasibility.** Classical computer-vision features must actually separate
    guard/environment clips from animal/incident clips on a hand-labelled sample (`scripts/spike.py`).
 
-Either gate failing changes the plan rather than getting silently worked around.
+Both gates were resolved, and the backfill, detector, watcher, Docker service, alert delivery, and
+query bot are now implemented. The gate workflow remains below because it is the reproducible path
+for recalibrating the detector from source evidence.
 
 ## Setup
 
@@ -149,7 +151,7 @@ When an alert transport is configured after events were already finalized, the r
 step creates missing delivery rows for urgent events. Existing delivered or ambiguous rows are not
 duplicated.
 
-## Workflow
+## Setup and calibration workflow
 
 ### 1. First Telegram auth
 
@@ -342,7 +344,7 @@ the pipeline gets built.
    (earlier ML, IR/brightness handling, multi-frame reference modelling) rather than pushing on
    to Phase 1.
 
-### 5. Manual alert test (Phase 4 stub, no gate dependency)
+### 5. Manual alert transport test
 
 `src/telegram_alert.py` and `src/ntfy_alert.py` are pure, injectable-transport functions (mocked
 in tests, never touch the network there). Verify your real credentials with one test message on
@@ -353,18 +355,25 @@ uv run python scripts/send_test_alert.py
 Uses `TELEGRAM_BOT_TOKEN`/`ALERT_CHANNEL_ID` and `NTFY_BASE_URL`/`NTFY_TOPIC`/`NTFY_TOKEN` from
 `.env`; either pair is skipped (not failed) if unset.
 
-### 6. Backfill, label, and backtest (Phase 1+, after both gates pass)
+### 6. Backfill, label, backtest, and live operation
 
-Not built this round — see `docs/plan.md` for the full Phase 1-5 plan (full video backfill,
-`src/motion.py`/`src/classify.py`, the backtester and threshold-iteration loop, and the later
-trustee/security query bot).
+These paths are implemented. Use `scripts/meta_backfill.py` and `scripts/download_clips.py` for
+source history, `scripts/label.py` for review, and `scripts/backtest.py` for measured classifier
+changes. The production entry point is `python -m scripts.watch`, run by the default Compose
+`watcher` service. The role-restricted query bot runs in that same process when
+`TELEGRAM_BOT_TOKEN` and an allowlist are configured.
+
+The authoritative operating and next-work summary is `docs/next_agent_handoff.md`.
+`docs/plan.md`, `docs/handoff.md`, and the dated review documents preserve the investigation and
+decision history; their older future-tense sections are historical rather than current setup
+instructions.
 
 ## Fail-safe classification policy
 
 Bounding-box aspect ratio for a crawling person overlaps large animals — classical CV cannot
 reliably tell them apart from a short clip. So: shape/trajectory evidence may only **escalate** an
 outside alert to `outside_priority`. Nothing about blob shape is ever allowed to downgrade or
-suppress an outside alert. This must be preserved in `classify.py` when it's built.
+suppress an outside alert. The implemented classifier and event resolver preserve this policy.
 
 ## Repo layout
 
@@ -374,7 +383,7 @@ src/               reusable runtime/domain code: motion, scoring, classification
                    configuration, calibration, references, parsing, and alert transports
 scripts/           operator/offline CLIs: ingestion/backfill, labelling, backtesting,
                    review rendering, reference builds, migrations, and diagnostics
-tests/             pytest suite (unit tests only; no live Telegram/video needed)
+tests/             unit/integration suite; automated tests use fake transports and no live credentials
 docs/              current plan, handoff, capability map, and historical findings
 data/history/      source clips (local, gitignored)
 data/reference_bg/ derived production references (local, gitignored, reproducible)
@@ -385,12 +394,11 @@ data/logs/         retained operational logs (local, gitignored)
 
 The dependency direction is deliberate: `scripts` may import `src`, but `src` must never import
 `scripts`. `tests/test_architecture.py` enforces that boundary. Some scripts are necessarily
-substantial because they implement interactive review or report orchestration; none is imported
-by the future runtime path. Before deployment, add a small service entry point around the `src`
-APIs rather than promoting a backtest/debug script into production.
+substantial because they implement interactive review or report orchestration; the production
+watcher uses the reusable APIs under `src/`.
 
 ## Sensitivity note
 
-Patrol-compliance analytics (later phase) profile identifiable individuals' movements and working
-patterns. Guards are data subjects under POPIA — worth a word with trustees on retention and
-access scope before that bot ships.
+Patrol-compliance analytics profile identifiable individuals' movements and working patterns.
+The `/patrols` command is trustee-only. Guards are data subjects under POPIA, so trustees should
+agree the retention and access scope before enabling the bot for routine use.

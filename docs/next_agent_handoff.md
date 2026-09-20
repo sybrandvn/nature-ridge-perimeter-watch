@@ -1,6 +1,7 @@
 # Next-agent handoff: operate and improve the production watcher
 
-Updated 2026-09-19 on `main` after the detector, Docker, and Telegram work was completed.
+Updated 2026-09-20 on `main` after the detector, Docker, Telegram, retention, and restoration work
+was completed.
 
 ## Completed production path
 
@@ -17,9 +18,10 @@ Updated 2026-09-19 on `main` after the detector, Docker, and Telegram work was c
   `/tonight`, `/health`, `/animal`, `/animals`, `/incidents`, the approximate `/map`, and
   `/last <camera_id>`; missing media is restored from the source channel. `/patrols` is enforced as
   trustee only in its handler. Bot registration and allowlist values remain deployment inputs.
-- `src/retention.py` keeps urgent evidence, pending events, and one newest local video per camera;
-  other managed videos are removed hourly while metadata remains available for live retrieval.
-  It is opt-in via `MEDIA_RETENTION_ENABLED=true` and defaults off on development machines.
+- `src/retention.py` keeps urgent evidence, pending events, and one newest local video per camera.
+  When explicitly enabled, other managed videos are removed hourly while metadata remains
+  available for live retrieval. It is opt-in via `MEDIA_RETENTION_ENABLED=true` and defaults off
+  on development machines.
 - `scripts/restore_media.py` resumably restores every missing database clip in Telegram batches.
 - The measured sibling wait is 300 seconds: only 6 of 8,274 observed sibling groups exceeded it;
   99.9% completed within 286 seconds. Completion captions finalize immediately, and a late urgent
@@ -28,12 +30,9 @@ Updated 2026-09-19 on `main` after the detector, Docker, and Telegram work was c
   completed-guard and longest-only overrides remain rejected because measured protected events
   lost alerts under those policies.
 
-The sections below preserve the implementation brief and detector constraints for audit context.
-Do not treat their future-tense statements as current repository status.
-
 Independent code review, later the same day:
 [code_effectiveness_review_2026-09-19.md](code_effectiveness_review_2026-09-19.md).
-Read it before implementing the resolver below. It reproduces validation, renderer,
+Read it before changing the resolver. It reproduces validation, renderer,
 warmup, geometry and tracking defects; measures all labelled sibling events; and
 shows why longest-only and blanket guard-overrides lose protected or explicitly
 approved alerts. Its implementation follow-up records the completed detector fixes,
@@ -59,6 +58,9 @@ but do not promote the existing backtest or debug scripts into the service.
 - cam12/9162 remains `animal_candidate`: it is labelled `unknown`, but the user's
   review says it may contain a small animal as well as a camera artifact.
 - Telegram and Docker production paths are implemented as summarized above.
+- Local bulk restoration recovered 16,897 of 16,899 clip paths and verified every recorded path
+  exists. Telegram repeatedly times out fetching `cam02/15475` and `cam01b/17386`; rerun
+  `scripts.restore_media` later to retry only those null-path rows.
 
 Run the normal checks with:
 
@@ -72,134 +74,34 @@ uv run python scripts/backtest.py \
 Use `--no-record` for experiments. Bump `src.motion.EXTRACTOR_VERSION` whenever cached feature
 semantics change; classifier-only changes do not require an extractor bump.
 
-## Original implementation sequence (completed; retained for audit context)
+## Operating checklist
 
-### 1. Measure and implement the completed-sibling event resolver
+Keep `MEDIA_RETENTION_ENABLED=false` on an analysis workstation. Set it to `true` only in the
+server's `.env` when aggressive cleanup is wanted. After changing the value, recreate the watcher
+so Compose loads the updated environment.
 
-Do this offline first, then use it as the event-policy core of the live Telegram service.
+To recover server-cleaned clips onto a machine that shares the same database and Telethon session,
+stop the watcher and run:
 
-Many camera events produce a short `(Initial)` preview followed by a longer `(Stopped)` or
-`(Timeout)` clip. The short preview can lose a guard during IR warmup, then classify a later bush,
-pole, noise patch, or camera artifact as outside motion. The longer sibling often identifies the
-guard correctly. Confirmed examples:
+```bash
+docker compose stop watcher
+docker compose --profile tools run --rm toolbox \
+  python -m scripts.restore_media --concurrency 8
+docker compose up -d watcher
+```
 
-| short clip | fuller sibling | short result | fuller result |
-| --- | --- | --- | --- |
-| cam01b/17500 | cam01b/17501 | `animal_candidate` | `guard_candidate` |
-| cam07/18641 | cam07/18642 | `incident_candidate` | `guard_candidate` |
-| cam03/20521 | cam03/20522 | `incident_candidate` | `guard_candidate` |
+The restore records each successful download immediately and safely resumes by selecting only rows
+whose `file_path` is still null. Keep the watcher stopped during restoration because both processes
+use the same Telethon session.
 
-Do not simply make “guard wins” or “longest clip wins” the production rule. First measure every
-labelled sibling event, including animal and incident events where the short clip may hold the only
-useful evidence.
+For deployment, rebuild the image, run the schema migration if upgrading from v7, start the default
+watcher service, and verify its readiness-plus-heartbeat healthcheck. Keep credentials in `.env`;
+the logging configuration redacts Telegram bot tokens and suppresses URL-bearing HTTP client INFO
+logs, but secrets must still never be pasted into reports or chat.
 
-The experiment should compare at least:
-
-1. current `classify_event` behavior, where any animal/incident sibling wins;
-2. the fuller/completed sibling alone;
-3. a conservative resolver that may let a clearly completed guard result override a weak Initial
-   alert while preserving corroborated animal/incident evidence.
-
-Report event-level TP/FP/FN/TN and list every animal or incident event changed by the proposed
-policy. Only after that evidence should reusable, transport-independent resolution logic be added
-under `src/`. Keep caption parsing and report generation in `scripts/` unless they are truly part
-of the production-domain API.
-
-Resolver definition of done:
-
-- the policy is measured on all labelled sibling events;
-- every protected animal/incident change is manually inspectable;
-- tests cover event order, missing siblings, duplicate Initial clips, and an Initial alert whose
-  fuller sibling is guard;
-- the per-clip classifier remains usable unchanged;
-- the resolver has a small transport-independent API suitable for the live watcher.
-
-### 2. Build the live Telegram watcher
-
-Use Telethon to subscribe to new messages from `SOURCE_CHANNEL`. Reuse `src.message_parsing` and
-the existing camera configuration rather than duplicating caption/camera matching. For each clip:
-
-1. upsert its metadata with `source='live'`;
-2. download media to a stable path under `data/history/<camera>/` using a temporary file followed
-   by an atomic rename;
-3. group sibling messages by the embedded camera-event timestamp;
-4. buffer an Initial preview for the measured/configured sibling window;
-5. run detection, scoring, per-clip classification, maintenance checks, and the event resolver;
-6. dispatch the final outcome once, even across a restart.
-
-Move the reusable embedded event-timestamp/key parsing out of the private
-`scripts.label._event_key` helper into `src`; production code must not import `scripts`. Likewise,
-factor a pure `src` clip-analysis entry point that resolves dated camera geometry/reference data,
-extracts features, returns the detailed classification and maintenance flags, and can be called by
-both the watcher and offline tools. Do not make the watcher import `scripts.backtest`.
-
-Derive the sibling wait window from the observed message-gap distribution instead of guessing it,
-and make it configurable. A missing sibling must eventually flush rather than leave an event
-pending forever. Unknown cameras and malformed/non-video messages must be logged and handled
-without killing the watcher.
-
-Add durable processing state to SQLite for pending events, processed source messages, final event
-decisions, and delivery attempts. The current unique `(channel_id, message_id)` clip key is useful
-but is not enough to guarantee exactly-once event delivery after a crash. Any schema change must
-use an explicit migration following the existing `scripts/migrate_schema_v*.py` pattern; export
-labels before destructive migration work.
-
-The service must support graceful shutdown, structured logs, bounded retries/backoff, recovery of
-pending events after restart, and a health signal that Docker can check. Keep network clients and
-the clock injectable so the behavior is testable without Telegram access or real waiting.
-
-### 3. Complete Telegram and ntfy delivery
-
-`src.telegram_alert.send_telegram_alert` currently sends text only. Extend the transport so an
-animal/incident alert can include the source clip (or a reliably playable H.264 derivative), the
-camera, event time, category, reason, and useful evidence. Preserve a text-only fallback.
-
-Keep routing policy explicit:
-
-- `animal_candidate` and `incident_candidate` go to the urgent alert path;
-- maintenance is orthogonal and may accompany any category;
-- guard/resident/environment results are recorded but do not enter the urgent alert channel;
-- delivery failure never marks an event delivered.
-
-Use idempotency keys/durable delivery rows so a retry cannot post duplicate alerts. Existing
-Telegram and ntfy functions are injectable and unit-tested; extend that pattern for media and
-retry orchestration. `scripts/send_test_alert.py` should become the safe manual end-to-end
-credential/media smoke test, not the live service itself.
-
-### 4. Attach the watcher to the existing Docker deployment
-
-`Dockerfile`, `compose.yaml`, `.dockerignore`, and `scripts/container_healthcheck.py` already cover
-the reproducible/non-root image, persistent bind mount, locked dependencies, signal-forwarding
-init, read-only root filesystem, config/DB readiness, optional watcher-heartbeat contract,
-interactive Telethon bootstrap, and H.264 write/read verification. Keep those controls.
-
-Once the watcher from step 2 exists, add it as the default production Compose service. At minimum:
-
-- receive credentials through environment/secrets, never bake `.env` or a session into the image;
-- use the healthcheck's `--heartbeat` option so health is tied to the real watcher heartbeat;
-- use a restart policy and graceful stop period compatible with flushing SQLite and pending state;
-- document unattended watcher startup, upgrade, backup, and recovery around the existing bootstrap
-  and operator commands;
-- keep the existing H.264 smoke check in deployment validation.
-
-If ntfy runs in a separate container, configure its Compose service hostname; the example
-`http://localhost:80` points back into the watcher container and will not reach a sibling service.
-
-Add container-level tests or smoke checks for startup with fake transports and a temporary mounted
-data directory. Do not require live credentials in the automated test suite.
-
-### Production definition of done
-
-- a new source clip can flow from a fake Telethon event through persistence, sibling resolution,
-  classification, and a fake Telegram/ntfy delivery in an integration test;
-- replaying the same source messages or restarting during delivery produces no duplicate alert;
-- an Initial-only event flushes after the configured deadline;
-- a completed guard sibling prevents the known preview false alerts without losing measured
-  animal/incident events;
-- Docker starts as non-root with persistent state and reports healthy only when the watcher and DB
-  are ready;
-- setup, session bootstrap, normal operation, upgrade, backup, and recovery are documented;
-- the full detector/backtest regression and all unit/integration tests remain green.
+The Bot API token currently remains a deployment input. If Telegram rejects it, source ingestion
+through Telethon can still run, while query-bot startup and Bot API alert delivery remain
+unavailable until a valid token is installed.
 
 ## Detection behavior that is already settled
 

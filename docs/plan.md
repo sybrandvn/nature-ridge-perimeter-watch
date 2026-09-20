@@ -1,5 +1,12 @@
 # Plan: Nature Ridge Perimeter Watch
 
+> **Current-status checkpoint (2026-09-20):** the detector, backfill/label/backtest loop, live
+> Telethon watcher, durable event/delivery state, Docker service, Telegram query bot, live media
+> retrieval, opt-in server retention, and resumable bulk restoration are implemented. Use
+> `README.md` for operator commands and `docs/next_agent_handoff.md` for current state and next
+> work. The chronological plan below is retained as decision history; older statements that these
+> components are deferred or unbuilt describe their status at that checkpoint.
+
 Discover the camera layout from message metadata, validate the classical-CV hypothesis on a small
 labelled sample, then build the backfill → label → backtest calibration loop. Live service, Docker,
 and delivery-reliability machinery are deferred until thresholds are proven. Alert modules ship as

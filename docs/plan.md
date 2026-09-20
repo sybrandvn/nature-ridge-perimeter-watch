@@ -824,6 +824,10 @@ access as part of ongoing operation; the bot has shipped.
 
 ## Remaining deferred work
 
+The watcher has no remaining implementation blocker. For the current ordered split between
+deployment inputs, evidence-driven detector work, and optional tooling, use **What remains** in
+`docs/next_agent_handoff.md`; this historical plan keeps the broader deferred list only.
+
 - Run-comparison CLI and projected false-pages-per-night reporting.
 - Generic migration framework; targeted, versioned migration scripts exist through schema v8.
 - Per-camera classification threshold sets.

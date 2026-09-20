@@ -84,8 +84,10 @@ but do not promote the existing backtest or debug scripts into the service.
 - Detector review and production work are committed logically on `main`.
 - `EXTRACTOR_VERSION` is `motion-features-v8` (2026-09-20: added
   `warmup_dynamic_inside_bottom_left_fraction`).
-- Ruff is clean and the full suite is **851 passing tests** as of 2026-09-20; rerun both
+- Ruff is clean and the full suite is **853 passing tests** as of 2026-09-20; rerun both
   before changing behavior because the count grows with each layer.
+- `DEBUG_RENDER_VERSION` is 2. Version 2 shares warmup observations with scoring and invalidates
+  older cached overlays without changing `EXTRACTOR_VERSION` or classifier outputs.
 - Fresh labelled extraction plus final classifier replay: **817 clips**, TP 23 / FP 29 /
   FN 25 / TN 740, precision 0.442, recall 0.479, F1 0.460 (unknowns counted negative).
   This is the current, expanded ground-truth corpus and is not directly comparable to the
@@ -217,7 +219,12 @@ intentionally orthogonal.
 
 ## Review data
 
-- Refreshed debug set: `data/reports/review_false_alerts_2026-09-19-v2/`
+- Refreshed legacy false-alert set:
+  `data/reports/debug/archive/legacy-debug-render/review_false_alerts_2026-09-19-v2/`
+- Warmup bottom-left recovery validation and exact cam07/22289 render:
+  `data/reports/debug/2026-09-20/warmup-bottom-left-exit/`
+- Low-blob environment audit, exact production-input renders, and clearer event representatives:
+  `data/reports/debug/2026-09-20/low-blob-environment/`
 - Label backup before the review:
   `data/backups/labels_pre_false_alert_review_20260919.jsonl`
 - Label backup after the review:
@@ -243,8 +250,9 @@ do not appear in `git status`.
 - `src/config.py`, `config/thresholds.yaml` — typed classification thresholds.
 - `config/cameras.yaml` — dated geometry and camera configuration.
 - `scripts/backtest.py` — labelled/full-corpus evaluation harness.
-- `scripts/render_debug.py` — visual detector inspection; its HUD shows classification, warmup
-  evidence, rectangular artifact evidence, and global shift evidence.
+- `scripts/render_debug.py` — visual detector inspection; its HUD shows classification, shared
+  warmup-object evidence, rectangular artifact evidence, and global shift evidence. Use
+  `--exact-message-id` for a named clip and `--message-id` for its clearer event representative.
 - `scripts/label.py` — label workflow using the shared production event key.
 - `scripts/watch.py` — Telethon process entry point and heartbeat loop.
 - `scripts/migrate_schema_v8.py` — additive v7-to-v8 migration.
@@ -257,7 +265,44 @@ do not appear in `git status`.
 
 `tests/test_architecture.py` enforces that `src` does not import `scripts`.
 
-## Optional work, not a blocker
+## What remains
+
+There is no remaining implementation blocker for running the watcher. The remaining work is
+operational setup, evidence-driven follow-up, or optional tooling.
+
+### Deployment inputs and housekeeping
+
+1. Rebuild/recreate the deployed watcher after commit `43e081b` if the server should serve v2
+   debug renders. No database or extractor migration is required for this renderer-only change.
+2. Fill the optional security-company/control-room/armed-response contact values when known, and
+   add a `security` role user if trustees want that access tier. One trustee is already configured.
+3. Decide whether the storage-constrained server should enable `MEDIA_RETENTION_ENABLED`; leave it
+   off on analysis machines.
+4. Retry Telegram restoration for `cam02/15475` and `cam01b/17386`. They are the only two known
+   missing local clips out of 16,899 and do not block live operation.
+5. Validate the container on the actual ARM64 target if that is the deployment architecture.
+
+### Evidence-driven detector work
+
+1. Observe real live alerts and label concrete false positives/false negatives before changing
+   thresholds. The expanded labelled snapshot still has limited rare-class support.
+2. Do not add a low-blob blanket veto. The five audited leaks split across daylight inside
+   geometry, outside vegetation/branch ambiguity, and camera motion; low blob count is not their
+   classification reason.
+3. Camera-shift evidence may support a future cam15-specific maintenance route, but it is not yet
+   an alert veto: large genuine subjects can also produce a high global-shift score. Any proposal
+   must be measured at protected-event level, including siblings.
+
+### Optional tooling and product work
+
+- Run-comparison CLI and projected false-pages-per-night reporting.
+- Browser zone editor and a compact zone-independent raw-track cache.
+- Generic migration framework; targeted migrations already cover schema v8.
+- Per-camera classifier thresholds only if labelled evidence supports them.
+- YOLO/ONNX resolver, activity heatmap, trend analytics, and retrospective probe reporting.
+- Automatic proactive attachment of rendered debug video; on-demand `Debug view` is already live.
+
+## Optional architectural refinement
 
 The persistent cache currently stores final feature mappings rather than fully zone-independent raw
 tracks. Extracting a compact raw-track payload would allow fence geometry to be rescored without

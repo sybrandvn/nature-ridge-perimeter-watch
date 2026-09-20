@@ -321,9 +321,14 @@ async def test_last_retrieves_missing_source_media(tmp_path):
     assert message.reply_video.await_args.kwargs["video"].name == str(downloaded)
 
 
-async def test_animal_and_incident_commands_send_labelled_videos(tmp_path):
+async def test_event_category_commands_send_labelled_videos(tmp_path):
     conn, _config, _cameras, queries = _setup(tmp_path)
-    for message_id, camera, label in ((1, "cam01", "animal"), (2, "cam02", "incident")):
+    for message_id, camera, label in (
+        (1, "cam01", "animal"),
+        (2, "cam02", "incident"),
+        (3, "cam01", "resident"),
+        (4, "cam02", "neighbour"),
+    ):
         path = tmp_path / f"{message_id}.mp4"
         path.write_bytes(b"video")
         db.upsert_clip(
@@ -345,6 +350,12 @@ async def test_animal_and_incident_commands_send_labelled_videos(tmp_path):
     message.reply_video.reset_mock()
     await controller.incidents(update, SimpleNamespace(args=["1"]))
     assert "Incident candidate" in message.reply_video.await_args.kwargs["caption"]
+    message.reply_video.reset_mock()
+    await controller.residents(update, SimpleNamespace(args=["1"]))
+    assert "Resident candidate" in message.reply_video.await_args.kwargs["caption"]
+    message.reply_video.reset_mock()
+    await controller.neighbours(update, SimpleNamespace(args=["1"]))
+    assert "Neighbour candidate" in message.reply_video.await_args.kwargs["caption"]
 
 
 async def test_history_groups_siblings_and_event_sends_representative_video(tmp_path):
@@ -464,11 +475,13 @@ async def test_history_validates_category_and_event_id(tmp_path):
     message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
     update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
     await controller.history(update, SimpleNamespace(args=["cars"]))
-    message.reply_text.assert_awaited_once_with("Usage: /history <animal|incident> [page]")
+    message.reply_text.assert_awaited_once_with(
+        "Usage: /history <animal|incident|resident|neighbour> [page]"
+    )
     message.reply_text.reset_mock()
     await controller.event(update, SimpleNamespace(args=["999"]))
     message.reply_text.assert_awaited_once_with(
-        "No animal or incident event is listed with ID 999."
+        "No camera-classified event is listed with ID 999."
     )
 
 
@@ -495,6 +508,16 @@ async def test_grouped_menu_navigates_sections(tmp_path):
     await controller.menu_callback(callback_update, None)
     query.answer.assert_awaited_once()
     assert query.edit_message_text.await_args.kwargs["text"] == "Alarm-system events"
+
+    text, markup = controller._section_menu("events")
+    assert text == "Camera-classified events"
+    assert [button.text for row in markup.inline_keyboard for button in row] == [
+        "Animal history",
+        "Incident history",
+        "Resident history",
+        "Neighbour history",
+        "Back",
+    ]
 
 
 def test_visible_bot_commands_are_immediate_actions(tmp_path):

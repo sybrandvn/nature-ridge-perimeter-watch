@@ -16,7 +16,8 @@ was completed.
   readiness-plus-heartbeat healthcheck. The operator and session-bootstrap profiles remain.
 - `src/bot.py` supplies the role-restricted Phase 5 query bot. Both roles receive `/about`,
   `/tonight`, `/health`, `/power`, `/batteries`, `/panel`, `/faults`, `/animal`, `/animals`,
-  `/incidents`, paged `/history`, direct `/event <id>`, the approximate `/map`, and
+  `/incidents`, `/residents`, `/neighbours`, paged `/history`, direct `/event <id>`, the
+  approximate `/map`, and
   `/last <camera_id>`; missing media is restored from the source channel. `/patrols` is enforced as
   trustee only in its handler. Bot registration and allowlist values remain deployment inputs.
   `/menu` and `/start` provide a four-section inline interface with camera buttons, paged event
@@ -24,8 +25,12 @@ was completed.
   `/about`) all return useful information with one tap. Specialized status commands such as
   `/batteries` and parameterized commands remain available through inline navigation and direct
   handlers but are omitted from Telegram's command list.
+  Events has paged Animal, Incident, Resident, and Neighbour histories. All four categories are
+  delivered to the configured Telegram channel; ntfy remains animal/incident-only because its
+  configured priority is urgent.
 - Every proactive Telegram alert and video returned by the query bot carries a `Debug view`
-  callback. It restores missing source media, renders the exact production detector overlay in a worker thread, and caches it below
+  callback. It restores missing source media, renders the exact production detector overlay in a
+  worker thread, and caches it below
   `data/debug` with the extraction fingerprint and renderer version. The secondary
   `/debug <video-id>` command accepts any known clip, including a latest-camera video outside the
   animal/incident history. `scripts.watch.render_bot_debug_video` supplies the timestamp-specific

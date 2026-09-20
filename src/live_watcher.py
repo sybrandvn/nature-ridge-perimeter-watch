@@ -23,7 +23,10 @@ from src.retention import RetentionResult, clean_debug_cache, clean_local_media
 from src.telegram_alert import send_telegram_alert
 
 logger = logging.getLogger("live_watcher")
-ALERT_CATEGORIES = frozenset({"animal_candidate", "incident_candidate"})
+TELEGRAM_ALERT_CATEGORIES = frozenset(
+    {"animal_candidate", "incident_candidate", "resident_candidate", "neighbour_candidate"}
+)
+NTFY_ALERT_CATEGORIES = frozenset({"animal_candidate", "incident_candidate"})
 
 
 def _message_timestamp(message: Any) -> tuple[datetime, str]:
@@ -290,12 +293,20 @@ class LiveWatcher:
         await self.tick()
 
     def _transports(self, category: str) -> tuple[str, ...]:
-        if category not in ALERT_CATEGORIES:
+        if category not in TELEGRAM_ALERT_CATEGORIES | NTFY_ALERT_CATEGORIES:
             return ()
         transports = []
-        if self.config.telegram_bot_token and self.config.alert_channel_id:
+        if (
+            category in TELEGRAM_ALERT_CATEGORIES
+            and self.config.telegram_bot_token
+            and self.config.alert_channel_id
+        ):
             transports.append("telegram")
-        if self.config.ntfy_base_url and self.config.ntfy_topic:
+        if (
+            category in NTFY_ALERT_CATEGORIES
+            and self.config.ntfy_base_url
+            and self.config.ntfy_topic
+        ):
             transports.append("ntfy")
         return tuple(transports)
 

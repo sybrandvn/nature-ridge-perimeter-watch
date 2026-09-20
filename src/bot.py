@@ -19,6 +19,8 @@ from src.sequence import ClipEvent, segment_passes
 
 logger = logging.getLogger("query_bot")
 LOCAL_ZONE = ZoneInfo("Africa/Johannesburg")
+MEDIA_EVENT_CATEGORIES = ("incident", "animal", "resident", "neighbour")
+HISTORY_USAGE = "Usage: /history <animal|incident|resident|neighbour> [page]"
 
 
 @dataclass(frozen=True)
@@ -140,7 +142,7 @@ class BotQueries:
         return None if row is None else self._media_clip(row)
 
     def _category_rows(self, category: str) -> list[sqlite3.Row]:
-        if category not in {"animal", "incident"}:
+        if category not in MEDIA_EVENT_CATEGORIES:
             raise ValueError(f"unsupported media category: {category}")
         candidate = f"{category}_candidate"
         return list(
@@ -230,7 +232,7 @@ class BotQueries:
         return "\n".join(lines)
 
     def history_clip(self, message_id: int) -> HistoryEvent | None:
-        for category in ("incident", "animal"):
+        for category in MEDIA_EVENT_CATEGORIES:
             for event in self.category_events(category):
                 if event.clip.message_id == message_id:
                     return event
@@ -659,10 +661,16 @@ class QueryBot:
                 ],
             ),
             "events": (
-                "Animal and incident events",
+                "Camera-classified events",
                 [
-                    [("Animal history", "menu:history:animal:1")],
-                    [("Incident history", "menu:history:incident:1")],
+                    [
+                        ("Animal history", "menu:history:animal:1"),
+                        ("Incident history", "menu:history:incident:1"),
+                    ],
+                    [
+                        ("Resident history", "menu:history:resident:1"),
+                        ("Neighbour history", "menu:history:neighbour:1"),
+                    ],
                 ],
             ),
             "system": (
@@ -930,7 +938,12 @@ class QueryBot:
         category: str,
         default_count: int,
     ) -> None:
-        command = "animals" if category == "animal" else "incidents"
+        command = {
+            "animal": "animals",
+            "incident": "incidents",
+            "resident": "residents",
+            "neighbour": "neighbours",
+        }[category]
         authorized = await self._authorize(update, command)
         if authorized is None:
             return
@@ -976,6 +989,12 @@ class QueryBot:
     async def incidents(self, update: Any, context: Any) -> None:
         await self._category_videos(update, context, category="incident", default_count=3)
 
+    async def residents(self, update: Any, context: Any) -> None:
+        await self._category_videos(update, context, category="resident", default_count=3)
+
+    async def neighbours(self, update: Any, context: Any) -> None:
+        await self._category_videos(update, context, category="neighbour", default_count=3)
+
     async def history(self, update: Any, context: Any) -> None:
         authorized = await self._authorize(update, "history")
         if authorized is None:
@@ -983,16 +1002,16 @@ class QueryBot:
         message, _role = authorized
         args = list(getattr(context, "args", ()) or ())
         if not args:
-            await message.reply_text("Usage: /history <animal|incident> [page]")
+            await message.reply_text(HISTORY_USAGE)
             return
         category = args[0].lower().removesuffix("s")
-        if category not in {"animal", "incident"}:
-            await message.reply_text("Usage: /history <animal|incident> [page]")
+        if category not in MEDIA_EVENT_CATEGORIES:
+            await message.reply_text(HISTORY_USAGE)
             return
         try:
             page = 1 if len(args) < 2 else int(args[1])
         except ValueError:
-            await message.reply_text("Usage: /history <animal|incident> [page]")
+            await message.reply_text(HISTORY_USAGE)
             return
         text, markup = self._history_menu(category, max(page, 1))
         await message.reply_text(text, reply_markup=markup)
@@ -1009,7 +1028,7 @@ class QueryBot:
             message_id = None
         if message_id is None:
             await message.reply_text(
-                "Usage: /event <id>\nFind IDs with /history animal or /history incident"
+                "Usage: /event <id>\nFind IDs in the Events menu or with /history <category>"
             )
             return
         await self._send_history_event(message, message_id)
@@ -1064,7 +1083,7 @@ class QueryBot:
     async def _send_history_event(self, message: Any, message_id: int) -> None:
         event = self.queries.history_clip(message_id)
         if event is None:
-            await message.reply_text(f"No animal or incident event is listed with ID {message_id}.")
+            await message.reply_text(f"No camera-classified event is listed with ID {message_id}.")
             return
         path = await self._ensure_media(event.clip)
         if path is None:
@@ -1103,6 +1122,8 @@ def build_query_bot(
         "animal",
         "animals",
         "incidents",
+        "residents",
+        "neighbours",
         "history",
         "event",
         "debug",

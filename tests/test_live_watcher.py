@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -88,6 +89,19 @@ def _runtime(tmp_path, analyses):
         telegram_bot=bot,
     )
     return conn, watcher, bot
+
+
+def test_resident_and_neighbour_are_quiet_channel_alerts(tmp_path):
+    _conn, watcher, _bot = _runtime(tmp_path, [])
+    watcher.config = replace(
+        watcher.config,
+        ntfy_base_url="https://ntfy.example",
+        ntfy_topic="alerts",
+    )
+    assert watcher._transports("resident_candidate") == ("telegram",)
+    assert watcher._transports("neighbour_candidate") == ("telegram",)
+    assert watcher._transports("animal_candidate") == ("telegram", "ntfy")
+    assert watcher._transports("guard_candidate") == ()
 
 
 async def test_initial_and_complete_resolve_to_urgent_sibling_and_send_video(tmp_path):

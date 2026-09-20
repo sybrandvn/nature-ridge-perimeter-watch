@@ -3,7 +3,7 @@
 Motion-based perimeter fence monitoring built from a Telegram security-camera feed. The reusable
 detection, scoring, classification, persistence, calibration, and alert-transport code lives
 under `src/`. `scripts/watch.py` runs the durable Telegram watcher: it downloads new videos,
-analyzes them, resolves Initial/Stopped siblings, and delivers urgent animal/incident alerts.
+analyzes them, resolves Initial/Stopped siblings, and delivers camera-classified event alerts.
 
 For a new coding agent, start with
 [docs/next_agent_handoff.md](docs/next_agent_handoff.md). It describes the current detector state,
@@ -119,7 +119,9 @@ slash command performs an immediate action: `/menu`, `/tonight`, `/health`, and 
 Specialized status and parameterized commands stay in the inline menu. Existing
 direct commands remain supported: `/about`, `/tonight`, `/health`, `/power [count]`, `/batteries`,
 `/panel [count]`, `/faults [count]`, `/animal`, `/animals [count]`, `/incidents [count]`,
-`/history <animal|incident> [page]`, `/event <id>`, `/debug <video-id>`, `/map`, and
+`/residents [count]`, `/neighbours [count]`,
+`/history <animal|incident|resident|neighbour> [page]`, `/event <id>`, `/debug <video-id>`,
+`/map`, and
 `/last <camera_id>`; only trustees
 can use `/patrols`. Power history separates failures from restorations and collapses identical
 repeated notifications. `/history` groups Initial/Stopped sibling clips into events and lists a
@@ -139,6 +141,9 @@ text-only Telegram and ntfy credential test.
 Panel history reports arm/disarm transitions; faults report tamper, supervision/device-missing,
 and control-room communication-test failures. Media commands restore a cleaned clip from the
 source channel through Telethon when it is not local. Media counts are capped at five per request.
+The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram
+receives all four live categories; ntfy remains restricted to urgent animal and incident alerts,
+so benign resident/neighbour observations do not trigger an urgent ntfy notification.
 
 After adding or changing system-message parsing, safely import recognized non-video history without
 touching clip rows:

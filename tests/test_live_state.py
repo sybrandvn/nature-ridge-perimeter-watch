@@ -180,3 +180,31 @@ def test_transport_added_later_gets_missing_urgent_delivery(tmp_path):
         conn, transports=("telegram",), now=now
     ) == 0
     assert live_state.due_deliveries(conn, now)[0]["transport"] == "telegram"
+
+
+def test_system_event_and_delivery_are_atomic_idempotent_and_recoverable(tmp_path):
+    conn = db.connect(tmp_path / "test.db")
+    now = _now()
+    values = {
+        "channel_id": "source",
+        "message_id": 7,
+        "timestamp": "2026-09-21T17:00:00Z",
+        "camera_id": "unknown",
+        "event_type": "communication_failure",
+        "raw_text": "ALERT TESTING FAILURE (FTT)",
+        "transports": ("telegram", "ntfy"),
+        "now": now,
+    }
+    live_state.record_system_event(conn, **values)
+    live_state.record_system_event(conn, **values)
+    assert conn.execute("SELECT COUNT(*) FROM system_events").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM system_deliveries").fetchone()[0] == 2
+
+    assert live_state.claim_system_delivery(conn, "source", 7, "telegram")
+    assert live_state.recover_interrupted(conn) == 1
+    rows = list(conn.execute("SELECT * FROM system_deliveries ORDER BY transport"))
+    assert {row["status"] for row in rows} == {"ambiguous", "pending"}
+    due = live_state.due_system_deliveries(conn, now)
+    assert [(row["transport"], row["event_type"]) for row in due] == [
+        ("ntfy", "communication_failure")
+    ]

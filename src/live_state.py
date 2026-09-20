@@ -62,6 +62,49 @@ def finish_message(
     )
 
 
+def record_system_event(
+    conn: sqlite3.Connection,
+    *,
+    channel_id: str,
+    message_id: int,
+    timestamp: str,
+    camera_id: str | None,
+    event_type: str,
+    raw_text: str | None,
+    transports: Iterable[str],
+    now: datetime,
+) -> None:
+    """Persist a source system event and its notification work atomically."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            """
+            INSERT INTO system_events
+                (channel_id, message_id, timestamp, camera_id, event_type, raw_text)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (channel_id, message_id) DO UPDATE SET
+                timestamp = excluded.timestamp,
+                camera_id = excluded.camera_id,
+                event_type = excluded.event_type,
+                raw_text = excluded.raw_text
+            """,
+            (channel_id, message_id, timestamp, camera_id, event_type, raw_text),
+        )
+        for transport in transports:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO system_deliveries
+                    (channel_id, message_id, transport, status, next_attempt_at)
+                VALUES (?, ?, ?, 'pending', ?)
+                """,
+                (channel_id, message_id, transport, utc_text(now)),
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
 def add_analyzed_clip(
     conn: sqlite3.Connection,
     *,
@@ -336,6 +379,14 @@ def recover_interrupted(conn: sqlite3.Connection) -> int:
         WHERE status = 'sending'
         """
     ).rowcount
+    ambiguous += conn.execute(
+        """
+        UPDATE system_deliveries SET status = 'ambiguous',
+            last_error = 'process stopped while transport call was in flight',
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE status = 'sending'
+        """
+    ).rowcount
     conn.execute(
         """
         UPDATE live_messages SET status = 'failed', error = 'process stopped during processing',
@@ -344,6 +395,67 @@ def recover_interrupted(conn: sqlite3.Connection) -> int:
         """
     )
     return ambiguous
+
+
+def due_system_deliveries(conn: sqlite3.Connection, now: datetime) -> list[sqlite3.Row]:
+    return list(
+        conn.execute(
+            """
+            SELECT d.*, s.timestamp, s.camera_id, s.event_type, s.raw_text
+            FROM system_deliveries d
+            JOIN system_events s USING (channel_id, message_id)
+            WHERE d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?
+            ORDER BY d.next_attempt_at, d.channel_id, d.message_id, d.transport
+            """,
+            (utc_text(now),),
+        )
+    )
+
+
+def claim_system_delivery(
+    conn: sqlite3.Connection, channel_id: str, message_id: int, transport: str
+) -> bool:
+    return bool(
+        conn.execute(
+            """
+            UPDATE system_deliveries
+            SET status = 'sending', attempt_count = attempt_count + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE channel_id = ? AND message_id = ? AND transport = ?
+              AND status IN ('pending', 'failed')
+            """,
+            (channel_id, message_id, transport),
+        ).rowcount
+    )
+
+
+def finish_system_delivery(
+    conn: sqlite3.Connection,
+    channel_id: str,
+    message_id: int,
+    transport: str,
+    *,
+    delivered: bool,
+    next_attempt_at: datetime,
+    error: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        UPDATE system_deliveries
+        SET status = ?, next_attempt_at = ?, last_error = ?,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE channel_id = ? AND message_id = ? AND transport = ?
+          AND status = 'sending'
+        """,
+        (
+            "delivered" if delivered else "failed",
+            utc_text(next_attempt_at),
+            error,
+            channel_id,
+            message_id,
+            transport,
+        ),
+    )
 
 
 def enqueue_missing_deliveries(

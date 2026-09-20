@@ -15,7 +15,7 @@ from typing import Any
 
 from src.errors import DbError
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # What the event was. Shared by every clip in an event (see labels.label below) --
 # a startup/prefix clip that's part of an `incident` event is still `incident`, just
@@ -223,6 +223,24 @@ CREATE TABLE IF NOT EXISTS live_deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_live_deliveries_due
     ON live_deliveries (status, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS system_deliveries (
+    channel_id TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    transport TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'sending', 'delivered', 'failed', 'ambiguous')
+    ),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    last_error TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (channel_id, message_id, transport),
+    FOREIGN KEY (channel_id, message_id)
+        REFERENCES system_events (channel_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_system_deliveries_due
+    ON system_deliveries (status, next_attempt_at);
 """
 
 

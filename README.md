@@ -116,12 +116,23 @@ can use `/about`, `/tonight`, `/health`, `/animal`, `/animals [count]`, `/incide
 clip from the source channel through Telethon when it is not local. Counts are capped at five per
 request.
 
-Media retention runs at startup and hourly by default. It keeps human-labelled or live-finalized
-animal/incident evidence, pending live events until they are resolved, and the newest local video
-for each camera. Other database-referenced videos under the configured data directory are deleted
-and their `file_path` is cleared; message metadata remains, so a bot request can retrieve the video
-again. Paths outside the data directory are never deleted. Configure the interval with
-`MEDIA_RETENTION_INTERVAL_SECONDS`.
+Media retention is **disabled by default** for analysis/development machines. Storage-constrained
+servers can opt in with `MEDIA_RETENTION_ENABLED=true`; cleanup then runs at startup and hourly by
+default. It keeps human-labelled or live-finalized animal/incident evidence, pending live events
+until they are resolved, and the newest local video for each camera. Other database-referenced
+videos under the configured data directory are deleted and their `file_path` is cleared; message
+metadata remains, so a bot request can retrieve the video again. Paths outside the data directory
+are never deleted. Configure the interval with `MEDIA_RETENTION_INTERVAL_SECONDS`.
+
+To restore cleaned media on a development machine, stop the watcher so it releases the Telethon
+session, then run the resumable bulk restore. Successful files are committed one at a time, so the
+same command resumes safely after interruption or rate limiting:
+
+```bash
+docker compose stop watcher
+docker compose --profile tools run --rm toolbox python -m scripts.restore_media
+docker compose up -d watcher
+```
 The map is deliberately an approximate ordered list, and patrol output carries a confidence
 caveat. Unlisted users receive only `Not authorized` and their numeric user ID is recorded in the
 structured watcher log. This provides a bootstrap path: configure the token, message `/about`,

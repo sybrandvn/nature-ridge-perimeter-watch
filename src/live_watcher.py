@@ -91,6 +91,8 @@ class LiveWatcher:
         return ambiguous
 
     def clean_media_if_due(self, *, force: bool = False) -> RetentionResult | None:
+        if not self.config.media_retention_enabled:
+            return None
         now = self.now()
         if not force and self._next_retention_at is not None and now < self._next_retention_at:
             return None

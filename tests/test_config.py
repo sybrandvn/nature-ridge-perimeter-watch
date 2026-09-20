@@ -34,6 +34,7 @@ def test_load_app_config_minimal_valid_mapping():
     assert cfg.delivery_retry_max_seconds == 900.0
     assert cfg.watcher_poll_seconds == 5.0
     assert cfg.media_retention_interval_seconds == 3600.0
+    assert cfg.media_retention_enabled is False
 
 
 def test_live_runtime_durations_validate_and_parse():
@@ -62,6 +63,20 @@ def test_live_runtime_rejects_nonpositive_duration():
                 "EVENT_WAIT_SECONDS": "0",
             }
         )
+
+
+def test_media_retention_must_be_explicitly_enabled():
+    base = {
+        "TELEGRAM_API_ID": "1",
+        "TELEGRAM_API_HASH": "x",
+        "SOURCE_CHANNEL": "x",
+    }
+    assert load_app_config_from_mapping(base).media_retention_enabled is False
+    assert load_app_config_from_mapping(
+        {**base, "MEDIA_RETENTION_ENABLED": "true"}
+    ).media_retention_enabled is True
+    with pytest.raises(ConfigError, match="MEDIA_RETENTION_ENABLED"):
+        load_app_config_from_mapping({**base, "MEDIA_RETENTION_ENABLED": "sometimes"})
 
 
 def test_missing_required_var_raises():

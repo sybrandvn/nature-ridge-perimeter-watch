@@ -19,6 +19,8 @@ Updated 2026-09-19 on `main` after the detector, Docker, and Telegram work was c
   trustee only in its handler. Bot registration and allowlist values remain deployment inputs.
 - `src/retention.py` keeps urgent evidence, pending events, and one newest local video per camera;
   other managed videos are removed hourly while metadata remains available for live retrieval.
+  It is opt-in via `MEDIA_RETENTION_ENABLED=true` and defaults off on development machines.
+- `scripts/restore_media.py` resumably restores every missing database clip in Telegram batches.
 - The measured sibling wait is 300 seconds: only 6 of 8,274 observed sibling groups exceeded it;
   99.9% completed within 286 seconds. Completion captions finalize immediately, and a late urgent
   sibling reopens an already-finalized suppressed event.

@@ -55,6 +55,7 @@ class AppConfig:
     watcher_poll_seconds: float
     watcher_heartbeat_path: Path
     live_media_dir: Path
+    media_retention_enabled: bool
     media_retention_interval_seconds: float
 
 
@@ -90,6 +91,7 @@ _KNOWN_KEYS = {
     "WATCHER_POLL_SECONDS",
     "WATCHER_HEARTBEAT_PATH",
     "LIVE_MEDIA_DIR",
+    "MEDIA_RETENTION_ENABLED",
     "MEDIA_RETENTION_INTERVAL_SECONDS",
 }
 
@@ -143,6 +145,17 @@ def load_app_config_from_mapping(
             raise ConfigError(f"{key} must be greater than zero, got {value}")
         return value
 
+    def _boolean(key: str, default: bool) -> bool:
+        raw = _get(key)
+        if raw is None:
+            return default
+        normalized = raw.lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ConfigError(f"{key} must be true or false, got {raw!r}")
+
     retry_base = _positive_float("DELIVERY_RETRY_BASE_SECONDS", 30.0)
     retry_max = _positive_float("DELIVERY_RETRY_MAX_SECONDS", 900.0)
     if retry_max < retry_base:
@@ -172,6 +185,7 @@ def load_app_config_from_mapping(
             _get("WATCHER_HEARTBEAT_PATH") or "data/live/watcher.heartbeat"
         ),
         live_media_dir=Path(_get("LIVE_MEDIA_DIR") or "data/live/clips"),
+        media_retention_enabled=_boolean("MEDIA_RETENTION_ENABLED", False),
         media_retention_interval_seconds=_positive_float(
             "MEDIA_RETENTION_INTERVAL_SECONDS", 3600.0
         ),

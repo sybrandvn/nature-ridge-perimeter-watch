@@ -1116,7 +1116,6 @@ def build_query_bot(
         BotCommand("menu", "Open the grouped menu"),
         BotCommand("tonight", "Show tonight's event summary"),
         BotCommand("health", "Show camera health now"),
-        BotCommand("batteries", "Show battery requirements"),
         BotCommand("about", "Explain what the system reports"),
     ]
     return application

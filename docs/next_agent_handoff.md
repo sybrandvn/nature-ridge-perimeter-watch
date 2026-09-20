@@ -20,10 +20,10 @@ was completed.
   `/last <camera_id>`; missing media is restored from the source channel. `/patrols` is enforced as
   trustee only in its handler. Bot registration and allowlist values remain deployment inputs.
   `/menu` and `/start` provide a four-section inline interface with camera buttons, paged event
-  buttons, and back navigation. The five visible slash commands (`/menu`, `/tonight`, `/health`,
-  `/batteries`, `/about`) all return useful information with one tap. Parameterized commands remain
-  available through inline navigation and direct handlers but are omitted from Telegram's command
-  list so tapping a visible command never produces only usage instructions.
+  buttons, and back navigation. The four visible slash commands (`/menu`, `/tonight`, `/health`,
+  `/about`) all return useful information with one tap. Specialized status commands such as
+  `/batteries` and parameterized commands remain available through inline navigation and direct
+  handlers but are omitted from Telegram's command list.
 - Every video returned by the query bot carries a `Debug view` callback. It restores missing source
   media, renders the exact production detector overlay in a worker thread, and caches it below
   `data/debug` with the extraction fingerprint and renderer version. The secondary

@@ -501,5 +501,5 @@ def test_visible_bot_commands_are_immediate_actions(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     application = build_query_bot(queries, "123456:example-token")
     commands = [command.command for command in application.bot_data["commands"]]
-    assert commands == ["menu", "tonight", "health", "batteries", "about"]
-    assert not {"event", "last", "history", "debug"} & set(commands)
+    assert commands == ["menu", "tonight", "health", "about"]
+    assert not {"event", "last", "history", "debug", "batteries"} & set(commands)

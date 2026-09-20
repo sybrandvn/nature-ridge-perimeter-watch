@@ -7,10 +7,25 @@
 > work. The chronological plan below is retained as decision history; older statements that these
 > components are deferred or unbuilt describe their status at that checkpoint.
 
-Discover the camera layout from message metadata, validate the classical-CV hypothesis on a small
-labelled sample, then build the backfill → label → backtest calibration loop. Live service, Docker,
-and delivery-reliability machinery are deferred until thresholds are proven. Alert modules ship as
-tested, manually-invokable functions only.
+The original sequence was to discover the camera layout, validate classical CV, and build the
+backfill → label → backtest loop before attempting a live service. That sequence is complete. The
+statements below about deferring the watcher, Docker, delivery reliability, or the query bot are
+historical constraints, not the current architecture.
+
+## Implemented architecture reconciliation (2026-09-20)
+
+| concern | original plan | implemented system |
+| --- | --- | --- |
+| service process | no live loop | `scripts/watch.py` runs `src.live_watcher.LiveWatcher` and the query bot |
+| ingestion and grouping | classify clips independently; sibling policy undecided | Telethon ingestion persists messages, groups siblings by embedded event timestamp, waits up to the measured 300-second window, and finalizes completion captions immediately |
+| event resolution | reporting-only OR; longer-sibling preference proposed | any animal/incident sibling is preserved; longer-only and completed-guard overrides are rejected because they lost protected events; a late urgent sibling reopens a suppressed event |
+| delivery reliability | manually invoked alert functions | a durable per-transport outbox records pending/sending/delivered/failed/ambiguous attempts, retries bounded failures, and quarantines interrupted sends for review |
+| operator access | query bot deferred | role-enforced Telegram queries, event history, patrol analytics, media restoration, and on-demand production overlays are live |
+| media lifecycle | local corpus only | atomic download, opt-in retention, live single-clip retrieval, resumable bulk restoration, and versioned debug-cache cleanup |
+| deployment | Docker deferred | Compose runs the read-only `watcher` service with persistent data, restart policy, readiness/heartbeat healthcheck, and operator/bootstrap profiles |
+
+The chronological phases remain below as decision history. Their explicit `[done]`, `[partial]`,
+and `[open]` annotations, plus this reconciliation, are authoritative when older prose conflicts.
 
 ## Checkpoint (2026-09-07, cont.): truncated-preview clips distort per-clip metrics; open question on waiting for a sibling before alerting
 
@@ -46,22 +61,20 @@ also goes up at event level, not down — because "any sibling fires" is exactly
 live system that reacts to every message independently already has today. Naively combining
 siblings with an OR doesn't fix precision, only recall.
 
-**Open decision, not yet made:** should a future live system delay alerting on an "(Initial*)"
-message for the few minutes until its "(Stopped*)" sibling arrives, and prefer the FULLER clip's
-read specifically (not just OR across all siblings) before firing? The root cause observed twice
-so far is specifically that the SHORT clip is the unreliable one — trusting the longer clip once
-it exists, rather than merely unioning categories, is the more promising fix hinted at by the
-data, but is unmeasured and unbuilt. Deferred along with the rest of the live-alerting pipeline
-(see the opening paragraph of this file) — revisit once the live service itself is scoped.
+**Historical open decision, resolved 2026-09-20:** the live system now buffers Initial messages
+for up to 300 seconds, a corpus-measured window in which 8,268 of 8,274 sibling groups completed;
+a completion caption finalizes immediately. Resolution is deliberately conservative: any
+`animal_candidate` or `incident_candidate` sibling keeps the event urgent. A late urgent sibling
+reopens a previously suppressed event. Experiments that preferred only the longer clip or let a
+completed guard override an urgent preview were rejected because they lost protected events.
 
 **2026-09-19 evidence update:** a second detailed review confirmed the same mechanism on
 cam01b/17500→17501, cam03/5465→5464, cam07/18641→18642, and cam03/20521→20522. In each event the
 short clip either loses the person during IR warmup or later locks onto unrelated scenery/noise,
 while the fuller sibling carries clear guard evidence. Warmup-only onside motion can now recover a
 guard only when the settled detector found no subject; it intentionally cannot override a later
-outside subject because confirmed footage can contain both. This strengthens the case for holding
-Initial previews for the completed sibling, but the production policy remains unbuilt and should
-be measured at event level before the live orchestrator is implemented.
+outside subject because confirmed footage can contain both. This evidence led to the measured
+buffering policy above. It did not justify a longer-only override, which remains rejected.
 
 ## Checkpoint (2026-09-07): triage router built; classifier state re-measured
 
@@ -83,7 +96,7 @@ recall number in this file):
 | environment (100) | 50% correct; **29 clips leak into the alert channel** |
 | incident (10) | 70% correct; 30% suppressed as guard, safe only at event level (5/5) |
 | animal (13) | 46.2% correct |
-| resident (10) | **no rule exists** |
+| resident (10) | **no rule existed at this checkpoint**; `resident_candidate` has since shipped |
 
 **The "guard recall is 8.7%" figure repeated throughout this repo is wrong** — it was only the
 `green_light` rule's own recall, measured before the two rules that now do the work existed.
@@ -137,8 +150,9 @@ Phase 1 work should build on this without inheriting stale numbers:
   (likely fence line traced too high) is still open.
 
 ## Scope decisions (2026-08-28)
-- This round: camera-order discovery, CV spike, backtester, stub alert modules. No `main.py`
-  service loop, no Dockerfile/compose, no delivery outbox.
+- Historical first-round scope: camera-order discovery, CV spike, backtester, and stub alert
+  modules. The production entry point is now `scripts/watch.py`; Docker/Compose and the durable
+  delivery outbox were added after calibration.
 - Two gates: camera-order inference, then CV feasibility. Either failing changes the plan.
 - **Gate 1 resolved without inference (2026-08-28):** the user decided camera order is just
   numerical/alphabetical by id (cam01, cam01a, cam01b, cam02, ... cam16) — no reason to expect the
@@ -147,17 +161,19 @@ Phase 1 work should build on this without inheriting stale numbers:
   optional later validation, not required before Phase 1.
 - Labeling target: stratified ~300-500 clips, oversampling animal/incident.
 - Zone editor: browser UI (no reliable WSL GUI assumed).
-- Cameras record night only, ~18:00-06:00 (configurable). All footage is IR/greyscale.
+- Cameras were expected to record only ~18:00-06:00 (configurable), predominantly in IR/greyscale;
+  later daylight/twilight footage required explicit lighting features.
 - The source channel also carries camera health notifications. Backfill captures non-video
   messages too.
-- A Telegram query bot for trustees/security is a later phase; its data requirements are
-  captured now.
+- The later Telegram query-bot phase is complete; its role and data requirements are retained
+  below as the design record.
 
-## Site facts (from the user)
+## Site facts (from the user; historical starting assumptions)
 - ~20 cameras, all on the fence line, mounted along it looking down the line.
 - Open line, not a loop. Two distinct ends, plus 2 perimeter entry points (gates).
 - Guard patrols out and back along the line nightly, using a flashlight.
-- Camera order along the fence is unknown and must be inferred from data.
+- Camera order was initially unknown; the user subsequently confirmed numeric/alphabetical camera
+  ID order, recorded in `config/cameras.yaml`.
 - Known events: ~1 crawl incident, 2 probes, 3 animal sightings. Multi-year history.
 - Probes and animals were not observed as multi-camera sequences; only patrols were.
 
@@ -211,12 +227,10 @@ evidence for multi-camera probe signatures is thin (n=2, and only events that we
 real value is discovering outside clusters in history that nobody flagged at the time. Patrol
 sequences remain load-bearing, because they drive camera ordering and patrol analytics.
 
-## Night-only consequences
-- Single threshold profile; no day/night split, no colour features. A derived `time_of_day` tag
-  (`src.features.time_of_day`, from the clip timestamp vs the operating window) rides along in the
-  spike CSV as a descriptive column only — dusk-lit clips like the 18:04/18:21 SAST animal
-  sightings look different, and it's worth being able to see that during analysis without
-  branching the thresholds on it.
+## Lighting and operating-window consequences
+- The original corpus was expected to be night-only. Daylight and twilight clips were later found
+  and are now explicit classifier inputs (`is_daylight`/`is_twilight`); colour and post-flash red
+  shift features are implemented. Thresholds remain global rather than per-camera profiles.
 - IR insect blobs near the lens (large, bright, fast, out of focus, erratic) are expected to be
   the largest false-positive source, ahead of the flashlight. Low edge density plus high centroid
   jitter are the intended discriminators.
@@ -392,10 +406,11 @@ everything in `docs/handoff.md`.
     (`scripts/migrate_schema_v5.py`: rename, recreate from the current schema, copy+transform,
     bump `schema_version`, keep the old table rather than dropping it) is the proportionate
     approach for a change scoped to one table — done for the v4->v5 label split, 2026-08-29.
-    Tables: `clips`, `labels`, `blob_tracks` (feature cache), `system_events`, `backtest_runs`,
-    `backtest_results`. WAL, busy timeout, foreign keys, narrow repository functions. Index
-    `(timestamp)` and `(camera_id, timestamp)`. Built during the Phase 0 spike (`src/db.py`);
-    carries over as-is.
+    Schema v8 now includes `clips`, `labels`, `blob_tracks`, `system_events`, `backtest_runs`,
+    `backtest_results`, `live_messages`, `live_events`, `live_event_clips`, and
+    `live_deliveries`. WAL, busy timeout, foreign keys, and narrow repository functions remain.
+    Targeted migration scripts cover the shipped schema changes; there is still no generic
+    migration framework.
 18. [done] Label export/import to JSONL as the durability guarantee, so the database can be
     rebuilt without losing hand-entered ground truth. Built during the Phase 0 spike
     (`src/db.py::export_labels_jsonl`/`import_labels_jsonl`); carries over as-is.
@@ -442,6 +457,29 @@ the hard way at least once):
 Phase 2 work (below) is judged against this bar, not against a resurrected Gate 2.
 
 ### Phase 2: Corpus and CV
+20. **[done]** Camera-ID parsing hardened against observed video and health captions, with an
+    explicit unknown-camera result in `src/message_parsing.py`.
+21. **[done]** Resumable full backfill capturing every message type: clips to
+    `data/history/{camera_id}/{message_id}.mp4` via `.part` then atomic rename; health/status text
+    into `system_events`. The same media primitives now support live retrieval and resumable bulk
+    restoration.
+22. **[done, implemented differently]** `src/motion.py` owns `EXTRACTOR_VERSION`, complete cache
+    identity, persistence through `blob_tracks`, and detector/tracking output. The operational
+    cache stores the final feature map and is zone-aware, so a geometry edit recomputes extraction;
+    the originally proposed zone-independent raw-track cache remains an optional refinement.
+23. **[done]** `zones.py` applies polyline, side assignment, depth cutoff, and ignore regions.
+24. **[open/deferred]** Browser zone editor on localhost: extract a reference frame, draw the
+    polyline, click the far side, drag the depth cutoff, add ignore polygons, and atomically save a
+    dated geometry version. The documented paint-tool workflow remains adequate for infrequent
+    retracing.
+25. **[done, vocabulary changed]** `src/classify.py` provides typed detailed results, reason codes,
+    and configured thresholds. It emits measured `*_candidate` categories rather than the planned
+    four-class routing vocabulary; schema v6 deliberately widened the stored values instead of
+    inventing an unvalidated mapping.
+
+<details>
+<summary>Original Phase 2 wording</summary>
+
 20. Camera-ID parsing hardened against every caption shape observed in 0a, plus
     health-notification formats, with an explicit unknown-camera result.
 21. Resumable full backfill capturing every message type: clips to
@@ -461,6 +499,8 @@ Phase 2 work (below) is judged against this bar, not against a resurrected Gate 
     `ambiguous`, each with reason codes and contributing thresholds. Implements fail-safe
     escalation. Unknown camera, missing fence line, above depth cutoff, or undecodable video
     resolve to `ambiguous`. Typed interface for a future ML resolver, unimplemented.
+
+</details>
 
 ## Phase 2 refactor brief (2026-09-09) — organise what already exists before building what doesn't
 
@@ -505,15 +545,30 @@ worth recording here since they affect anyone touching `src/classify.py` or `src
 | 23 `zones.py` | polyline/side/depth/ignore on top of cached tracks | `src/zones.py` exists, in daily use | **Already done**, just not literally "on top of cached tracks" (see step 22) since nothing is cached yet. No action needed unless step 22 changes its inputs. |
 | 22 `motion.py` | cached zone-independent blob tracks, `EXTRACTOR_VERSION` | **Operational cache shipped 2026-09-13.** `MotionThresholds` strictly loads all 22 real settings; `src/motion.py` owns `EXTRACTOR_VERSION`, complete cache identity, persistence through `blob_tracks`, and the complete detector/tracking implementation; backtests use the cache by default with `--no-cache` available. On 678 labelled clips, uncached/cold/warm CSVs were byte-identical and warm runtime was 3.7s versus ~6m. | **Correctness/performance goal met; optional cache refinement remains.** The cached JSON payload is the final feature map, keyed by video, resolved zone, reference background, daylight and motion config. It is safe but zone-aware: a geometry edit recomputes extraction. Compact JSON-safe geometry and metric observation DTOs now replay those feature groups exactly, but are not persisted. Do not cache `ClipDetection` wholesale; it contains large NumPy imagery. |
 | 24 browser zone editor | draw polyline/depth/ignore in a browser, atomic dated write | **Nothing** — every fence trace to date is "hand the user an upscaled frame, they draw in a paint tool, colour-threshold it back out" (`README.md` section 4) | Real, standalone feature work, not a refactor of anything existing. Lowest priority of the five unless retracing cameras becomes frequent enough that the manual process is the bottleneck — it currently isn't (18 cameras, dated-history schema already handles remounts). |
-| 20/21 backfill/parsing | hardened camera-ID parsing, resumable full backfill | `scripts/meta_backfill.py`/`scripts/download_clips.py`, 17,000+ clips backfilled without incident | Probably fine in practice but **never verified against the original spec** (every caption shape, health-notification formats, flood-wait/reconnect, dedup). Worth a real audit before assuming done, but not urgent — nothing has broken.
+| 20/21 backfill/parsing | hardened camera-ID parsing, resumable full backfill | `src/message_parsing.py`, `scripts/meta_backfill.py`, `scripts/download_clips.py`, live retrieval, and `scripts/restore_media.py`; 17,000+ clips processed | **Operationally done.** The system has exercised parsing, deduplication, atomic downloads, restoration, and health-event storage at corpus and live scale. New caption forms still require fixtures as they appear. |
 
-**Suggested next engineering tracks:** the step-22 raw-track architectural refinement above,
-step 24's zone editor, or the separate 20/21 backfill audit. The operational caching risk is now
-closed: its identity covers every current extraction input and corpus output was verified exactly.
+**Remaining optional engineering tracks:** the step-22 raw-track architectural refinement or step
+24's zone editor. Neither blocks the completed watcher architecture.
 
 ### Phase 3: Labels, backtester, retrospective sequences
-26. `scripts/label.py`: resumable, prints the clip path by default, optional configured player,
+26. **[done]** `scripts/label.py`: resumable, prints the clip path by default, optional configured player,
     single-key labelling, skip and correction support.
+27. **[partial]** `src/sequence.py` and the query bot support patrol passes, timing, coverage, and
+    gaps. The originally proposed standalone retrospective adjacent-camera probe report remains
+    exploratory and is not a live trigger.
+28. **[done]** `src/backtester.py`: immutable runs recording timestamp, config snapshot/hash, and Git
+    revision when available. Reuses the feature cache, re-derives classification, and never
+    contacts Telegram.
+29. **[partial, implemented differently]** Backtests write inspectable CSV and summary JSON, while
+    ranking/debug tools expose candidate paths, reasons, and features. A projected-false-pages
+    headline and a dedicated run-comparison CLI remain open.
+30. **[done]** Raw support counts accompany the classification metrics.
+31. **[done]** Thresholds remain global. Per-camera classification overrides remain deferred until
+    evidence demonstrates that their benefit outweighs sparse-sample overfitting.
+
+<details>
+<summary>Original Phase 3 wording</summary>
+
 27. `src/sequence.py` extended for analysis: patrol detection (inside progression along the
     confirmed order, cadence, coverage gaps) as a supported feature, plus a retrospective probe
     report listing outside clusters across adjacent cameras in history for manual review. The
@@ -529,13 +584,28 @@ closed: its identity covers every current extraction input and corpus output was
 31. Global thresholds only. Per-camera overrides only where a report demonstrably requires one —
     sparse per-camera labels would otherwise overfit.
 
-### Phase 4: Alert modules (no service)
+</details>
+
+### Phase 4: Alert delivery and operator documentation
+32. **[done]** `telegram_alert.py` and `ntfy_alert.py` are tested transport functions;
+    `scripts/send_test_alert.py` verifies configured delivery with representative examples. They
+    are now called by the live watcher through durable delivery state.
+33. **[done]** README covers setup, authorization, Docker operation, backfill/restoration,
+    geometry, labelling, backtesting, alert tests, retention, and recovery.
+34. **[done]** Work landed as logical, passing commits. The old feature-branch/no-auto-merge rule
+    described the implementation process rather than a runtime component.
+
+<details>
+<summary>Original Phase 4 wording</summary>
+
 32. `telegram_alert.py` and `ntfy_alert.py` as pure tested functions with mocked transports, plus
     a manual send-test command verifying credentials, channel ID, ntfy reachability and optional
     bearer token.
 33. README covering Telethon first-auth, camera-order discovery, spike findings, backfill,
     polyline drawing, labelling, backtesting, threshold iteration, and the manual alert test.
 34. Commit per passing phase on a feature branch; no auto-merge.
+
+</details>
 
 ### Phase 5: Trustee query bot (after calibration)
 35. [done] Role-based access from a Telegram user-ID allowlist: `trustee` (full), `security`
@@ -552,19 +622,39 @@ closed: its identity covers every current extraction input and corpus output was
 39. [done] Analytics carry confidence caveats; patrol counts lean on sequence detection rather than
     single-clip classification.
 
+### Phase 6: Live watcher and operations
+
+40. **[done]** `scripts/watch.py` receives source-channel messages through Telethon and delegates
+    deterministic, serialized processing to `src.live_watcher.LiveWatcher`.
+41. **[done]** Schema v8 stores `live_messages`, pending/final `live_events`, analyzed
+    `live_event_clips`, and per-transport `live_deliveries` alongside the historical corpus.
+42. **[done]** Initial siblings wait up to the measured 300-second window; completion captions
+    finalize immediately, protected urgent siblings survive resolution, and late urgent evidence
+    can reopen a suppressed event.
+43. **[done]** Delivery state supports bounded retry and restart recovery. A process interrupted
+    after beginning an external send becomes `ambiguous` rather than risking an automatic duplicate.
+44. **[done]** Telegram receives animal, incident, resident, and neighbour events; ntfy remains
+    animal/incident-only. The role-enforced query bot restores missing media and renders the exact
+    production detector overlay on demand.
+45. **[done]** Compose runs the watcher with persistent data, restart policy, read-only container
+    filesystem, readiness/heartbeat healthcheck, and separate tools/bootstrap profiles.
+46. **[done]** Opt-in retention preserves urgent/pending evidence and current camera media, cleans
+    obsolete debug renders, and works with live retrieval plus resumable `scripts/restore_media.py`.
+
 ## Sensitivity note
 Patrol-compliance analytics profile identifiable individuals' movements and working patterns.
 Restricting that view from the security company is a sound control, but guards remain data
 subjects (POPIA applies in South Africa). Worth a brief word with trustees on retention and
-access before the bot ships.
+access as part of ongoing operation; the bot has shipped.
 
-## Candidate refinements (not yet built, revisit with evidence)
+## Candidate refinements (mixed status; revisit with evidence)
 
-> **Status note (2026-09-07):** several items in this section are now partly or wholly built —
+> **Status note (updated 2026-09-20):** several items in this section are now partly or wholly built —
 > the dual fence lines shipped as `fence_bottom`, the fence-height/metric calibration shipped as
-> `src/ground_calibration.py`, and the flashlight-vs-subject idea produced a working feature
-> (`post_flash_red_shift`). Read the 2026-09-07 checkpoint at the top of this file and
-> `docs/handoff.md` section #5 before treating anything below as unbuilt.
+> `src/ground_calibration.py`, flashlight discrimination produced `multi_object_flashlight` and
+> `post_flash_red_shift`, resident/neighbour rules shipped, and debug overlays are available on
+> demand. Read the checkpoints above and `docs/next_agent_handoff.md` before treating an original
+> proposal below as current work.
 
 - **Dual fence lines (inside/outside band, not just one side-assignment line)**: on some cameras the
   guard passes close beside/under the fence, close enough that a single polyline's side test could
@@ -585,13 +675,11 @@ access before the bot ships.
   not brightness; and it needs enough labelled `guard` clips per camera before a "usual" shape
   means anything, which the labelling pass (Phase 3, step 26) hasn't produced yet. Revisit once
   labelling gives a real per-camera sample size, not before.
-- **Annotated-video Telegram delivery option**: attach a copy of the alert clip with the motion
-  blob/bounding box and the fence polyline burned in per frame, as an optional alternative or
-  addition to the plain-text alert (2026-08-28, user request). Depends on `motion.py`/`classify.py`
-  (Phase 2/3, not yet built) to produce the per-frame contours to draw, and a `send_video`-capable
-  path in `telegram_alert.py` (currently text-only, `send_message` only). Natural fit as a Phase 4
-  addition once the base classifier and plain-text alerts are proven — no upstream pipeline to
-  draw from yet, so there's nothing to wire it into today.
+- **Annotated-video Telegram delivery option — partly shipped:** every proactive Telegram alert
+  and bot-returned video now has a `Debug view` callback. It restores missing source media and
+  renders/caches the exact production motion, track, and zone overlay. Automatically attaching the
+  annotated copy to every proactive alert remains deferred to avoid extra rendering and delivery
+  cost; the source alert video remains the default attachment.
 - **Fence-base reference line for real-world scale, height, and speed (2026-09-04, user).**
   **Phases 1-3 IMPLEMENTED 2026-09-05** (schema/parsing, dual-line render, geometry helpers); see
   `docs/handoff.md`'s 2026-09-05 session for the full writeup. Summary of what shipped:
@@ -720,41 +808,54 @@ access before the bot ships.
     discipline as everywhere else in this repo. The already-planned real-height/speed calibration
     above would help here too (a dog is both smaller and faster than a person at the same
     distance from camera).
-  - `resident`: `is_daylight`/`is_twilight` (already built, 2026-09-04) plus the fence-side
-    geometry (staying inside, never crossing) are the two existing ingredients closest to a
-    `resident_candidate` rule — not yet assembled into one, and `resident` currently has NO rule
-    of its own in `scripts.backtest.classify` at all (falls through to `unclassified`).
+  - `resident` — **shipped:** `resident_candidate` uses daylight plus inside-only fence geometry.
+    Treat this paragraph as the historical rationale for that rule, not an open implementation item.
   - **Daytime de-escalation for a known-benign-but-unidentified person (2026-09-05, user;
     label added 2026-09-07).** cam14/3495 is a neighbour's worker: not a resident (not
     identified/authorized on this property), not a guard, borderline "almost an intruder" by
     appearance alone, but genuinely not a threat. `VALID_LABELS` gained `neighbour` for exactly
     this case (a benign person outside the fence, not resident/guard/threat) -- cam14/3495
-    relabelled from `unknown` accordingly. Still NO `classify()` rule of its own: only n=1
-    confirmed example exists corpus-wide as of this write (a discovery sweep for more candidates
-    found several real `animal`/`environment` clips but zero further `neighbour` ones -- see
-    repo memory). A real rule needs more examples first, same discipline as everywhere else in
-    this file; the actual alert-priority/de-escalation concept itself (Phase 4 territory) is a
-    separate, still-undesigned question even once a detection rule exists.
+    relabelled from `unknown` accordingly. **Updated 2026-09-20:** the corpus now contains three
+    confirmed neighbour events across five clips, and `neighbour_candidate` identifies calibrated,
+    person-sized daylight motion outside the fence. It is delivered to Telegram as a reviewable
+    event but not to urgent ntfy.
 
 
 
-## Explicitly deferred
-`main.py` live loop, listener queueing, delivery outbox and crash recovery, Dockerfile/compose and
-ARM64 build, run-comparison CLI, migration framework, per-camera
-threshold sets, YOLO/ONNX, activity heatmap, trend analytics, probe-sequence live escalation.
+## Remaining deferred work
+
+- Run-comparison CLI and projected false-pages-per-night reporting.
+- Generic migration framework; targeted, versioned migration scripts exist through schema v8.
+- Per-camera classification threshold sets.
+- Browser zone editor and optional zone-independent raw-track cache.
+- Explicit ARM64 deployment validation (the Docker/Compose service itself is complete).
+- YOLO/ONNX resolver, activity heatmap, trend analytics, and probe-sequence live escalation.
+- Automatically attaching rendered debug video to every proactive alert; on-demand `Debug view`
+  is implemented.
+
+The live loop, listener/event buffering, delivery outbox and crash recovery, Docker/Compose,
+query bot, media restoration, and retention were previously listed here and are now complete.
 
 ## Relevant files
 - `scripts/meta_backfill.py`, `scripts/infer_camera_order.py`, `scripts/download_clips.py`,
-  `scripts/spike.py`, `scripts/label.py`
+  `scripts/spike.py`, `scripts/label.py`, `scripts/watch.py`, `scripts/restore_media.py`,
+  `scripts/send_test_alert.py`
 - `src/config.py`, `src/db.py`, `src/motion.py`, `src/zones.py`, `src/classify.py`,
-  `src/backfill.py`, `src/sequence.py`, `src/backtester.py`
-- `src/telegram_alert.py`, `src/ntfy_alert.py` — functions only this round
-- `src/bot.py` — Phase 5
+  `src/backfill.py`, `src/sequence.py`, `src/backtester.py`, `src/clip_analysis.py`,
+  `src/message_parsing.py`
+- `src/live_watcher.py`, `src/live_state.py`, `src/event_keys.py`, `src/retention.py`
+- `src/telegram_alert.py`, `src/ntfy_alert.py`, `src/bot.py`
 - `config/cameras.yaml` (dated fence polyline history, outside side, depth cutoff, ignore regions,
   confirmed order, operating window), `config/thresholds.yaml`
-- `tests/`, `README.md`, `pyproject.toml`, `uv.lock`
+- `compose.yaml`, `Dockerfile`, `tests/`, `README.md`, `docs/next_agent_handoff.md`,
+  `pyproject.toml`, `uv.lock`
 
-## Verification
+## Verification record
+
+Items 2-4 below are historical discovery gates. Camera order was user-confirmed, Gate 2 was
+retired after the measured classifier/backtest loop, and production changes are now gated by the
+full tests plus protected-event regression and corpus replay where detector behavior changes.
+
 1. `uv lock --check`, `uv run ruff check .`, `uv run pytest`.
 2. Gate 1: inferred camera order passes split-half stability, transit-time consistency, and the
    entry-point check; spectral and reversal-minimised orders agree; user confirms against their
@@ -784,7 +885,7 @@ threshold sets, YOLO/ONNX, activity heatmap, trend analytics, probe-sequence liv
   arrangement rather than replacing it.
 - Crawling humans and large animals are not reliably separable with classical CV. Mitigated by
   policy, not thresholds.
-- Inferred camera order is a hypothesis until validated and user-confirmed; it must never be
-  silently authoritative.
-- Storage: full multi-year history is plausibly 10-40 GB; metadata-first backfill defers that
-  decision.
+- Camera order is user-confirmed numeric/alphabetical order. Any future inferred remapping must
+  never silently replace it.
+- The multi-year corpus has been restored locally. Server storage is controlled by opt-in
+  retention while metadata and source-channel restoration remain available.

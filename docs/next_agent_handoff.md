@@ -20,7 +20,7 @@ was completed.
   approximate `/map`, and
   `/last <camera_id>`; missing media is restored from the source channel. `/patrols` is enforced as
   trustee only in its handler. Bot registration and allowlist values remain deployment inputs.
-  `/menu` and `/start` provide a four-section inline interface with camera buttons, paged event
+  `/menu` and `/start` provide a five-section inline interface with camera buttons, paged event
   buttons, and back navigation. The four visible slash commands (`/menu`, `/tonight`, `/health`,
   `/about`) all return useful information with one tap. Specialized status commands such as
   `/batteries` and parameterized commands remain available through inline navigation and direct
@@ -73,17 +73,29 @@ but do not promote the existing backtest or debug scripts into the service.
 
 - Detector review and production work are committed logically on `main`.
 - `EXTRACTOR_VERSION` is `motion-features-v7`.
-- Run the current full suite and Ruff before changing behavior; the count grows with each layer.
+- Ruff is clean and the full suite is **839 passing tests** at handoff commit `a1f0857`; rerun both
+  before changing behavior because the count grows with each layer.
 - Cold labelled backtest plus final classifier replay: **708 clips**, TP 32 / FP 24 /
   FN 15 / TN 637, precision 0.571, recall 0.681, F1 0.621 (unknowns counted negative).
 - Protected-event regression: all 5 incident and 20 animal events pass with all 49
   protected sibling clips present and no exception.
 - cam12/9162 remains `animal_candidate`: it is labelled `unknown`, but the user's
   review says it may contain a small animal as well as a camera artifact.
-- Telegram and Docker production paths are implemented as summarized above.
+- Telegram and Docker production paths are implemented as summarized above. BotFather setup is
+  complete, the token and alert destination are configured, one trustee is authorized, and the
+  watcher container was healthy after the latest rebuild. No security-role user is configured.
+- The representative Telegram smoke test successfully sent cam08/7360 (animal) and cam06/21520
+  (incident), including their `Debug view` buttons. Telegram has normal or silent delivery but no
+  Bot API priority level; ntfy is configured as `urgent` and receives only animal/incident alerts.
+- The new security contact directory is deployed but its four optional values are still blank.
+  Populate them in `.env` when the user obtains the security company, control-room, and armed
+  response details, then recreate the watcher so Compose reloads the environment.
+- Media retention is currently disabled on this analysis PC as intended. Enable it only in the
+  server environment; source and debug-cache cleanup then follow the documented policy.
 - Local bulk restoration recovered 16,897 of 16,899 clip paths and verified every recorded path
-  exists. Telegram repeatedly times out fetching `cam02/15475` and `cam01b/17386`; rerun
-  `scripts.restore_media` later to retry only those null-path rows.
+  exists. An expanded eight-attempt retry on 2026-09-20 still received Telegram `GetFileRequest`
+  timeouts for `cam02/15475` and `cam01b/17386`; both remain null-path rows and are safe to retry
+  later without revisiting successful downloads.
 
 Run the normal checks with:
 
@@ -224,7 +236,8 @@ do not appear in `git status`.
 - `scripts/label.py` — label workflow using the shared production event key.
 - `scripts/watch.py` — Telethon process entry point and heartbeat loop.
 - `scripts/migrate_schema_v8.py` — additive v7-to-v8 migration.
-- `scripts/send_test_alert.py` — current manual text-transport smoke test.
+- `scripts/send_test_alert.py` — manual text-transport smoke test; `--examples` sends the standing
+  labelled animal and incident videos with debug buttons.
 - `.env.example` — existing Telegram, Bot API, ntfy, DB, and operating-window settings.
 - `docs/handoff.md` — full historical investigation log. Start with session #22; older sections
   are retained for provenance and sometimes explicitly superseded.

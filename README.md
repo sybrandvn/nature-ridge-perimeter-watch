@@ -114,10 +114,11 @@ wanted. Never paste the token into source files, logs, or chat.
 
 The bot enforces `BOT_TRUSTEE_IDS` and `BOT_SECURITY_IDS` in every handler. Trustees and security
 can open the grouped inline interface with `/menu` or `/start`. The top level contains Monitoring,
-Events, System, Site, and Info sections; camera and history entries are selectable buttons. Every visible
-slash command performs an immediate action: `/menu`, `/tonight`, `/health`, and `/about`.
+Events, System, Site, and Info sections. Camera and history entries are selectable buttons. Every
+visible slash command performs an immediate action: `/menu`, `/tonight`, `/health`, and `/about`.
 Specialized status and parameterized commands stay in the inline menu. Existing
-direct commands remain supported: `/about`, `/contacts`, `/tonight`, `/health`, `/power [count]`, `/batteries`,
+direct commands remain supported: `/about`, `/contacts`, `/tonight`, `/health`, `/power [count]`,
+`/batteries`,
 `/panel [count]`, `/faults [count]`, `/animal`, `/animals [count]`, `/incidents [count]`,
 `/residents [count]`, `/neighbours [count]`,
 `/history <animal|incident|resident|neighbour> [page]`, `/event <id>`, `/debug <video-id>`,
@@ -130,11 +131,11 @@ low/restore messages where possible and flags unresolved device warnings for con
 alarm panel.
 Direct `/history` results include one-tap video buttons labelled with the local date, time, and
 camera, so mobile users do not need to copy message IDs.
-Every proactive alert, event, or camera video sent by the bot includes a **Debug view** button. It renders the
-annotated detector video on demand with the clip's timestamp-specific camera geometry, reference
-background, and complete production motion configuration. Renders are cached under `data/debug`
-using an input fingerprint, so repeated taps are fast and detector or geometry changes invalidate
-the old result. `/debug <video-id>` provides the same operation directly.
+Every proactive alert, event, or camera video sent by the bot includes a **Debug view** button. It
+renders the annotated detector video on demand with the clip's timestamp-specific camera geometry,
+reference background, and complete production motion configuration. Renders are cached under
+`data/debug` using an input fingerprint, so repeated taps are fast and detector or geometry
+changes invalidate the old result. `/debug <video-id>` provides the same operation directly.
 To send clearly marked examples using the standing labelled animal and incident clips, run
 `uv run python scripts/send_test_alert.py --examples`. The normal no-argument form remains the
 text-only Telegram and ntfy credential test.

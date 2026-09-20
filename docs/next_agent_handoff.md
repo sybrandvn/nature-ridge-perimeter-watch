@@ -97,7 +97,10 @@ but do not promote the existing backtest or debug scripts into the service.
   review says it may contain a small animal as well as a camera artifact.
 - Telegram and Docker production paths are implemented as summarized above. BotFather setup is
   complete, the token and alert destination are configured, one trustee is authorized, and the
-  watcher container was healthy after the latest rebuild. No security-role user is configured.
+  watcher was rebuilt/recreated after `43e081b` on 2026-09-20. The live container is healthy and
+  reports `DEBUG_RENDER_VERSION=2`; its Docker server is `x86_64` and its image is Linux `amd64`.
+  This deployment therefore does not require ARM64 validation. Validate on real ARM64 hardware if
+  the watcher is later moved to an ARM64 server. No security-role user is configured.
 - The representative Telegram smoke test successfully sent cam08/7360 (animal) and cam06/21520
   (incident), including their `Debug view` buttons. Telegram has normal or silent delivery but no
   Bot API priority level; ntfy is configured as `urgent` and receives only animal/incident alerts.
@@ -272,15 +275,16 @@ operational setup, evidence-driven follow-up, or optional tooling.
 
 ### Deployment inputs and housekeeping
 
-1. Rebuild/recreate the deployed watcher after commit `43e081b` if the server should serve v2
-   debug renders. No database or extractor migration is required for this renderer-only change.
-2. Fill the optional security-company/control-room/armed-response contact values when known, and
+1. Fill the optional security-company/control-room/armed-response contact values when known, and
    add a `security` role user if trustees want that access tier. One trustee is already configured.
-3. Decide whether the storage-constrained server should enable `MEDIA_RETENTION_ENABLED`; leave it
+2. Decide whether the storage-constrained server should enable `MEDIA_RETENTION_ENABLED`; leave it
    off on analysis machines.
-4. Retry Telegram restoration for `cam02/15475` and `cam01b/17386`. They are the only two known
+3. Retry Telegram restoration for `cam02/15475` and `cam01b/17386`. They are the only two known
    missing local clips out of 16,899 and do not block live operation.
-5. Validate the container on the actual ARM64 target if that is the deployment architecture.
+
+ARM64 is not the current deployment architecture: both the live Docker server and rebuilt image
+are AMD64. If the deployment target changes, validate the container on the actual ARM64 host rather
+than treating a cross-build alone as runtime validation.
 
 ### Evidence-driven detector work
 

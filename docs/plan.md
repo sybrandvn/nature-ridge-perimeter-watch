@@ -832,7 +832,8 @@ deployment inputs, evidence-driven detector work, and optional tooling, use **Wh
 - Generic migration framework; targeted, versioned migration scripts exist through schema v8.
 - Per-camera classification threshold sets.
 - Browser zone editor and optional zone-independent raw-track cache.
-- Explicit ARM64 deployment validation (the Docker/Compose service itself is complete).
+- ARM64 runtime validation only if deployment moves away from the current verified AMD64 host;
+  a cross-build alone is not target-host validation.
 - YOLO/ONNX resolver, activity heatmap, trend analytics, and probe-sequence live escalation.
 - Automatically attaching rendered debug video to every proactive alert; on-demand `Debug view`
   is implemented.

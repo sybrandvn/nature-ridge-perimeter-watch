@@ -24,16 +24,19 @@ was completed.
   `/about`) all return useful information with one tap. Specialized status commands such as
   `/batteries` and parameterized commands remain available through inline navigation and direct
   handlers but are omitted from Telegram's command list.
-- Every video returned by the query bot carries a `Debug view` callback. It restores missing source
-  media, renders the exact production detector overlay in a worker thread, and caches it below
+- Every proactive Telegram alert and video returned by the query bot carries a `Debug view`
+  callback. It restores missing source media, renders the exact production detector overlay in a worker thread, and caches it below
   `data/debug` with the extraction fingerprint and renderer version. The secondary
   `/debug <video-id>` command accepts any known clip, including a latest-camera video outside the
   animal/incident history. `scripts.watch.render_bot_debug_video` supplies the timestamp-specific
   zone, reference background, and full `MotionThresholds` record to `render_clip`.
+- `scripts/send_test_alert.py --examples` sends clearly marked copies of the standing cam08/7360
+  animal and cam06/21520 incident clips to the configured Telegram alert destination.
 - `src/retention.py` keeps urgent evidence, pending events, and one newest local video per camera.
   When explicitly enabled, other managed videos are removed hourly while metadata remains
-  available for live retrieval. It is opt-in via `MEDIA_RETENTION_ENABLED=true` and defaults off
-  on development machines.
+  available for live retrieval. The same pass applies that policy to renderer-owned `data/debug`
+  videos and removes obsolete fingerprint/version variants. It is opt-in via
+  `MEDIA_RETENTION_ENABLED=true` and defaults off on development machines.
 - `scripts/restore_media.py` resumably restores every missing database clip in Telegram batches.
 - The measured sibling wait is 300 seconds: only 6 of 8,274 observed sibling groups exceeded it;
   99.9% completed within 286 seconds. Completion captions finalize immediately, and a late urgent

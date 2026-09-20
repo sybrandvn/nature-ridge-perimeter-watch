@@ -27,6 +27,7 @@ async def send_telegram_alert(
     chat_id: str,
     bot: _SendsMessages | None = None,
     video_path: str | Path | None = None,
+    debug_message_id: int | None = None,
 ) -> None:
     """Send `message` to `chat_id` using `bot_token`. Raises AlertError on failure."""
     from telegram.error import TelegramError
@@ -41,7 +42,21 @@ async def send_telegram_alert(
         if video_path is None:
             await client.send_message(chat_id=chat_id, text=message)
         else:
+            reply_markup = None
+            if debug_message_id is not None:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+                reply_markup = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(
+                        "Debug view", callback_data=f"menu:debug:{debug_message_id}"
+                    )]]
+                )
             with Path(video_path).open("rb") as video:
-                await client.send_video(chat_id=chat_id, video=video, caption=message)
+                await client.send_video(
+                    chat_id=chat_id,
+                    video=video,
+                    caption=message,
+                    reply_markup=reply_markup,
+                )
     except (TelegramError, OSError) as exc:
         raise AlertError(f"Telegram alert failed: {exc}") from exc

@@ -128,11 +128,14 @@ low/restore messages where possible and flags unresolved device warnings for con
 alarm panel.
 Direct `/history` results include one-tap video buttons labelled with the local date, time, and
 camera, so mobile users do not need to copy message IDs.
-Every event or camera video sent by the bot includes a **Debug view** button. It renders the
+Every proactive alert, event, or camera video sent by the bot includes a **Debug view** button. It renders the
 annotated detector video on demand with the clip's timestamp-specific camera geometry, reference
 background, and complete production motion configuration. Renders are cached under `data/debug`
 using an input fingerprint, so repeated taps are fast and detector or geometry changes invalidate
 the old result. `/debug <video-id>` provides the same operation directly.
+To send clearly marked examples using the standing labelled animal and incident clips, run
+`uv run python scripts/send_test_alert.py --examples`. The normal no-argument form remains the
+text-only Telegram and ntfy credential test.
 Panel history reports arm/disarm transitions; faults report tamper, supervision/device-missing,
 and control-room communication-test failures. Media commands restore a cleaned clip from the
 source channel through Telethon when it is not local. Media counts are capped at five per request.
@@ -151,8 +154,11 @@ servers can opt in with `MEDIA_RETENTION_ENABLED=true`; cleanup then runs at sta
 default. It keeps human-labelled or live-finalized animal/incident evidence, pending live events
 until they are resolved, and the newest local video for each camera. Other database-referenced
 videos under the configured data directory are deleted and their `file_path` is cleared; message
-metadata remains, so a bot request can retrieve the video again. Paths outside the data directory
-are never deleted. Configure the interval with `MEDIA_RETENTION_INTERVAL_SECONDS`.
+metadata remains, so a bot request can retrieve the video again. The regenerable `data/debug`
+cache follows the same policy: keep animal/incident and latest-camera renders, retain only the
+newest renderer/fingerprint variant for each kept clip, and remove other managed renders. Paths
+outside the data directory are never deleted. Configure the interval with
+`MEDIA_RETENTION_INTERVAL_SECONDS`.
 
 To restore cleaned media on a development machine, stop the watcher so it releases the Telethon
 session, then run the resumable bulk restore. Successful files are committed one at a time, so the

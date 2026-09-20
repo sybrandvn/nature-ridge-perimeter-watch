@@ -39,3 +39,21 @@ async def test_send_telegram_alert_can_attach_video(tmp_path):
     assert kwargs["chat_id"] == "alerts"
     assert kwargs["caption"] == "animal"
     assert kwargs["video"].name == str(path)
+    assert kwargs["reply_markup"] is None
+
+
+async def test_video_alert_can_link_to_detector_debug(tmp_path):
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"video")
+    bot = AsyncMock()
+    await send_telegram_alert(
+        "incident",
+        bot_token="unused",
+        chat_id="alerts",
+        bot=bot,
+        video_path=path,
+        debug_message_id=42,
+    )
+    button = bot.send_video.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Debug view"
+    assert button.callback_data == "menu:debug:42"

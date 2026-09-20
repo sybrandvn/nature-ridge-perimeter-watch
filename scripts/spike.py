@@ -82,6 +82,7 @@ FEATURE_COLUMNS = (
     "warmup_dynamic_frame_fraction",
     "warmup_dynamic_outside_fraction",
     "warmup_dynamic_classifiable_fraction",
+    "warmup_dynamic_inside_bottom_left_fraction",
     "flashlight_subject_fraction",
     "row_normalised_area",
     "edge_density",

@@ -2221,6 +2221,39 @@ def test_features_from_detection_keeps_warmup_flashlight_without_settled_track()
     assert result["warmup_flashlight_ratio"] > 0.0
 
 
+def test_warmup_motion_reports_inside_bottom_left_dynamics():
+    size = 100
+    rng = np.random.default_rng(7)
+    background = rng.integers(0, 256, size=(size, size), dtype=np.uint8)
+    dropped = []
+    for x in (24, 20, 16, 12):
+        frame = cv2.cvtColor(background, cv2.COLOR_GRAY2BGR)
+        cv2.rectangle(frame, (x, 55), (x + 18, 90), (255, 255, 255), thickness=-1)
+        dropped.append(frame)
+    detection = motion.ClipDetection(
+        frames=[],
+        background=background,
+        frame_width=size,
+        frame_height=size,
+        warmup_dropped=len(dropped),
+        total_frames=len(dropped),
+        dropped_frames=dropped,
+        dropped_frame_boxes=[None] * len(dropped),
+        multi_tracks=[],
+    )
+    zone = CameraZone(
+        fence=((0.5, 0.0), (0.5, 1.0)),
+        outside="right",
+        depth_cutoff=0.0,
+        ignore=(),
+    )
+
+    result = scoring._warmup_motion_features(detection, zone, size, size, threshold=18)
+
+    assert result["warmup_dynamic_frame_fraction"] == 1.0
+    assert result["warmup_dynamic_inside_bottom_left_fraction"] == 1.0
+
+
 def test_extract_clip_features_computes_all_features_with_motion(monkeypatch, tmp_path):
     frames = [_frame_with_square(pos) for pos in (5, 10, 15, 20, 25)]
     monkeypatch.setattr(cv2, "VideoCapture", lambda _path: FakeCapture(frames))

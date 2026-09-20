@@ -69,6 +69,15 @@ classification:
     # reviewed bad-startup 17752 plus alerting guard 5374, with no protected
     # category change across the labelled corpus.
     warmup_flashlight_ratio_min: 0.0019
+    # A flashlight driven into the lens often leaves the settled image redder
+    # than the pre-flash frame even when the green beam itself was not tracked.
+    # Re-derived 2026-09-20 after the deep-night review: 36 labelled guards
+    # exceed 0.12, while the maxima for animal/incident/neighbour/resident/
+    # unknown are 0.081/0.001/0.068/0.037/0.026. One environment clip reaches
+    # 0.116, hence the deliberately higher 0.12 floor. This recovers daylight
+    # flashlight misses cam02/10256 and cam04/18264 before blob_count suppresses
+    # them as environment.
+    post_flash_red_shift_min: 0.12
     # Warmup-only recovery: among all 15 labelled clips where the settled
     # detector found no contour, this conjunction identifies exactly four
     # guards (5464, 17501, 21491, 21506), with no animal or incident match.
@@ -77,6 +86,15 @@ classification:
     # a genuine later subject.
     warmup_dynamic_frame_fraction_min: 0.8
     warmup_dynamic_outside_fraction_max: 0.25
+    # Guard exits during IR warmup: genuine consecutive-frame motion stays
+    # low/left and inside before the settled detector locks onto an illuminated
+    # branch or patch outside. Measured 2026-09-20 on all 817 labelled clips:
+    # this conjunction recovers 33 additional guards, changes zero animal,
+    # incident, neighbour or resident clips, and suppresses one environment
+    # clip that previously leaked to incident_candidate.
+    warmup_exit_outside_fraction_max: 0.30
+    warmup_exit_classifiable_fraction_min: 0.8
+    warmup_exit_bottom_left_fraction_min: 0.6
 
   environment:
     # classify() docstring, "environment_candidate". A PEAK over frames.

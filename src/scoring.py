@@ -235,6 +235,7 @@ def _warmup_motion_features(
         "warmup_dynamic_frame_fraction": 0.0,
         "warmup_dynamic_outside_fraction": 0.0,
         "warmup_dynamic_classifiable_fraction": 0.0,
+        "warmup_dynamic_inside_bottom_left_fraction": 0.0,
     }
     dropped = detection.dropped_frames
     if len(dropped) < 2:
@@ -273,6 +274,7 @@ def _warmup_motion_features(
         track.append((x, y, w, h))
 
     dynamic_verdicts: list[str] = []
+    dynamic_inside_bottom_left_hits = 0
     close_kernel = np.ones((9, 9), np.uint8)
     ignore_mask = (
         ignore_region_mask(frame_width, frame_height, zone.ignore) if zone.ignore else None
@@ -303,12 +305,18 @@ def _warmup_motion_features(
             continue
         dynamic_hits += 1
         x, y, width, height = cv2.boundingRect(max(candidates, key=cv2.contourArea))
-        dynamic_verdicts.append(
-            classify_zone(
-                ((x + width / 2.0) / frame_width, (y + height) / frame_height),
-                zone,
-            )
+        base_centre = (
+            (x + width / 2.0) / frame_width,
+            (y + height) / frame_height,
         )
+        verdict = classify_zone(base_centre, zone)
+        dynamic_verdicts.append(verdict)
+        # Confirmed guard-exit geometry: the person is still on the protected
+        # side, low and left in frame, while walking out before IR warmup ends.
+        # Count against every dynamic hit (not only classifiable ones), so an
+        # uncertain zone verdict cannot inflate this feature.
+        if verdict == "inside" and base_centre[0] <= 0.45 and base_centre[1] >= 0.60:
+            dynamic_inside_bottom_left_hits += 1
 
     pair_count = len(corrected_frames) - 1
     dynamic_classifiable = [
@@ -326,6 +334,9 @@ def _warmup_motion_features(
         ),
         "warmup_dynamic_classifiable_fraction": (
             len(dynamic_classifiable) / dynamic_hits if dynamic_hits > 0 else 0.0
+        ),
+        "warmup_dynamic_inside_bottom_left_fraction": (
+            dynamic_inside_bottom_left_hits / dynamic_hits if dynamic_hits > 0 else 0.0
         ),
     }
 

@@ -39,7 +39,7 @@ from src.features import (
 )
 from src.reference_bg import align
 
-EXTRACTOR_VERSION = "motion-features-v7"
+EXTRACTOR_VERSION = "motion-features-v8"
 _NO_MOTION_KEY = "__perimeter_watch_no_motion__"
 _FLAT_PATCH_STD = 1e-3
 _FLAT_PATCH_TOLERANCE = 2.0

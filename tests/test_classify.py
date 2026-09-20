@@ -135,6 +135,45 @@ def test_other_warmup_only_motion_remains_unclassified():
     assert result.reason == "warmup_only_unclassified"
 
 
+def test_classify_guard_on_bottom_left_warmup_exit_before_outside_alert():
+    result = classify_detailed(
+        _features(
+            scored_motion_present=1.0,
+            warmup_dynamic_frame_fraction=0.9,
+            warmup_dynamic_classifiable_fraction=1.0,
+            warmup_dynamic_outside_fraction=0.2,
+            warmup_dynamic_inside_bottom_left_fraction=0.8,
+            outside_pixel_fraction=0.9,
+            median_fence_distance=0.2,
+        )
+    )
+
+    assert result.category == "guard_candidate"
+    assert result.reason == "warmup_bottom_left_exit"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("warmup_dynamic_frame_fraction", 0.7),
+        ("warmup_dynamic_classifiable_fraction", 0.7),
+        ("warmup_dynamic_outside_fraction", 0.4),
+        ("warmup_dynamic_inside_bottom_left_fraction", 0.5),
+    ],
+)
+def test_bottom_left_warmup_exit_requires_every_measured_condition(field, value):
+    features = _features(
+        scored_motion_present=1.0,
+        warmup_dynamic_frame_fraction=0.9,
+        warmup_dynamic_classifiable_fraction=1.0,
+        warmup_dynamic_outside_fraction=0.2,
+        warmup_dynamic_inside_bottom_left_fraction=0.8,
+    )
+    features[field] = value
+
+    assert classify(features) != "guard_candidate"
+
+
 def test_classify_warmup_flashlight_beats_animal_incident_geometry():
     # These clips DO pass the outside/far-from-fence geometry test -- that is
     # why they reached the review queue in the first place.
@@ -164,6 +203,18 @@ def test_classify_guard_candidate_on_multi_object_flashlight():
     # tracked object in the same clip scores as a real flashlight.
     features = _features(multi_object_max_flashlight_ratio=0.2)
     assert classify(features) == "guard_candidate"
+
+
+def test_classify_guard_candidate_on_post_flash_red_shift():
+    result = classify_detailed(_features(post_flash_red_shift=0.2, blob_count=20))
+
+    assert result.category == "guard_candidate"
+    assert result.reason == "post_flash_red_shift"
+    assert result.contributing == {"post_flash_red_shift": 0.2}
+
+
+def test_classify_post_flash_red_shift_below_threshold_does_not_fire():
+    assert classify(_features(post_flash_red_shift=0.116)) != "guard_candidate"
 
 
 def test_classify_multi_object_flashlight_beats_animal_incident_geometry():
@@ -853,6 +904,21 @@ def test_classify_warmup_flashlight_threshold_is_wired():
     assert classify(features) == "guard_candidate"
     assert (
         classify(features, _thresholds(warmup_flashlight_ratio_min=0.01)) != "guard_candidate"
+    )
+
+
+def test_classify_warmup_exit_bottom_left_threshold_is_wired():
+    features = _features(
+        scored_motion_present=1.0,
+        warmup_dynamic_frame_fraction=0.9,
+        warmup_dynamic_classifiable_fraction=1.0,
+        warmup_dynamic_outside_fraction=0.2,
+        warmup_dynamic_inside_bottom_left_fraction=0.8,
+    )
+    assert classify(features) == "guard_candidate"
+    assert (
+        classify(features, _thresholds(warmup_exit_bottom_left_fraction_min=0.9))
+        != "guard_candidate"
     )
 
 

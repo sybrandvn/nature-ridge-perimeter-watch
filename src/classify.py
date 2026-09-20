@@ -74,6 +74,15 @@ Rules:
     0.001915. The new floor catches both with no animal/incident category
     change and remains 4.1x above incident's measured maximum. Revisit if a
     labelled incident ever exceeds 0.0019.
+  - guard_candidate (post-flash red shift): post_flash_red_shift > 0.12
+    (added 2026-09-20). Recovers a flashlight aimed into the lens when neither
+    the single- nor multi-object tracker follows the beam. Across the current
+    labelled corpus, 36 guard clips clear the floor; animal, incident,
+    neighbour, resident and unknown have maxima of 0.081, 0.001, 0.068, 0.037
+    and 0.026 respectively. The highest environment clip is 0.116, which is
+    why the operating point is 0.12 rather than the older maintenance-only
+    heuristic's 0.10. This rule precedes blob-count suppression so scattered
+    flare contours cannot hide a verified flashlight response.
   - guard_candidate (per-object flashlight): multi_object_max_flashlight_ratio
     > GREEN_LIGHT_RATIO_MIN (same threshold as the single-track green_light
     rule above -- added 2026-09-09, from docs/detection_improvement_review.md
@@ -111,6 +120,13 @@ Rules:
     subjects can coexist with onside warmup motion. Other warmup-only evidence
     becomes `unclassified/warmup_only_unclassified`, preserving the feature
     contract without pretending the later normal rule chain has a subject.
+  - guard_candidate (bottom-left warmup exit): settled motion exists, but at
+    least 80% of corrected consecutive warmup pairs contain classifiable
+    motion, no more than 30% of it is outside, and at least 60% is low/left
+    inside motion. Added 2026-09-20 from eight user-narrated guard exits. On
+    all 817 labelled clips it recovers 33 guards missed by the preceding
+    rules, changes zero animal/incident/neighbour/resident clips, and moves
+    one environment clip out of incident_candidate into suppression.
   - environment_candidate: blob_count > 10 (added 2026-08-31, checked before
     animal_candidate/incident_candidate/insect_candidate so a stormy/windy clip's
     scattered foliage blobs don't get read as a shape signal. Measured against
@@ -505,7 +521,8 @@ def classify_detailed(
 
     `reason` is one fixed code per rule (`no_features`, `green_light`,
     `warmup_flashlight`, `warmup_dynamic_inside`,
-    `warmup_only_unclassified`, `multi_object_flashlight`, `blob_count_peak`,
+    `warmup_only_unclassified`, `multi_object_flashlight`, `post_flash_red_shift`,
+    `warmup_bottom_left_exit`, `blob_count_peak`,
     `blob_count_sustained`, `inside_elevated_animal`, `implausible_height`,
     `near_fence_animal`, `fence_straddle_no_colour`, `far_outside_animal`,
     `far_outside_multitrack`, `blinding_blob_white`,
@@ -573,6 +590,42 @@ def classify_detailed(
                 "multi_object_max_flashlight_ratio": features.get(
                     "multi_object_max_flashlight_ratio", 0.0
                 )
+            },
+        )
+    if features.get("post_flash_red_shift", 0.0) > thresholds.post_flash_red_shift_min:
+        return ClassificationResult(
+            "guard_candidate",
+            "post_flash_red_shift",
+            {"post_flash_red_shift": features.get("post_flash_red_shift", 0.0)},
+        )
+    if (
+        features.get("scored_motion_present", 1.0) > 0.0
+        and features.get("warmup_dynamic_frame_fraction", 0.0)
+        >= thresholds.warmup_dynamic_frame_fraction_min
+        and features.get("warmup_dynamic_classifiable_fraction", 0.0)
+        >= thresholds.warmup_exit_classifiable_fraction_min
+        and features.get("warmup_dynamic_outside_fraction", 1.0)
+        <= thresholds.warmup_exit_outside_fraction_max
+        and features.get("warmup_dynamic_inside_bottom_left_fraction", 0.0)
+        >= thresholds.warmup_exit_bottom_left_fraction_min
+    ):
+        return ClassificationResult(
+            "guard_candidate",
+            "warmup_bottom_left_exit",
+            {
+                "scored_motion_present": features.get("scored_motion_present", 1.0),
+                "warmup_dynamic_frame_fraction": features.get(
+                    "warmup_dynamic_frame_fraction", 0.0
+                ),
+                "warmup_dynamic_classifiable_fraction": features.get(
+                    "warmup_dynamic_classifiable_fraction", 0.0
+                ),
+                "warmup_dynamic_outside_fraction": features.get(
+                    "warmup_dynamic_outside_fraction", 1.0
+                ),
+                "warmup_dynamic_inside_bottom_left_fraction": features.get(
+                    "warmup_dynamic_inside_bottom_left_fraction", 0.0
+                ),
             },
         )
     if features.get("scored_motion_present", 1.0) == 0.0:

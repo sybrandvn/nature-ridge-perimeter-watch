@@ -84,22 +84,38 @@ def add_analyzed_clip(
         ON CONFLICT (event_key) DO UPDATE SET
             status = CASE
                 WHEN live_events.status = 'finalized'
-                 AND COALESCE(live_events.final_category, '') NOT IN
-                     ('animal_candidate', 'incident_candidate')
-                 AND ? IN ('animal_candidate', 'incident_candidate')
+                 AND (
+                     (
+                         COALESCE(live_events.final_category, '') NOT IN
+                             ('animal_candidate', 'incident_candidate')
+                         AND ? IN ('animal_candidate', 'incident_candidate')
+                     )
+                     OR (
+                         ? = 'complete'
+                         AND live_events.resolution_state IN ('unconfirmed', 'conflicting')
+                     )
+                 )
                 THEN 'pending' ELSE live_events.status
             END,
             deadline_at = CASE
                 WHEN live_events.status = 'pending'
-                  OR (COALESCE(live_events.final_category, '') NOT IN
-                        ('animal_candidate', 'incident_candidate')
-                      AND ? IN ('animal_candidate', 'incident_candidate'))
+                  OR (
+                      (
+                          COALESCE(live_events.final_category, '') NOT IN
+                              ('animal_candidate', 'incident_candidate')
+                          AND ? IN ('animal_candidate', 'incident_candidate')
+                      )
+                      OR (
+                          ? = 'complete'
+                          AND live_events.resolution_state IN ('unconfirmed', 'conflicting')
+                      )
+                  )
                 THEN excluded.deadline_at
                 ELSE live_events.deadline_at
             END,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         """,
-        (event_key, camera_id, deadline, category, category),
+        (event_key, camera_id, deadline, category, phase, category, phase),
     )
     conn.execute(
         """
@@ -146,6 +162,41 @@ def event_clips(conn: sqlite3.Connection, event_key: str) -> list[sqlite3.Row]:
     )
 
 
+def enqueue_preliminary(
+    conn: sqlite3.Connection,
+    *,
+    event_key: str,
+    category: str,
+    reason: str,
+    representative_channel_id: str,
+    representative_message_id: int,
+    transports: Iterable[str],
+    now: datetime,
+) -> int:
+    """Queue one early warning per configured transport for an urgent Initial clip."""
+    inserted = 0
+    for transport in transports:
+        inserted += conn.execute(
+            """
+            INSERT OR IGNORE INTO live_deliveries (
+                event_key, transport, notification_kind, category, reason,
+                resolution_state, representative_channel_id,
+                representative_message_id, status, next_attempt_at
+            ) VALUES (?, ?, 'preliminary', ?, ?, 'pending', ?, ?, 'pending', ?)
+            """,
+            (
+                event_key,
+                transport,
+                category,
+                reason,
+                representative_channel_id,
+                representative_message_id,
+                utc_text(now),
+            ),
+        ).rowcount
+    return inserted
+
+
 def finalize_event(
     conn: sqlite3.Connection,
     *,
@@ -156,20 +207,27 @@ def finalize_event(
     representative_message_id: int,
     transports: Iterable[str],
     now: datetime,
+    resolution_state: str = "confirmed",
+    notification_channel_id: str | None = None,
+    notification_message_id: int | None = None,
 ) -> bool:
-    """Finalize once and enqueue each configured transport atomically."""
+    """Finalize once and enqueue a final alert or an update atomically."""
+    notification_channel_id = notification_channel_id or representative_channel_id
+    notification_message_id = notification_message_id or representative_message_id
     conn.execute("BEGIN IMMEDIATE")
     try:
         changed = conn.execute(
             """
             UPDATE live_events SET status = 'finalized', final_category = ?, final_reason = ?,
-                representative_channel_id = ?, representative_message_id = ?,
+                resolution_state = ?, representative_channel_id = ?,
+                representative_message_id = ?,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE event_key = ? AND status = 'pending'
             """,
             (
                 category,
                 reason,
+                resolution_state,
                 representative_channel_id,
                 representative_message_id,
                 event_key,
@@ -177,13 +235,56 @@ def finalize_event(
         ).rowcount
         if changed:
             for transport in transports:
+                preliminary = conn.execute(
+                    """
+                    SELECT status FROM live_deliveries
+                    WHERE event_key = ? AND transport = ?
+                      AND notification_kind = 'preliminary'
+                    """,
+                    (event_key, transport),
+                ).fetchone()
+                notification_kind = "final"
+                if preliminary is not None:
+                    if preliminary["status"] in ("delivered", "sending", "ambiguous"):
+                        notification_kind = "resolution"
+                    else:
+                        conn.execute(
+                            """
+                            DELETE FROM live_deliveries
+                            WHERE event_key = ? AND transport = ?
+                              AND notification_kind = 'preliminary'
+                            """,
+                            (event_key, transport),
+                        )
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO live_deliveries
-                        (event_key, transport, status, next_attempt_at)
-                    VALUES (?, ?, 'pending', ?)
+                    INSERT INTO live_deliveries (
+                        event_key, transport, notification_kind, category, reason,
+                        resolution_state, representative_channel_id,
+                        representative_message_id, status, next_attempt_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                    ON CONFLICT (event_key, transport, notification_kind) DO UPDATE SET
+                        category = excluded.category,
+                        reason = excluded.reason,
+                        resolution_state = excluded.resolution_state,
+                        representative_channel_id = excluded.representative_channel_id,
+                        representative_message_id = excluded.representative_message_id,
+                        status = 'pending',
+                        next_attempt_at = excluded.next_attempt_at,
+                        last_error = NULL,
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                     """,
-                    (event_key, transport, utc_text(now)),
+                    (
+                        event_key,
+                        transport,
+                        notification_kind,
+                        category,
+                        reason,
+                        resolution_state,
+                        notification_channel_id,
+                        notification_message_id,
+                        utc_text(now),
+                    ),
                 )
         conn.execute("COMMIT")
         return bool(changed)
@@ -220,13 +321,24 @@ def enqueue_missing_deliveries(
     for transport in transports:
         inserted += conn.execute(
             """
-            INSERT OR IGNORE INTO live_deliveries
-                (event_key, transport, status, next_attempt_at)
-            SELECT event_key, ?, 'pending', ? FROM live_events
-            WHERE status = 'finalized'
-              AND final_category IN ('animal_candidate', 'incident_candidate')
+            INSERT OR IGNORE INTO live_deliveries (
+                event_key, transport, notification_kind, category, reason,
+                resolution_state, representative_channel_id,
+                representative_message_id, status, next_attempt_at
+            )
+            SELECT e.event_key, ?, 'final', e.final_category, e.final_reason,
+                   COALESCE(e.resolution_state, 'confirmed'),
+                   e.representative_channel_id, e.representative_message_id,
+                   'pending', ?
+            FROM live_events e
+            WHERE e.status = 'finalized'
+              AND e.final_category IN ('animal_candidate', 'incident_candidate')
+              AND NOT EXISTS (
+                  SELECT 1 FROM live_deliveries d
+                  WHERE d.event_key = e.event_key AND d.transport = ?
+              )
             """,
-            (transport, utc_text(now)),
+            (transport, utc_text(now), transport),
         ).rowcount
     return inserted
 
@@ -235,30 +347,44 @@ def due_deliveries(conn: sqlite3.Connection, now: datetime) -> list[sqlite3.Row]
     return list(
         conn.execute(
             """
-            SELECT d.*, e.final_category, e.final_reason,
-                   e.representative_channel_id, e.representative_message_id,
-                   c.file_path, c.camera_id, c.timestamp
+            SELECT d.*, e.camera_id, c.file_path, c.timestamp,
+                   lec.category AS evidence_category, lec.reason AS evidence_reason,
+                   (SELECT category FROM live_event_clips initial
+                    WHERE initial.event_key = d.event_key AND initial.phase = 'initial'
+                    ORDER BY initial.message_id DESC LIMIT 1) AS initial_category,
+                   (SELECT category FROM live_event_clips complete
+                    WHERE complete.event_key = d.event_key AND complete.phase = 'complete'
+                    ORDER BY complete.message_id DESC LIMIT 1) AS complete_category
             FROM live_deliveries d JOIN live_events e USING (event_key)
             LEFT JOIN clips c
-              ON c.channel_id = e.representative_channel_id
-             AND c.message_id = e.representative_message_id
+              ON c.channel_id = d.representative_channel_id
+             AND c.message_id = d.representative_message_id
+            LEFT JOIN live_event_clips lec
+              ON lec.channel_id = d.representative_channel_id
+             AND lec.message_id = d.representative_message_id
             WHERE d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?
-            ORDER BY d.next_attempt_at
+            ORDER BY d.next_attempt_at, d.event_key, d.notification_kind
             """,
             (utc_text(now),),
         )
     )
 
 
-def claim_delivery(conn: sqlite3.Connection, event_key: str, transport: str) -> bool:
+def claim_delivery(
+    conn: sqlite3.Connection,
+    event_key: str,
+    transport: str,
+    notification_kind: str = "final",
+) -> bool:
     return bool(
         conn.execute(
             """
             UPDATE live_deliveries SET status = 'sending', attempt_count = attempt_count + 1,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE event_key = ? AND transport = ? AND status IN ('pending', 'failed')
+            WHERE event_key = ? AND transport = ? AND notification_kind = ?
+              AND status IN ('pending', 'failed')
             """,
-            (event_key, transport),
+            (event_key, transport, notification_kind),
         ).rowcount
     )
 
@@ -267,6 +393,7 @@ def finish_delivery(
     conn: sqlite3.Connection,
     event_key: str,
     transport: str,
+    notification_kind: str = "final",
     *,
     delivered: bool,
     next_attempt_at: datetime,
@@ -276,7 +403,8 @@ def finish_delivery(
         """
         UPDATE live_deliveries SET status = ?, next_attempt_at = ?, last_error = ?,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE event_key = ? AND transport = ? AND status = 'sending'
+        WHERE event_key = ? AND transport = ? AND notification_kind = ?
+          AND status = 'sending'
         """,
         (
             "delivered" if delivered else "failed",
@@ -284,5 +412,6 @@ def finish_delivery(
             error,
             event_key,
             transport,
+            notification_kind,
         ),
     )

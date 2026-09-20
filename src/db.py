@@ -15,7 +15,7 @@ from typing import Any
 
 from src.errors import DbError
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # What the event was. Shared by every clip in an event (see labels.label below) --
 # a startup/prefix clip that's part of an `incident` event is still `incident`, just
@@ -171,6 +171,11 @@ CREATE TABLE IF NOT EXISTS live_events (
     deadline_at TEXT NOT NULL,
     final_category TEXT,
     final_reason TEXT,
+    resolution_state TEXT CHECK (
+        resolution_state IS NULL OR resolution_state IN (
+            'confirmed', 'conflicting', 'likely_resolved', 'unconfirmed'
+        )
+    ),
     representative_channel_id TEXT,
     representative_message_id INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -195,6 +200,18 @@ CREATE INDEX IF NOT EXISTS idx_live_event_clips_event ON live_event_clips (event
 CREATE TABLE IF NOT EXISTS live_deliveries (
     event_key TEXT NOT NULL REFERENCES live_events (event_key),
     transport TEXT NOT NULL,
+    notification_kind TEXT NOT NULL CHECK (
+        notification_kind IN ('preliminary', 'final', 'resolution')
+    ),
+    category TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    resolution_state TEXT NOT NULL CHECK (
+        resolution_state IN (
+            'pending', 'confirmed', 'conflicting', 'likely_resolved', 'unconfirmed'
+        )
+    ),
+    representative_channel_id TEXT NOT NULL,
+    representative_message_id INTEGER NOT NULL,
     status TEXT NOT NULL CHECK (
         status IN ('pending', 'sending', 'delivered', 'failed', 'ambiguous')
     ),
@@ -202,7 +219,7 @@ CREATE TABLE IF NOT EXISTS live_deliveries (
     next_attempt_at TEXT NOT NULL,
     last_error TEXT,
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    PRIMARY KEY (event_key, transport)
+    PRIMARY KEY (event_key, transport, notification_kind)
 );
 CREATE INDEX IF NOT EXISTS idx_live_deliveries_due
     ON live_deliveries (status, next_attempt_at);

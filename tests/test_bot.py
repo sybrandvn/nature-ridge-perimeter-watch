@@ -2,6 +2,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from src import db, live_state
 from src.bot import BotQueries, QueryBot, build_query_bot, operating_period
 from src.config import Camera, CamerasConfig, CameraZone, load_app_config_from_mapping
@@ -614,6 +616,45 @@ async def test_grouped_menu_navigates_sections(tmp_path):
         "Security contacts",
         "About this system",
         "Back",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("command", "parent"),
+    [
+        ("tonight", "monitor"),
+        ("health", "monitor"),
+        ("power", "system"),
+        ("batteries", "system"),
+        ("panel", "system"),
+        ("faults", "system"),
+        ("map", "site"),
+        ("contacts", "site"),
+        ("about", "site"),
+    ],
+)
+async def test_detail_back_buttons_return_to_parent_section(tmp_path, command, parent):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock())
+    query = SimpleNamespace(
+        data=f"menu:show:{command}",
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=11),
+        effective_message=message,
+        callback_query=query,
+    )
+
+    await controller.menu_callback(update, None)
+
+    markup = query.edit_message_text.await_args.kwargs["reply_markup"]
+    buttons = [button for row in markup.inline_keyboard for button in row]
+    assert [(button.text, button.callback_data) for button in buttons] == [
+        ("Back", f"menu:{parent}"),
+        ("Main menu", "menu:home"),
     ]
 
 

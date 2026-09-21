@@ -849,7 +849,7 @@ class QueryBot:
                 else getattr(self.queries, command)()
             )
             section = {
-                "about": "home",
+                "about": "site",
                 "tonight": "monitor",
                 "health": "monitor",
                 "power": "system",

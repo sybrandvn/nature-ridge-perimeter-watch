@@ -944,13 +944,7 @@ class QueryBot:
         png = await asyncio.to_thread(render_activity_report, report)
         photo = io.BytesIO(png)
         photo.name = f"activity-{period}.png"
-        await message.reply_photo(
-            photo=photo,
-            caption=report.caption,
-            reply_markup=self._keyboard(
-                [[("Reports", "menu:reports"), ("Main menu", "menu:home")]]
-            ),
-        )
+        await message.reply_photo(photo=photo, caption=report.caption)
 
     async def last(self, update: Any, context: Any) -> None:
         authorized = await self._authorize(update, "last")

@@ -130,15 +130,16 @@ wanted. Never paste the token into source files, logs, or chat.
 
 The bot enforces `BOT_TRUSTEE_IDS` and `BOT_SECURITY_IDS` in every handler. Trustees and security
 can open the grouped inline interface with `/menu` or `/start`. The top level contains Monitoring,
-Events, System, Site, and Info sections. Camera and history entries are selectable buttons. Every
-visible slash command performs an immediate action: `/menu`, `/tonight`, `/health`, and `/about`.
+Events, System, Site, Reports, and Info sections. Camera and history entries are selectable
+buttons. Every visible slash command performs an immediate action: `/menu`, `/tonight`, `/health`,
+`/month`, `/year`, and `/about`.
 Specialized status and parameterized commands stay in the inline menu. Existing
 direct commands remain supported: `/about`, `/contacts`, `/tonight`, `/health`, `/power [count]`,
 `/batteries`,
 `/panel [count]`, `/faults [count]`, `/animal`, `/animals [count]`, `/incidents [count]`,
 `/residents [count]`, `/neighbours [count]`,
 `/history <animal|incident|resident|neighbour> [page]`, `/event <id>`, `/debug <video-id>`,
-`/map`, and
+`/map`, `/month`, `/year`, and
 `/last <camera_id>`; only trustees
 can use `/patrols`. Power history separates failures from restorations and collapses identical
 repeated notifications. `/history` groups Initial/Stopped sibling clips into events and lists a
@@ -171,6 +172,14 @@ separate durable outbox. Telegram receives every recognized transition. ntfy use
 only for incident alerts; animal and system-event notifications, including failures and recovery
 updates, use default priority. Detector-only `blinding_foreground` maintenance findings remain in
 the offline maintenance review queue rather than paging Telegram or ntfy.
+The Reports menu (or direct `/month` / `/year`) sends a single PNG with two charts — activity by
+time of day and activity over time (daily within a month, monthly within a year) — plus a caption
+stating the event count, active days, and busiest hour. Both reports count each physical camera
+trigger once: Initial/completed sibling clips sharing an embedded alert timestamp collapse to the
+earlier of the pair, the same event-key grouping `/history` and the live watcher already use.
+Periods are calendar month-to-date / year-to-date in local (SAST) time. `src/activity_reports.py`
+builds the report from `clips` directly (no detection/classification involved), so an empty period
+renders a clearly labelled zero-activity chart instead of failing.
 The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram and
 ntfy receive all four live categories. Only incidents use urgent ntfy priority; animal, resident,
 and neighbour observations use default priority. This camera routing is separate from the

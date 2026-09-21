@@ -91,15 +91,15 @@ def _runtime(tmp_path, analyses):
     return conn, watcher, bot
 
 
-def test_resident_and_neighbour_are_quiet_channel_alerts(tmp_path):
+def test_all_camera_alert_categories_have_transport_parity(tmp_path):
     _conn, watcher, _bot = _runtime(tmp_path, [])
     watcher.config = replace(
         watcher.config,
         ntfy_base_url="https://ntfy.example",
         ntfy_topic="alerts",
     )
-    assert watcher._transports("resident_candidate") == ("telegram",)
-    assert watcher._transports("neighbour_candidate") == ("telegram",)
+    assert watcher._transports("resident_candidate") == ("telegram", "ntfy")
+    assert watcher._transports("neighbour_candidate") == ("telegram", "ntfy")
     assert watcher._transports("animal_candidate") == ("telegram", "ntfy")
     assert watcher._transports("guard_candidate") == ()
 
@@ -216,6 +216,8 @@ async def test_only_incident_camera_events_use_urgent_ntfy_priority(tmp_path):
     for name, category, expected in (
         ("incident", "incident_candidate", "urgent"),
         ("animal", "animal_candidate", "default"),
+        ("resident", "resident_candidate", "default"),
+        ("neighbour", "neighbour_candidate", "default"),
     ):
         _conn, watcher, _bot = _runtime(tmp_path / name, [(category, "reason")])
         watcher.config = replace(

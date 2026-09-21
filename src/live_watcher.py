@@ -26,7 +26,7 @@ logger = logging.getLogger("live_watcher")
 TELEGRAM_ALERT_CATEGORIES = frozenset(
     {"animal_candidate", "incident_candidate", "resident_candidate", "neighbour_candidate"}
 )
-NTFY_ALERT_CATEGORIES = frozenset({"animal_candidate", "incident_candidate"})
+NTFY_ALERT_CATEGORIES = TELEGRAM_ALERT_CATEGORIES
 SYSTEM_EVENT_LABELS = {
     "battery_low": "Battery low",
     "battery_restored": "Battery restored",

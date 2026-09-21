@@ -27,8 +27,8 @@ implemented and reviewed.
   `/batteries` and parameterized commands remain available through inline navigation and direct
   handlers but are omitted from Telegram's command list.
   Events has paged Animal, Incident, Resident, and Neighbour histories. All four categories are
-  delivered to the configured Telegram channel. ntfy receives animal and incident camera events,
-  with urgent priority applied only to incidents.
+  delivered to the configured Telegram channel and ntfy. Urgent ntfy priority applies only to
+  incidents; animal, resident, and neighbour notifications use default priority.
   The Info section contains About and Security contacts. Contact values are optional environment
   inputs (`SECURITY_COMPANY_NAME`, `SECURITY_COMPANY_PHONE`, `CONTROL_ROOM_PHONE`, and
   `ARMED_RESPONSE_PHONE`) and deliberately render as `Not configured` until supplied.
@@ -116,9 +116,9 @@ but do not promote the existing backtest or debug scripts into the service.
   newer code intentionally refuses an older database schema.
 - The representative Telegram smoke test successfully sent cam08/7360 (animal) and cam06/21520
   (incident), including their `Debug view` buttons. Telegram has normal or silent delivery but no
-  Bot API priority level. For camera events, ntfy receives animals at default priority and
-  incidents at its configured `urgent` priority; the separate system outbox sends every recognized
-  transition at default priority.
+  Bot API priority level. For camera events, ntfy receives incidents at its configured `urgent`
+  priority and animals, residents, and neighbours at default priority; the separate system outbox
+  sends every recognized transition at default priority.
 - The new security contact directory is deployed but its four optional values are still blank.
   Populate them in `.env` when the user obtains the security company, control-room, and armed
   response details, then recreate the watcher so Compose reloads the environment.

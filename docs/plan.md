@@ -637,10 +637,11 @@ worth recording here since they affect anyone touching `src/classify.py` or `src
 43. **[done]** Camera and system delivery state supports bounded retry and restart recovery. A
     process interrupted after beginning an external send becomes `ambiguous` rather than risking
     an automatic duplicate.
-44. **[done]** Telegram receives animal, incident, resident, and neighbour events; ntfy remains
-    animal/incident-only for camera events. Recognized alarm-system transitions are sent through a
-    separate Telegram/ntfy policy. The role-enforced query bot restores missing media and renders
-    the exact production detector overlay on demand.
+44. **[done]** Telegram and ntfy receive animal, incident, resident, and neighbour events. Only
+    incidents use urgent ntfy priority; all other camera categories use default priority.
+    Recognized alarm-system transitions are sent through a separate Telegram/ntfy policy. The
+    role-enforced query bot restores missing media and renders the exact production detector
+    overlay on demand.
 45. **[done]** Compose runs the watcher with persistent data, restart policy, read-only container
     filesystem, readiness/heartbeat healthcheck, and separate tools/bootstrap profiles.
 46. **[done]** Opt-in retention preserves urgent/pending evidence and current camera media, cleans

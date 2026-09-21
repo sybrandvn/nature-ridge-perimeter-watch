@@ -165,10 +165,10 @@ separate durable outbox. Telegram receives every recognized transition. ntfy use
 only for incident alerts; animal and system-event notifications, including failures and recovery
 updates, use default priority. Detector-only `blinding_foreground` maintenance findings remain in
 the offline maintenance review queue rather than paging Telegram or ntfy.
-The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram
-receives all four live categories; ntfy receives animal and incident camera events, but only
-incidents use urgent priority. Resident/neighbour observations remain Telegram-only. This camera
-routing is separate from the system-event notifications described above.
+The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram and
+ntfy receive all four live categories. Only incidents use urgent ntfy priority; animal, resident,
+and neighbour observations use default priority. This camera routing is separate from the
+system-event notifications described above.
 Info contains the system description and an environment-configured security contact directory.
 Fill `SECURITY_COMPANY_NAME`, `SECURITY_COMPANY_PHONE`, `CONTROL_ROOM_PHONE`, and
 `ARMED_RESPONSE_PHONE` in `.env`; blank values display as `Not configured` until the real details

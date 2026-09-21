@@ -1,7 +1,13 @@
 from datetime import UTC, datetime
 
 from src import db
-from src.activity_reports import build_activity_report, render_activity_report
+from src.activity_reports import (
+    build_activity_report,
+    build_patrol_report,
+    render_activity_report,
+    render_patrol_report,
+)
+from src.sequence import ClipEvent, Pass
 
 
 def _clip(conn, *, message_id, camera_id, timestamp, caption="motion"):
@@ -97,3 +103,90 @@ def test_render_activity_report_handles_empty_period_without_crashing():
     report = build_activity_report(conn, "year", datetime(2026, 9, 21, 10, 0, tzinfo=UTC))
     png = render_activity_report(report)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def _clip_event(camera_id, iso_timestamp):
+    return ClipEvent(
+        camera_id=camera_id,
+        timestamp=datetime.fromisoformat(iso_timestamp).timestamp(),
+    )
+
+
+def test_build_patrol_report_labels_gaps_in_fence_order():
+    passes = [
+        Pass(
+            events=(
+                _clip_event("cam01", "2026-09-20T18:14:00+00:00"),
+                _clip_event("cam02", "2026-09-20T18:15:00+00:00"),
+                _clip_event("cam04", "2026-09-20T18:17:00+00:00"),
+            )
+        )
+    ]
+    report = build_patrol_report(
+        passes,
+        ("cam01", "cam02", "cam03", "cam04"),
+        window_start=datetime(2026, 9, 20, 16, 0, tzinfo=UTC),
+        window_end=datetime(2026, 9, 21, 4, 0, tzinfo=UTC),
+    )
+    assert len(report.passes) == 1
+    patrol = report.passes[0]
+    assert patrol.camera_count == 3
+    assert patrol.gap_camera_ids == ("cam03",)
+    assert "gaps=cam03" in patrol.label
+    assert "Candidate guard passes: 1" in report.caption
+
+
+def test_build_patrol_report_drops_events_for_unconfigured_cameras():
+    passes = [
+        Pass(
+            events=(
+                _clip_event("cam01", "2026-09-20T18:14:00+00:00"),
+                _clip_event("cam99", "2026-09-20T18:15:00+00:00"),
+                _clip_event("cam02", "2026-09-20T18:16:00+00:00"),
+            )
+        )
+    ]
+    report = build_patrol_report(
+        passes,
+        ("cam01", "cam02"),
+        window_start=datetime(2026, 9, 20, 16, 0, tzinfo=UTC),
+        window_end=datetime(2026, 9, 21, 4, 0, tzinfo=UTC),
+    )
+    assert len(report.passes[0].points) == 2
+
+
+def test_patrol_report_caption_handles_no_passes():
+    report = build_patrol_report(
+        [],
+        ("cam01", "cam02"),
+        window_start=datetime(2026, 9, 20, 16, 0, tzinfo=UTC),
+        window_end=datetime(2026, 9, 21, 4, 0, tzinfo=UTC),
+    )
+    assert report.passes == ()
+    assert "No multi-camera guard passes" in report.caption
+
+
+def test_render_patrol_report_produces_a_valid_png_with_and_without_passes():
+    empty = build_patrol_report(
+        [],
+        ("cam01", "cam02"),
+        window_start=datetime(2026, 9, 20, 16, 0, tzinfo=UTC),
+        window_end=datetime(2026, 9, 21, 4, 0, tzinfo=UTC),
+    )
+    assert render_patrol_report(empty)[:8] == b"\x89PNG\r\n\x1a\n"
+
+    passes = [
+        Pass(
+            events=(
+                _clip_event("cam01", "2026-09-20T18:14:00+00:00"),
+                _clip_event("cam02", "2026-09-20T18:15:00+00:00"),
+            )
+        )
+    ]
+    populated = build_patrol_report(
+        passes,
+        ("cam01", "cam02"),
+        window_start=datetime(2026, 9, 20, 16, 0, tzinfo=UTC),
+        window_end=datetime(2026, 9, 21, 4, 0, tzinfo=UTC),
+    )
+    assert render_patrol_report(populated)[:8] == b"\x89PNG\r\n\x1a\n"

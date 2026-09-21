@@ -202,20 +202,45 @@ async def test_unknown_users_are_refused_every_command(tmp_path):
 async def test_security_is_refused_patrols_at_handler_level(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     controller = QueryBot(queries)
-    message = SimpleNamespace(reply_text=AsyncMock())
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
     update = SimpleNamespace(effective_user=SimpleNamespace(id=22), effective_message=message)
     await controller.patrols(update, None)
     message.reply_text.assert_awaited_once_with("Not authorized.")
+    message.reply_photo.assert_not_awaited()
 
 
 async def test_trustee_can_access_patrols(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     controller = QueryBot(queries)
-    message = SimpleNamespace(reply_text=AsyncMock())
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
     update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
     await controller.patrols(update, None)
-    response = message.reply_text.await_args.args[0]
-    assert "No multi-camera guard passes" in response
+    kwargs = message.reply_photo.await_args.kwargs
+    assert kwargs["photo"].name == "patrols.png"
+    assert "No multi-camera guard passes" in kwargs["caption"]
+
+
+async def test_patrols_menu_callback_sends_a_photo_and_is_trustee_only(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
+    query = SimpleNamespace(
+        data="menu:show:patrols", answer=AsyncMock(), edit_message_text=AsyncMock()
+    )
+    update = SimpleNamespace(
+        callback_query=query,
+        effective_user=SimpleNamespace(id=22),
+        effective_message=message,
+    )
+    await controller.menu_callback(update, None)
+    message.reply_text.assert_awaited_once_with("Not authorized.")
+    message.reply_photo.assert_not_awaited()
+
+    message.reply_text.reset_mock()
+    update.effective_user = SimpleNamespace(id=11)
+    await controller.menu_callback(update, None)
+    kwargs = message.reply_photo.await_args.kwargs
+    assert kwargs["photo"].name == "patrols.png"
 
 
 def test_map_is_explicitly_approximate(tmp_path):

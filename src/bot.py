@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.activity_reports import ActivityReport, build_activity_report, render_activity_report
+from src.activity_reports import (
+    ActivityReport,
+    PatrolReport,
+    build_activity_report,
+    build_patrol_report,
+    render_activity_report,
+    render_patrol_report,
+)
 from src.config import AppConfig, CamerasConfig
 from src.event_keys import event_phase, message_event_key
 from src.message_parsing import classify_health_event
@@ -601,7 +608,7 @@ class BotQueries:
             f"{index + 1}:{camera.id}" for index, camera in enumerate(cameras)
         )
 
-    def patrols(self) -> str:
+    def patrol_report(self) -> PatrolReport:
         start, end, _active = operating_period(self.config, self.now())
         rows = list(
             self.conn.execute(
@@ -627,21 +634,10 @@ class BotQueries:
             for row in rows
         ]
         passes = segment_passes(events, max_gap_seconds=600, min_cameras=3)
-        if not passes:
-            return "No multi-camera guard passes detected in the night window."
-        all_camera_ids = {camera.id for camera in self.cameras.cameras}
-        lines = [f"Candidate guard passes: {len(passes)}"]
-        for index, patrol in enumerate(passes, 1):
-            covered = {event.camera_id for event in patrol.events}
-            first = datetime.fromtimestamp(patrol.events[0].timestamp, UTC).astimezone(LOCAL_ZONE)
-            last = datetime.fromtimestamp(patrol.events[-1].timestamp, UTC).astimezone(LOCAL_ZONE)
-            gaps = sorted(all_camera_ids - covered)
-            gap_text = ",".join(gaps) if gaps else "none"
-            lines.append(
-                f"{index}. {first:%H:%M}-{last:%H:%M}, cameras={len(covered)}, gaps={gap_text}"
-            )
-        lines.append("Candidate analytics only; verify against operational records.")
-        return "\n".join(lines)
+        camera_order = tuple(camera.id for camera in self.cameras.ordered())
+        return build_patrol_report(
+            passes, camera_order, window_start=start, window_end=end
+        )
 
 
 class QueryBot:
@@ -839,11 +835,14 @@ class QueryBot:
                 return
             await self._send_activity_report(message, data.rsplit(":", 1)[1])
             return
-        elif data.startswith("menu:show:"):
-            command = data.rsplit(":", 1)[1]
-            if command == "patrols" and role != "trustee":
+        elif data == "menu:show:patrols":
+            if role != "trustee":
                 await message.reply_text("Not authorized.")
                 return
+            await self._send_patrol_report(message)
+            return
+        elif data.startswith("menu:show:"):
+            command = data.rsplit(":", 1)[1]
             text = (
                 self.queries.about(role)
                 if command == "about"
@@ -858,7 +857,6 @@ class QueryBot:
                 "panel": "system",
                 "faults": "system",
                 "map": "site",
-                "patrols": "site",
                 "contacts": "site",
             }[command]
             markup = self._keyboard(
@@ -924,7 +922,11 @@ class QueryBot:
         await self._reply(update, "map")
 
     async def patrols(self, update: Any, context: Any) -> None:
-        await self._reply(update, "patrols", trustee_only=True)
+        authorized = await self._authorize(update, "patrols", trustee_only=True)
+        if authorized is None:
+            return
+        message, _role = authorized
+        await self._send_patrol_report(message)
 
     async def month(self, update: Any, context: Any) -> None:
         await self._activity_report(update, "month")
@@ -944,6 +946,13 @@ class QueryBot:
         png = await asyncio.to_thread(render_activity_report, report)
         photo = io.BytesIO(png)
         photo.name = f"activity-{period}.png"
+        await message.reply_photo(photo=photo, caption=report.caption)
+
+    async def _send_patrol_report(self, message: Any) -> None:
+        report = self.queries.patrol_report()
+        png = await asyncio.to_thread(render_patrol_report, report)
+        photo = io.BytesIO(png)
+        photo.name = "patrols.png"
         await message.reply_photo(photo=photo, caption=report.caption)
 
     async def last(self, update: Any, context: Any) -> None:

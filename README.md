@@ -143,7 +143,8 @@ direct commands remain supported: `/about`, `/contacts`, `/tonight`, `/health`, 
 `/history <animal|incident|resident|neighbour> [page]`, `/event <id>`, `/debug <video-id>`,
 `/map`, `/month`, `/year` (trustee-only), and
 `/last <camera_id>`; only trustees
-can use `/patrols`. Power history separates failures from restorations and collapses identical
+can use `/patrols`, which now also sends a PNG timeline instead of plain text (see below). Power
+history separates failures from restorations and collapses identical
 repeated notifications. `/history` groups Initial/Stopped sibling clips into events and lists a
 stable representative message ID; `/event` retrieves that chosen video. Battery status pairs
 low/restore messages where possible and flags unresolved device warnings for confirmation at the
@@ -182,6 +183,13 @@ timestamp collapse to the earlier of the pair, the same event-key grouping `/his
 watcher already use. Periods are calendar month-to-date / year-to-date in local (SAST) time.
 `src/activity_reports.py` builds the report from `clips` directly (no detection/classification
 involved), so an empty period renders a clearly labelled zero-activity chart instead of failing.
+Patrols (menu button or `/patrols`, trustee-only) sends a similar PNG instead of plain text: a
+timeline plotting each candidate multi-camera guard pass across the fence order for tonight's
+operating window, one coloured line per pass connecting the cameras it touched in order, with a
+dashed line marking any camera it skipped. The caption lists each pass's time range, camera count,
+and skipped cameras, same wording as before. `build_patrol_report`/`render_patrol_report` in
+`src/activity_reports.py` reuse `src/sequence.py`'s existing pass-segmentation logic; nothing about
+the underlying candidate-pass detection changed.
 The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram and
 ntfy receive all four live categories. Only incidents use urgent ntfy priority; animal, resident,
 and neighbour observations use default priority. This camera routing is separate from the

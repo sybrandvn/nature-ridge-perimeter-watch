@@ -105,16 +105,17 @@ but do not promote the existing backtest or debug scripts into the service.
   review says it may contain a small animal as well as a camera artifact.
 - Telegram and Docker production paths are implemented as summarized above. BotFather setup is
   complete, the token and alert destination are configured, one trustee is authorized, and the
-  watcher was rebuilt/recreated after `43e081b` on 2026-09-20. The live container is healthy and
-  reports `DEBUG_RENDER_VERSION=2`; its Docker server is `x86_64` and its image is Linux `amd64`.
-  This deployment therefore does not require ARM64 validation. Validate on real ARM64 hardware if
-  the watcher is later moved to an ARM64 server. No security-role user is configured.
-- The staged-alert and system-notification code is not in the currently running schema-v8
-  container. Deploy it with the complete [Oracle Cloud runbook](oracle_cloud_deployment.md): stop
-  and back up the writer state, preserve the old image, build the toolbox, run the v9 migration
-  followed by v10, validate schema/media readiness, and recreate the watcher. Newer watcher code
-  intentionally refuses an older database schema.
-<!-- Superseded deployment wording retained invisibly to preserve handoff history.
+  workstation watcher was rebuilt/recreated from `4ce3141` on 2026-09-21. It is healthy on schema
+  10, reports `DEBUG_RENDER_VERSION=2`, and runs the Linux `amd64` image on `x86_64`. Its staged
+  camera alerts, durable system notifications, and four-category Telegram/ntfy parity are active.
+  No security-role user is configured. The pre-upgrade state is preserved at
+  `data/backups/pre-schema-v10-20260921T064510Z` and image tag
+  `nature-ridge-perimeter-watch:pre-v10-20260921T064510Z`.
+- There is no existing Oracle deployment. Its fresh empty database will initialize directly at
+  schema 10 without migrations; see the [Oracle Cloud runbook](oracle_cloud_deployment.md). If the
+  workstation database is transferred instead, preserve and move its now-migrated schema-10 DB
+  and Telethon session together.
+<!-- Legacy schema-copy migration script search terms:
   `scripts.migrate_schema_v9.py` and then `scripts.migrate_schema_v10.py` with the newly built
 -->
 - The representative Telegram smoke test successfully sent cam08/7360 (animal) and cam06/21520
@@ -164,10 +165,11 @@ The restore records each successful download immediately and safely resumes by s
 whose `file_path` is still null. Keep the watcher stopped during restoration because both processes
 use the same Telethon session.
 
-For deployment, use [the Oracle Cloud runbook](oracle_cloud_deployment.md), including its exact
-v8-to-v9-to-v10 migration order and rollback boundary. Keep credentials in `.env`; the logging
-configuration redacts Telegram bot tokens and suppresses URL-bearing HTTP client INFO logs, but
-secrets must still never be pasted into reports or chat.
+For the fresh deployment, use [the Oracle Cloud runbook](oracle_cloud_deployment.md); an empty
+Oracle data directory initializes directly at schema 10. The v8-to-v9-to-v10 chain and rollback
+boundary apply only when retaining the workstation database. Keep credentials in `.env`; the
+logging configuration redacts Telegram bot tokens and suppresses URL-bearing HTTP client INFO logs,
+but secrets must still never be pasted into reports or chat.
 
 The Bot API token currently remains a deployment input. If Telegram rejects it, source ingestion
 through Telethon can still run, while query-bot startup and Bot API alert delivery remain
@@ -294,8 +296,8 @@ operational setup, evidence-driven follow-up, or optional tooling.
 
 ### Deployment inputs and housekeeping
 
-1. Deploy schemas v9/v10 and the staged/system-alert watcher using the
-   stop/backup/migrate/rebuild order above.
+1. Deploy the staged/system-alert watcher to Oracle with a fresh schema-10 database. Use the v9/v10
+   migration chain only when retaining the workstation database.
 2. Fill the optional security-company/control-room/armed-response contact values when known, and
    add a `security` role user if trustees want that access tier. One trustee is already configured.
 3. Decide whether the storage-constrained server should enable `MEDIA_RETENTION_ENABLED`; leave it

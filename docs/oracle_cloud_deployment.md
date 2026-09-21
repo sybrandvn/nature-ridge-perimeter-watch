@@ -1,15 +1,14 @@
 # Oracle Cloud deployment runbook
 
-This is the repository-specific upgrade procedure for the existing Oracle Cloud watcher. It
-assumes Docker Engine and Docker Compose are already installed and the server already has its
-working `.env`, `data/perimeter_watch.db`, and `data/session.session`. It deliberately does not
-cover generic VM, SSH, firewall, or DNS setup.
+This is the repository-specific first-install procedure for the Oracle Cloud watcher. It assumes
+Docker Engine and Docker Compose are already installed. It deliberately does not cover generic VM,
+SSH, firewall, or DNS setup.
 
-The release expects database schema 10. The currently deployed schema-8 database must be migrated
-to v9 and then v10, in that order. New watcher code intentionally refuses to start against an
-older schema.
+There is no pre-existing Oracle deployment. A fresh install with an empty `data/` directory creates
+the database directly at schema 10 and does **not** run migrations. The v8-to-v9-to-v10 migration
+chain applies only when retaining this workstation's existing database.
 
-## Before the maintenance window
+## Before installation
 
 Make the release commit available to the server and confirm the server checkout has no local
 changes that would be overwritten. Do not replace the server's `.env` or `data/` directory from
@@ -25,9 +24,9 @@ docker compose ps
 git status --short --branch
 ```
 
-The established server was `x86_64`/Docker `amd64`. If `uname -m` instead reports `aarch64`, build
-on that host and treat the post-build H.264 smoke test below as mandatory; a cross-build alone is
-not ARM64 runtime validation.
+The development workstation is `x86_64`/Docker `amd64`; that says nothing about the new Oracle VM.
+If `uname -m` reports `aarch64`, build on the Oracle host and treat the post-build H.264 smoke test
+below as mandatory; a cross-build alone is not ARM64 runtime validation.
 
 Check these `.env` inputs without printing their secret values:
 
@@ -40,13 +39,44 @@ Check these `.env` inputs without printing their secret values:
 - Leave `EVENT_WAIT_SECONDS=300` unless newer measurements justify changing it.
 - Choose `MEDIA_RETENTION_ENABLED` deliberately. It is disabled by default.
 
-Do not run `session-bootstrap` during a normal upgrade. The existing Telethon session is persistent
-and should be reused.
+Either securely copy `data/session.session` from this workstation or run `session-bootstrap` once
+on Oracle. Copying only the session does not copy or migrate the SQLite database.
 
-## Stop, preserve, build, and migrate
+## Fresh Oracle installation
 
-Run these commands from the repository root. The backup directory is gitignored and contains
-secrets, so keep its permissions restricted and copy it off-host after the deployment.
+Create `.env` from `.env.example`, fill the real deployment values, and ensure `PUID`/`PGID` match
+the owner of the new `data/` directory. Leave `data/perimeter_watch.db` absent. Then build and run
+readiness; opening the absent database initializes it directly at schema 10:
+
+```bash
+install -d data
+docker compose --profile tools build --pull toolbox
+docker compose --profile tools run --rm --no-deps toolbox \
+  python -m scripts.container_healthcheck --readiness --media-smoke
+```
+
+If no session was copied, authorize one interactively before starting the watcher:
+
+```bash
+docker compose --profile bootstrap run --rm session-bootstrap
+```
+
+The JSON result must contain `"ready": true`, `"schema_version": 10`, and
+`"media_smoke": true`. Skip both migration scripts on this fresh path, then continue at
+**Start and verify** below.
+
+## Optional: retain the workstation database
+
+Use this section only if the labelled corpus, bot history, and live state in this workstation's
+`data/perimeter_watch.db` must move to Oracle. The workstation database was migrated to schema 10
+on 2026-09-21 and can be transferred without rerunning migrations. The commands below remain the
+safe procedure for an older schema-8 backup or another pre-upgrade copy.
+
+### Stop, preserve, build, and migrate
+
+Run these commands on the workstation from the repository root. The backup directory is gitignored
+and contains secrets, so keep its permissions restricted. After successful migration, transfer the
+schema-10 database and Telethon session securely to Oracle before starting the Oracle watcher.
 
 ```bash
 docker compose stop watcher
@@ -140,7 +170,7 @@ their missing delivery; old resident/neighbour events are not retrospectively se
 v10 does not back-notify historical system events; it creates the durable outbox for new recognized
 transitions.
 
-## Rollback boundary
+## Rollback boundary for an upgraded database
 
 Do not start old watcher code against the migrated schema-10 database. If rollback is necessary,
 stop the watcher, preserve the failed deployment state for diagnosis, restore the complete
@@ -148,4 +178,3 @@ pre-upgrade database set (main DB and any matching WAL/SHM files) plus the Telet
 the same backup directory, retag the saved `pre-v10` image as
 `nature-ridge-perimeter-watch:local`, and recreate the watcher. Never mix a database main file
 with WAL/SHM files from a different backup.
-

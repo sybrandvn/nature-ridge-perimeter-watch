@@ -553,7 +553,7 @@ async def test_grouped_menu_navigates_sections(tmp_path):
     await controller.menu(update, None)
     kwargs = message.reply_text.await_args.kwargs
     labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
-    assert labels == ["Monitoring", "Events", "System", "Site", "Reports", "Info"]
+    assert labels == ["Monitoring", "Events", "System", "Site"]
 
     query = SimpleNamespace(
         data="menu:system",
@@ -579,9 +579,13 @@ async def test_grouped_menu_navigates_sections(tmp_path):
         "Back",
     ]
 
-    text, markup = controller._section_menu("info")
-    assert text == "Information"
+    text, markup = controller._section_menu("site")
+    assert text == "Site"
     assert [button.text for row in markup.inline_keyboard for button in row] == [
+        "Camera order",
+        "Patrols",
+        "This month",
+        "This year",
         "Security contacts",
         "About this system",
         "Back",
@@ -603,20 +607,20 @@ def test_visible_bot_commands_are_immediate_actions(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     application = build_query_bot(queries, "123456:example-token")
     commands = [command.command for command in application.bot_data["commands"]]
-    assert commands == ["menu", "tonight", "health", "month", "year", "about"]
-    assert not {"event", "last", "history", "debug", "batteries"} & set(commands)
+    assert commands == ["menu", "tonight", "health", "about"]
+    assert not {"event", "last", "history", "debug", "batteries", "month", "year"} & set(
+        commands
+    )
 
 
-async def test_reports_section_menu_offers_month_and_year(tmp_path):
+async def test_reports_live_under_the_site_menu(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     controller = QueryBot(queries)
-    text, markup = controller._section_menu("reports")
-    assert text == "Activity reports"
-    assert [button.text for row in markup.inline_keyboard for button in row] == [
-        "This month",
-        "This year",
-        "Back",
-    ]
+    text, markup = controller._section_menu("site")
+    assert text == "Site"
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert "This month" in labels
+    assert "This year" in labels
 
 
 async def test_month_and_year_commands_send_a_photo_report(tmp_path):
@@ -645,6 +649,16 @@ async def test_month_and_year_commands_send_a_photo_report(tmp_path):
     assert "Yearly activity report" in kwargs["caption"]
 
 
+async def test_reports_are_refused_for_non_trustees(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=22), effective_message=message)
+    await controller.month(update, SimpleNamespace(args=[]))
+    message.reply_text.assert_awaited_once_with("Not authorized.")
+    message.reply_photo.assert_not_awaited()
+
+
 async def test_report_menu_callback_sends_a_photo_report(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     controller = QueryBot(queries)
@@ -661,3 +675,20 @@ async def test_report_menu_callback_sends_a_photo_report(tmp_path):
     query.answer.assert_awaited_once()
     kwargs = message.reply_photo.await_args.kwargs
     assert kwargs["photo"].name == "activity-month.png"
+
+
+async def test_report_menu_callback_is_refused_for_non_trustees(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
+    query = SimpleNamespace(
+        data="menu:report:month", answer=AsyncMock(), edit_message_text=AsyncMock()
+    )
+    update = SimpleNamespace(
+        callback_query=query,
+        effective_user=SimpleNamespace(id=22),
+        effective_message=message,
+    )
+    await controller.menu_callback(update, None)
+    message.reply_text.assert_awaited_once_with("Not authorized.")
+    message.reply_photo.assert_not_awaited()

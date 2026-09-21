@@ -709,7 +709,6 @@ class QueryBot:
                 [
                     [("Monitoring", "menu:monitor"), ("Events", "menu:events")],
                     [("System", "menu:system"), ("Site", "menu:site")],
-                    [("Reports", "menu:reports"), ("Info", "menu:info")],
                 ]
             ),
         )
@@ -744,18 +743,14 @@ class QueryBot:
                 ],
             ),
             "site": (
-                "Site information",
-                [[("Camera order", "menu:show:map"), ("Patrols", "menu:show:patrols")]],
-            ),
-            "reports": (
-                "Activity reports",
-                [[("This month", "menu:report:month"), ("This year", "menu:report:year")]],
-            ),
-            "info": (
-                "Information",
+                "Site",
                 [
-                    [("Security contacts", "menu:show:contacts")],
-                    [("About this system", "menu:show:about")],
+                    [("Camera order", "menu:show:map"), ("Patrols", "menu:show:patrols")],
+                    [("This month", "menu:report:month"), ("This year", "menu:report:year")],
+                    [
+                        ("Security contacts", "menu:show:contacts"),
+                        ("About this system", "menu:show:about"),
+                    ],
                 ],
             ),
         }
@@ -822,14 +817,7 @@ class QueryBot:
         data = str(getattr(query, "data", ""))
         if data == "menu:home":
             text, markup = self._home_menu()
-        elif data in {
-            "menu:monitor",
-            "menu:events",
-            "menu:system",
-            "menu:site",
-            "menu:reports",
-            "menu:info",
-        }:
+        elif data in {"menu:monitor", "menu:events", "menu:system", "menu:site"}:
             text, markup = self._section_menu(data.removeprefix("menu:"))
         elif data == "menu:cameras":
             text, markup = self._camera_menu()
@@ -846,6 +834,9 @@ class QueryBot:
             await self._send_last_camera(message, data.rsplit(":", 1)[1])
             return
         elif data.startswith("menu:report:"):
+            if role != "trustee":
+                await message.reply_text("Not authorized.")
+                return
             await self._send_activity_report(message, data.rsplit(":", 1)[1])
             return
         elif data.startswith("menu:show:"):
@@ -868,7 +859,7 @@ class QueryBot:
                 "faults": "system",
                 "map": "site",
                 "patrols": "site",
-                "contacts": "info",
+                "contacts": "site",
             }[command]
             markup = self._keyboard(
                 [[("Back", f"menu:{section}"), ("Main menu", "menu:home")]]
@@ -942,7 +933,7 @@ class QueryBot:
         await self._activity_report(update, "year")
 
     async def _activity_report(self, update: Any, period: str) -> None:
-        authorized = await self._authorize(update, period)
+        authorized = await self._authorize(update, period, trustee_only=True)
         if authorized is None:
             return
         message, _role = authorized
@@ -1261,8 +1252,6 @@ def build_query_bot(
         BotCommand("menu", "Open the grouped menu"),
         BotCommand("tonight", "Show tonight's event summary"),
         BotCommand("health", "Show camera health now"),
-        BotCommand("month", "Show this month's activity report"),
-        BotCommand("year", "Show this year's activity report"),
         BotCommand("about", "Explain what the system reports"),
     ]
     return application

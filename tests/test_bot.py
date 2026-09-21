@@ -553,7 +553,7 @@ async def test_grouped_menu_navigates_sections(tmp_path):
     await controller.menu(update, None)
     kwargs = message.reply_text.await_args.kwargs
     labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
-    assert labels == ["Monitoring", "Events", "System", "Site", "Info"]
+    assert labels == ["Monitoring", "Events", "System", "Site", "Reports", "Info"]
 
     query = SimpleNamespace(
         data="menu:system",
@@ -603,5 +603,61 @@ def test_visible_bot_commands_are_immediate_actions(tmp_path):
     _conn, _config, _cameras, queries = _setup(tmp_path)
     application = build_query_bot(queries, "123456:example-token")
     commands = [command.command for command in application.bot_data["commands"]]
-    assert commands == ["menu", "tonight", "health", "about"]
+    assert commands == ["menu", "tonight", "health", "month", "year", "about"]
     assert not {"event", "last", "history", "debug", "batteries"} & set(commands)
+
+
+async def test_reports_section_menu_offers_month_and_year(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    text, markup = controller._section_menu("reports")
+    assert text == "Activity reports"
+    assert [button.text for row in markup.inline_keyboard for button in row] == [
+        "This month",
+        "This year",
+        "Back",
+    ]
+
+
+async def test_month_and_year_commands_send_a_photo_report(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    db.upsert_clip(
+        conn,
+        channel_id="source",
+        message_id=1,
+        camera_id="cam01",
+        timestamp="2026-09-19T18:30:00Z",
+        caption="motion",
+        file_path=None,
+        source="live",
+    )
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+    await controller.month(update, SimpleNamespace(args=[]))
+    kwargs = message.reply_photo.await_args.kwargs
+    assert kwargs["photo"].name == "activity-month.png"
+    assert "Monthly activity report" in kwargs["caption"]
+    message.reply_photo.reset_mock()
+    await controller.year(update, SimpleNamespace(args=[]))
+    kwargs = message.reply_photo.await_args.kwargs
+    assert kwargs["photo"].name == "activity-year.png"
+    assert "Yearly activity report" in kwargs["caption"]
+
+
+async def test_report_menu_callback_sends_a_photo_report(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_photo=AsyncMock())
+    query = SimpleNamespace(
+        data="menu:report:month", answer=AsyncMock(), edit_message_text=AsyncMock()
+    )
+    update = SimpleNamespace(
+        callback_query=query,
+        effective_user=SimpleNamespace(id=11),
+        effective_message=message,
+    )
+    await controller.menu_callback(update, None)
+    query.answer.assert_awaited_once()
+    kwargs = message.reply_photo.await_args.kwargs
+    assert kwargs["photo"].name == "activity-month.png"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
 import re
 import sqlite3
@@ -12,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.activity_reports import ActivityReport, build_activity_report, render_activity_report
 from src.config import AppConfig, CamerasConfig
 from src.event_keys import event_phase, message_event_key
 from src.message_parsing import classify_health_event
@@ -300,6 +303,11 @@ class BotQueries:
             f"Control room: {value(self.config.control_room_phone)}\n"
             f"Armed response: {value(self.config.armed_response_phone)}"
         )
+
+    def activity_report(self, period: str) -> ActivityReport:
+        if period not in {"month", "year"}:
+            raise ValueError(f"unsupported report period: {period}")
+        return build_activity_report(self.conn, period, self.now())
 
     def tonight(self) -> str:
         start, end, active = operating_period(self.config, self.now())
@@ -701,7 +709,7 @@ class QueryBot:
                 [
                     [("Monitoring", "menu:monitor"), ("Events", "menu:events")],
                     [("System", "menu:system"), ("Site", "menu:site")],
-                    [("Info", "menu:info")],
+                    [("Reports", "menu:reports"), ("Info", "menu:info")],
                 ]
             ),
         )
@@ -738,6 +746,10 @@ class QueryBot:
             "site": (
                 "Site information",
                 [[("Camera order", "menu:show:map"), ("Patrols", "menu:show:patrols")]],
+            ),
+            "reports": (
+                "Activity reports",
+                [[("This month", "menu:report:month"), ("This year", "menu:report:year")]],
             ),
             "info": (
                 "Information",
@@ -810,7 +822,14 @@ class QueryBot:
         data = str(getattr(query, "data", ""))
         if data == "menu:home":
             text, markup = self._home_menu()
-        elif data in {"menu:monitor", "menu:events", "menu:system", "menu:site", "menu:info"}:
+        elif data in {
+            "menu:monitor",
+            "menu:events",
+            "menu:system",
+            "menu:site",
+            "menu:reports",
+            "menu:info",
+        }:
             text, markup = self._section_menu(data.removeprefix("menu:"))
         elif data == "menu:cameras":
             text, markup = self._camera_menu()
@@ -825,6 +844,9 @@ class QueryBot:
             return
         elif data.startswith("menu:last:"):
             await self._send_last_camera(message, data.rsplit(":", 1)[1])
+            return
+        elif data.startswith("menu:report:"):
+            await self._send_activity_report(message, data.rsplit(":", 1)[1])
             return
         elif data.startswith("menu:show:"):
             command = data.rsplit(":", 1)[1]
@@ -912,6 +934,32 @@ class QueryBot:
 
     async def patrols(self, update: Any, context: Any) -> None:
         await self._reply(update, "patrols", trustee_only=True)
+
+    async def month(self, update: Any, context: Any) -> None:
+        await self._activity_report(update, "month")
+
+    async def year(self, update: Any, context: Any) -> None:
+        await self._activity_report(update, "year")
+
+    async def _activity_report(self, update: Any, period: str) -> None:
+        authorized = await self._authorize(update, period)
+        if authorized is None:
+            return
+        message, _role = authorized
+        await self._send_activity_report(message, period)
+
+    async def _send_activity_report(self, message: Any, period: str) -> None:
+        report = self.queries.activity_report(period)
+        png = await asyncio.to_thread(render_activity_report, report)
+        photo = io.BytesIO(png)
+        photo.name = f"activity-{period}.png"
+        await message.reply_photo(
+            photo=photo,
+            caption=report.caption,
+            reply_markup=self._keyboard(
+                [[("Reports", "menu:reports"), ("Main menu", "menu:home")]]
+            ),
+        )
 
     async def last(self, update: Any, context: Any) -> None:
         authorized = await self._authorize(update, "last")
@@ -1204,6 +1252,8 @@ def build_query_bot(
         "map",
         "patrols",
         "last",
+        "month",
+        "year",
     ):
         application.add_handler(CommandHandler(command, getattr(controller, command)))
     application.add_handler(CallbackQueryHandler(controller.menu_callback, pattern=r"^menu:"))
@@ -1211,6 +1261,8 @@ def build_query_bot(
         BotCommand("menu", "Open the grouped menu"),
         BotCommand("tonight", "Show tonight's event summary"),
         BotCommand("health", "Show camera health now"),
+        BotCommand("month", "Show this month's activity report"),
+        BotCommand("year", "Show this year's activity report"),
         BotCommand("about", "Explain what the system reports"),
     ]
     return application

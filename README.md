@@ -171,9 +171,10 @@ and control-room communication-test failures. Media commands restore a cleaned c
 source channel through Telethon when it is not local. Media counts are capped at five per request.
 Incoming maintenance/system notifications remain stored in `system_events`, are available via
 `/health`, `/power`, `/batteries`, `/panel`, and `/faults`, and are also sent proactively through a
-separate durable outbox. Telegram receives every recognized transition. ntfy uses urgent priority
-only for incident alerts; animal and system-event notifications, including failures and recovery
-updates, use default priority. Detector-only `blinding_foreground` maintenance findings remain in
+separate durable outbox. Panel arm/disarm transitions remain in history but do not send proactive
+notifications. ntfy uses urgent priority for incident alerts; animal and other system-event
+notifications, including failures and recovery updates, use default priority. Detector-only
+`blinding_foreground` maintenance findings remain in
 the offline maintenance review queue rather than paging Telegram or ntfy.
 The Reports entry under Site (or direct `/month` / `/year`, trustee-only) sends a single PNG with
 two charts — activity by time of day and activity over time (daily within a month, monthly within

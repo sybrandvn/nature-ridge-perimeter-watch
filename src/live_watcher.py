@@ -39,6 +39,10 @@ SYSTEM_EVENT_LABELS = {
     "panel_disarmed": "Panel disarmed",
     "panel_armed": "Panel armed",
 }
+SYSTEM_NOTIFICATION_EVENTS = frozenset(SYSTEM_EVENT_LABELS) - {
+    "panel_armed",
+    "panel_disarmed",
+}
 SYSTEM_FAILURE_EVENTS = frozenset(
     {
         "battery_low",
@@ -410,6 +414,8 @@ class LiveWatcher:
         return tuple(transports)
 
     def _system_transports(self, event_type: str) -> tuple[str, ...]:
+        if event_type not in SYSTEM_NOTIFICATION_EVENTS:
+            return ()
         transports = []
         if self.config.telegram_bot_token and self.config.alert_channel_id:
             transports.append("telegram")
@@ -536,6 +542,17 @@ class LiveWatcher:
             if not live_state.claim_system_delivery(
                 self.conn, channel_id, message_id, transport
             ):
+                continue
+            if str(row["event_type"]) not in SYSTEM_NOTIFICATION_EVENTS:
+                # Retire notification work queued before this event was silenced.
+                live_state.finish_system_delivery(
+                    self.conn,
+                    channel_id,
+                    message_id,
+                    transport,
+                    delivered=True,
+                    next_attempt_at=now,
+                )
                 continue
             try:
                 message = format_system_alert(row)

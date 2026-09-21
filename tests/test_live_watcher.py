@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from src import db
 from src.bot import MediaClip
 from src.classify import ClassificationResult
@@ -319,6 +321,35 @@ async def test_system_maintenance_message_is_stored_and_sent_to_telegram(tmp_pat
     bot.send_message.assert_awaited_once()
     assert "Security-system alert: Power failure" in bot.send_message.await_args.kwargs["text"]
     bot.send_video.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("caption", "event_type"),
+    [("Panel Armed", "panel_armed"), ("Panel Disarmed", "panel_disarmed")],
+)
+async def test_panel_state_is_stored_without_sending_notifications(
+    tmp_path, caption, event_type
+):
+    conn, watcher, bot = _runtime(tmp_path, [])
+    watcher.config = replace(
+        watcher.config,
+        ntfy_base_url="https://ntfy.example",
+        ntfy_topic="alerts",
+    )
+    watcher.ntfy_session = MagicMock()
+
+    await asyncio.wait_for(
+        watcher.handle_message(
+            _message(1, caption, mime="application/octet-stream")
+        ),
+        5,
+    )
+
+    event = conn.execute("SELECT * FROM system_events").fetchone()
+    assert event["event_type"] == event_type
+    assert conn.execute("SELECT COUNT(*) FROM system_deliveries").fetchone()[0] == 0
+    bot.send_message.assert_not_awaited()
+    watcher.ntfy_session.post.assert_not_called()
 
 
 async def test_system_failure_routes_to_default_priority_ntfy(tmp_path):

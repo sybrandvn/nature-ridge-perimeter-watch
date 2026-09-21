@@ -110,10 +110,13 @@ but do not promote the existing backtest or debug scripts into the service.
   This deployment therefore does not require ARM64 validation. Validate on real ARM64 hardware if
   the watcher is later moved to an ARM64 server. No security-role user is configured.
 - The staged-alert and system-notification code is not in the currently running schema-v8
-  container. Before deploying it, stop the watcher, back up SQLite, run
+  container. Deploy it with the complete [Oracle Cloud runbook](oracle_cloud_deployment.md): stop
+  and back up the writer state, preserve the old image, build the toolbox, run the v9 migration
+  followed by v10, validate schema/media readiness, and recreate the watcher. Newer watcher code
+  intentionally refuses an older database schema.
+<!-- Superseded deployment wording retained invisibly to preserve handoff history.
   `scripts.migrate_schema_v9.py` and then `scripts.migrate_schema_v10.py` with the newly built
-  toolbox image, then rebuild/recreate and verify the watcher. Do not rebuild the watcher first:
-  newer code intentionally refuses an older database schema.
+-->
 - The representative Telegram smoke test successfully sent cam08/7360 (animal) and cam06/21520
   (incident), including their `Debug view` buttons. Telegram has normal or silent delivery but no
   Bot API priority level. For camera events, ntfy receives incidents at its configured `urgent`
@@ -161,10 +164,10 @@ The restore records each successful download immediately and safely resumes by s
 whose `file_path` is still null. Keep the watcher stopped during restoration because both processes
 use the same Telethon session.
 
-For deployment, rebuild the image, run the schema migration if upgrading from v7, start the default
-watcher service, and verify its readiness-plus-heartbeat healthcheck. Keep credentials in `.env`;
-the logging configuration redacts Telegram bot tokens and suppresses URL-bearing HTTP client INFO
-logs, but secrets must still never be pasted into reports or chat.
+For deployment, use [the Oracle Cloud runbook](oracle_cloud_deployment.md), including its exact
+v8-to-v9-to-v10 migration order and rollback boundary. Keep credentials in `.env`; the logging
+configuration redacts Telegram bot tokens and suppresses URL-bearing HTTP client INFO logs, but
+secrets must still never be pasted into reports or chat.
 
 The Bot API token currently remains a deployment input. If Telegram rejects it, source ingestion
 through Telethon can still run, while query-bot startup and Bot API alert delivery remain

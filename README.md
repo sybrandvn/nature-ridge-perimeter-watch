@@ -47,6 +47,12 @@ The image packages the locked runtime dependencies, watcher, and operator tools.
 non-root user, keeps the root filesystem read-only under Compose, and bind-mounts `./data` for the
 SQLite database/WAL, Telethon session, downloaded history, references, reports, and logs.
 
+For an upgrade of the existing Oracle Cloud service, follow the repository-specific
+[Oracle Cloud deployment runbook](docs/oracle_cloud_deployment.md). It includes the required
+schema-v8 to v9 to v10 migration order, backup/rollback boundary, architecture check, and
+post-start verification. The shorter commands below are reference material, not a substitute for
+that upgrade sequence.
+
 Set `PUID` and `PGID` in `.env` to the owner of the host `data/` directory, then build and verify
 the container:
 

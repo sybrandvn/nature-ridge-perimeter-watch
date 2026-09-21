@@ -311,6 +311,17 @@ than treating a cross-build alone as runtime validation.
 
 ### Evidence-driven detector work
 
+The 2026-09-21 cold audit ran the current production detector across all 8,079 clips that had local
+media, no class label, no startup metadata, and were not `Initial` captions. It produced 298
+non-guard classifications, of which 14 would notify: 12 incident candidates and two animal
+candidates. Human review labelled those 14 unique events as four animals, five guards, and five
+environment events. The guard notes were faint flashlight, leaving frame, and mixed
+guard/vegetation/bug footage; environment notes were bushes, rain, and spider web. This is ten
+false notifications across the full 2023-11-17 through 2026-09-21 corpus window, roughly 3.5 per
+year. It is acceptable for deployment under the conservative security policy, but it establishes
+the next evidence set for reducing nuisance alerts. Recall is not established by this review
+because the 8,065 suppressed predictions were not exhaustively watched.
+
 1. Observe real live alerts and label concrete false positives/false negatives before changing
    thresholds. The expanded labelled snapshot still has limited rare-class support.
 2. Do not add a low-blob blanket veto. The five audited leaks split across daylight inside

@@ -186,10 +186,15 @@ involved), so an empty period renders a clearly labelled zero-activity chart ins
 Patrols (menu button or `/patrols`, trustee-only) sends a similar PNG instead of plain text: a
 timeline plotting each candidate multi-camera guard pass across the fence order for tonight's
 operating window, one coloured line per pass connecting the cameras it touched in order, with a
-dashed line marking any camera it skipped. The caption lists each pass's time range, camera count,
-and skipped cameras, same wording as before. `build_patrol_report`/`render_patrol_report` in
+dashed line marking any camera it skipped. The per-pass time range, camera count, and skipped
+cameras are labelled directly on the chart; the caption is just a short count, since the chart
+already carries the detail. `build_patrol_report`/`render_patrol_report` in
 `src/activity_reports.py` reuse `src/sequence.py`'s existing pass-segmentation logic; nothing about
 the underlying candidate-pass detection changed.
+A camera entry in `config/cameras.yaml` can be marked `retired: true` for hardware that has been
+physically replaced (e.g. `cam01`, superseded by `cam01a`). Retired cameras stay resolvable for
+historical clips (geometry, labels, backtesting) but are excluded from `CamerasConfig.ordered()`,
+so they no longer appear in the `/last` camera picker, `/map`, or the patrol timeline.
 The Events menu provides paged Animal, Incident, Resident, and Neighbour histories. Telegram and
 ntfy receive all four live categories. Only incidents use urgent ntfy priority; animal, resident,
 and neighbour observations use default priority. This camera routing is separate from the

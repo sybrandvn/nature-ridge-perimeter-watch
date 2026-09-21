@@ -293,6 +293,11 @@ class Camera:
     # `zone` is then always returned regardless of timestamp. See docs/plan.md
     # "Geometry model".
     zone_history: tuple[tuple[datetime | None, CameraZone], ...] = field(default=())
+    # True for hardware that has been physically replaced/removed (e.g. cam01,
+    # superseded by cam01a) -- kept in this file so historical clips still
+    # resolve zone/geometry by camera_id, but excluded from `ordered()` so it
+    # no longer appears as a live/selectable camera.
+    retired: bool = False
 
     def zone_at(self, timestamp: datetime | str | None) -> CameraZone:
         """The geometry in effect at `timestamp` (a clip's timestamp), falling
@@ -334,7 +339,10 @@ class CamerasConfig:
         return None
 
     def ordered(self) -> list[Camera]:
-        return sorted((c for c in self.cameras if c.order is not None), key=lambda c: c.order)
+        return sorted(
+            (c for c in self.cameras if c.order is not None and not c.retired),
+            key=lambda c: c.order,
+        )
 
 
 def load_cameras_config(path: str | Path) -> CamerasConfig:
@@ -401,6 +409,7 @@ def load_cameras_config(path: str | Path) -> CamerasConfig:
                 zone=zone,
                 threshold_overrides=overrides,
                 zone_history=zone_history,
+                retired=bool(entry.get("retired", False)),
             )
         )
 

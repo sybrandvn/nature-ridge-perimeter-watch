@@ -300,14 +300,16 @@ class PatrolReport:
 
     @property
     def caption(self) -> str:
-        lines = ["Guard patrol passes", self.window_label]
         if not self.passes:
-            lines.append("No multi-camera guard passes detected in the night window.")
-            return "\n".join(lines)
-        lines.append(f"Candidate guard passes: {len(self.passes)}")
-        lines.extend(patrol.label for patrol in self.passes)
-        lines.append("Candidate analytics only; verify against operational records.")
-        return "\n".join(lines)
+            return (
+                f"Guard patrol passes\n{self.window_label}\n"
+                "No multi-camera guard passes detected in the night window."
+            )
+        noun = "pass" if len(self.passes) == 1 else "passes"
+        return (
+            f"Guard patrol passes\n{self.window_label}\n"
+            f"{len(self.passes)} candidate {noun}. See chart for times, cameras, and gaps."
+        )
 
 
 def build_patrol_report(

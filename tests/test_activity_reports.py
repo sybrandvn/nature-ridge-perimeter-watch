@@ -133,7 +133,7 @@ def test_build_patrol_report_labels_gaps_in_fence_order():
     assert patrol.camera_count == 3
     assert patrol.gap_camera_ids == ("cam03",)
     assert "gaps=cam03" in patrol.label
-    assert "Candidate guard passes: 1" in report.caption
+    assert "1 candidate pass" in report.caption
 
 
 def test_build_patrol_report_drops_events_for_unconfigured_cameras():

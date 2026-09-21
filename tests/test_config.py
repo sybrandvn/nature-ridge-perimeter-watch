@@ -180,6 +180,31 @@ def test_load_cameras_config_empty_is_valid(tmp_path):
     assert cfg.unknown_camera_id == "unknown"
 
 
+def test_retired_camera_is_excluded_from_ordered_but_still_resolvable(tmp_path):
+    path = _write(
+        tmp_path / "cameras.yaml",
+        """
+        cameras:
+          - id: cam01
+            order: 0
+            retired: true
+          - id: cam02
+            order: 1
+        """,
+    )
+    cfg = load_cameras_config(path)
+    assert [camera.id for camera in cfg.ordered()] == ["cam02"]
+    assert cfg.by_id("cam01").retired is True
+    assert cfg.by_id("cam02").retired is False
+
+
+def test_repo_cam01_is_marked_retired_in_favour_of_cam01a():
+    cfg = load_cameras_config(Path(__file__).parents[1] / "config" / "cameras.yaml")
+    assert cfg.by_id("cam01").retired is True
+    assert "cam01" not in {camera.id for camera in cfg.ordered()}
+    assert cfg.by_id("cam01a").retired is False
+
+
 def test_repo_cam12_selects_pre_remount_retrace_and_remounted_geometry():
     cfg = load_cameras_config(Path(__file__).parents[1] / "config" / "cameras.yaml")
     cam12 = cfg.by_id("cam12")

@@ -34,6 +34,11 @@ unknown_camera_id: "unknown"
 # zone editor (Phase 2).
 cameras:
   - id: cam01
+    # Retired: replaced on-site by cam01a (last cam01 clip 2025-09-04, cam01a's
+    # first 2025-09-13). Kept configured (not deleted) so historical clips
+    # still resolve geometry by camera_id, but excluded from the live camera
+    # list (menus, /map order, patrol timeline) via `retired: true`.
+    retired: true
     aliases: ["MOTIONVIEWER 1"]
     order: 0
     # User hand-traced the fence in red over an extracted reference frame;

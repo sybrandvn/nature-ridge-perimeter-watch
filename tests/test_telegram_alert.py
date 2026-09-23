@@ -53,7 +53,23 @@ async def test_video_alert_can_link_to_detector_debug(tmp_path):
         bot=bot,
         video_path=path,
         debug_message_id=42,
+        bot_username="perimeter_watch_bot",
     )
     button = bot.send_video.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == "Debug view"
-    assert button.callback_data == "menu:debug:42"
+    assert button.url == "https://t.me/perimeter_watch_bot?start=debug_42"
+
+
+async def test_video_alert_omits_shared_debug_callback_without_bot_username(tmp_path):
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"video")
+    bot = AsyncMock()
+    await send_telegram_alert(
+        "incident",
+        bot_token="unused",
+        chat_id="alerts",
+        bot=bot,
+        video_path=path,
+        debug_message_id=42,
+    )
+    assert bot.send_video.await_args.kwargs["reply_markup"] is None

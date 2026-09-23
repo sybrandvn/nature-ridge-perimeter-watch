@@ -619,6 +619,49 @@ async def test_grouped_menu_navigates_sections(tmp_path):
     ]
 
 
+async def test_private_start_deep_link_opens_requested_debug_video(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    db.upsert_clip(
+        conn,
+        channel_id="source",
+        message_id=42,
+        camera_id="cam01",
+        timestamp="2026-09-19T18:30:00Z",
+        caption="motion",
+        file_path=None,
+        source="live",
+    )
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_message=message)
+
+    await controller.start(update, SimpleNamespace(args=["debug_42"]))
+
+    message.reply_text.assert_awaited_once_with("Debug video rendering is unavailable.")
+
+
+async def test_old_shared_debug_callback_does_not_post_to_shared_chat(tmp_path):
+    _conn, _config, _cameras, queries = _setup(tmp_path)
+    controller = QueryBot(queries)
+    message = SimpleNamespace(reply_text=AsyncMock(), reply_video=AsyncMock())
+    query = SimpleNamespace(data="menu:debug:42", answer=AsyncMock())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=11),
+        effective_message=message,
+        effective_chat=SimpleNamespace(type="channel"),
+        callback_query=query,
+    )
+
+    await controller.menu_callback(update, None)
+
+    query.answer.assert_awaited_once_with(
+        "Open a private chat with the bot and use /debug followed by the video ID.",
+        show_alert=True,
+    )
+    message.reply_text.assert_not_awaited()
+    message.reply_video.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("command", "parent"),
     [

@@ -164,6 +164,7 @@ class LiveWatcher:
         self.now = now or (lambda: datetime.now(UTC))
         self.analysis_fn = analysis_fn
         self.telegram_bot = telegram_bot
+        self.telegram_bot_username = config.telegram_bot_username
         self.ntfy_session = ntfy_session
         self._lock = asyncio.Lock()
         self._next_retention_at: datetime | None = None
@@ -480,6 +481,7 @@ class LiveWatcher:
                         chat_id=str(self.config.alert_channel_id),
                         video_path=row["file_path"],
                         debug_message_id=int(row["representative_message_id"]),
+                        bot_username=self.telegram_bot_username,
                         bot=self.telegram_bot,
                     )
                 elif transport == "ntfy":

@@ -32,7 +32,10 @@ Check these `.env` inputs without printing their secret values:
 
 - `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `SOURCE_CHANNEL`, and
   `TELEGRAM_SESSION_PATH` for source ingestion.
-- `TELEGRAM_BOT_TOKEN` and `ALERT_CHANNEL_ID` for Telegram alerts and the query bot.
+- `TELEGRAM_BOT_TOKEN` and `ALERT_CHANNEL_ID` for Telegram alerts and private query-bot deep links;
+  `TELEGRAM_BOT_USERNAME` is an optional override because the watcher discovers it at startup. For
+  multiple recipients, use a read-only alert channel as the alert destination and make the bot an
+  administrator allowed to post.
 - `NTFY_BASE_URL`, `NTFY_TOPIC`, and optional `NTFY_TOKEN` for ntfy. Container `localhost` refers
   to the watcher container, not the Oracle host; use a reachable service name or host URL.
 - `PUID` and `PGID` matching the owner of `data/`.

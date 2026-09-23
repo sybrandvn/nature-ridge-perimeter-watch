@@ -152,6 +152,7 @@ async def run(argv: list[str] | None = None) -> None:  # pragma: no cover - real
             )
             await query_application.initialize()
             query_initialized = True
+            watcher.telegram_bot_username = query_application.bot.username
             await query_application.bot.set_my_commands(
                 query_application.bot_data["commands"]
             )

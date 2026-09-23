@@ -39,6 +39,7 @@ class AppConfig:
     telegram_session_path: Path
     source_channel: str | None
     telegram_bot_token: str | None
+    telegram_bot_username: str | None
     alert_channel_id: str | None
     ntfy_base_url: str | None
     ntfy_topic: str | None
@@ -79,6 +80,7 @@ _KNOWN_KEYS = {
     "TELEGRAM_SESSION_PATH",
     "SOURCE_CHANNEL",
     "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_BOT_USERNAME",
     "ALERT_CHANNEL_ID",
     "NTFY_BASE_URL",
     "NTFY_TOPIC",
@@ -169,12 +171,22 @@ def load_app_config_from_mapping(
     if retry_max < retry_base:
         raise ConfigError("DELIVERY_RETRY_MAX_SECONDS must be >= DELIVERY_RETRY_BASE_SECONDS")
 
+    bot_username = _get("TELEGRAM_BOT_USERNAME")
+    if bot_username is not None:
+        bot_username = bot_username.removeprefix("@")
+        if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", bot_username):
+            raise ConfigError(
+                "TELEGRAM_BOT_USERNAME must be a Telegram username with 5-32 "
+                "letters, digits, or underscores"
+            )
+
     return AppConfig(
         telegram_api_id=api_id,
         telegram_api_hash=api_hash,
         telegram_session_path=Path(_get("TELEGRAM_SESSION_PATH") or "data/session.session"),
         source_channel=source_channel,
         telegram_bot_token=_get("TELEGRAM_BOT_TOKEN"),
+        telegram_bot_username=bot_username,
         alert_channel_id=_get("ALERT_CHANNEL_ID"),
         ntfy_base_url=_get("NTFY_BASE_URL"),
         ntfy_topic=_get("NTFY_TOPIC"),

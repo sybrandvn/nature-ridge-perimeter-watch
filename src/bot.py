@@ -799,18 +799,39 @@ class QueryBot:
         await message.reply_text(text, reply_markup=markup)
 
     async def start(self, update: Any, context: Any) -> None:
+        args = list(getattr(context, "args", ()) or ())
+        if len(args) == 1:
+            match = re.fullmatch(r"debug_(\d+)", args[0])
+            if match is not None:
+                authorized = await self._authorize(update, "debug")
+                if authorized is None:
+                    return
+                message, _role = authorized
+                await self._send_debug_video(message, int(match.group(1)))
+                return
         await self.menu(update, context)
 
     async def menu_callback(self, update: Any, context: Any) -> None:
         query = getattr(update, "callback_query", None)
         if query is None:
             return
+        data = str(getattr(query, "data", ""))
+        chat = getattr(update, "effective_chat", None)
+        if data.startswith("menu:debug:") and getattr(chat, "type", None) in {
+            "channel",
+            "group",
+            "supergroup",
+        }:
+            await query.answer(
+                "Open a private chat with the bot and use /debug followed by the video ID.",
+                show_alert=True,
+            )
+            return
         await query.answer()
         authorized = await self._authorize(update, "menu")
         if authorized is None:
             return
         message, role = authorized
-        data = str(getattr(query, "data", ""))
         if data == "menu:home":
             text, markup = self._home_menu()
         elif data in {"menu:monitor", "menu:events", "menu:system", "menu:site"}:

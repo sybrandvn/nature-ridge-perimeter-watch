@@ -62,6 +62,7 @@ async def _send_examples(cfg) -> None:
                 chat_id=cfg.alert_channel_id,
                 video_path=str(row["file_path"]),
                 debug_message_id=message_id,
+                bot_username=cfg.telegram_bot_username,
             )
             print(f"Telegram example {message_id}: sent OK")
 

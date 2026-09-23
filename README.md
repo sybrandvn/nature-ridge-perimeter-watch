@@ -124,9 +124,15 @@ finalize immediately. Override `EVENT_WAIT_SECONDS` only with newer measured evi
 ### Telegram alert and query bot
 
 Create the bot once in Telegram with `@BotFather` (`/newbot`) and put the returned token in
-`TELEGRAM_BOT_TOKEN`. The same bot can post urgent clip alerts and answer private commands. Add it
-to the alert destination, grant permission to post, and set `ALERT_CHANNEL_ID` if alert delivery is
-wanted. Never paste the token into source files, logs, or chat.
+`TELEGRAM_BOT_TOKEN`. The watcher discovers the bot username from Telegram at startup;
+`TELEGRAM_BOT_USERNAME` is available as an optional override for standalone alert tooling. The same
+bot can post urgent clip alerts and answer private commands. For a quiet multi-user setup, create a
+separate read-only alert channel, leave comments/discussion disabled, add the bot as an administrator
+with permission to post, and set `ALERT_CHANNEL_ID` to that channel's `-100...` numeric ID or public
+`@username`. Each authorized member starts a private conversation with the bot and uses `/menu`
+there. Alert `Debug view` buttons are URL deep links: they open the bot privately and deliver the
+requested view only after the normal user-ID authorization check. Never paste the token into source
+files, logs, or chat.
 
 The bot enforces `BOT_TRUSTEE_IDS` and `BOT_SECURITY_IDS` in every handler. Trustees and security
 can open the grouped inline interface with `/menu` or `/start`. The top level contains four

@@ -29,6 +29,7 @@ def test_load_app_config_minimal_valid_mapping():
     assert cfg.operating_window_end == "06:00"
     assert cfg.ntfy_priority == "urgent"
     assert cfg.bot_trustee_ids == ()
+    assert cfg.telegram_bot_username is None
     assert cfg.security_company_name is None
     assert cfg.control_room_phone is None
     assert cfg.event_wait_seconds == 300.0
@@ -143,6 +144,20 @@ def test_bot_id_list_rejects_non_integer():
                 "BOT_SECURITY_IDS": "abc",
             }
         )
+
+
+def test_bot_username_is_normalized_and_validated():
+    base = {
+        "TELEGRAM_API_ID": "1",
+        "TELEGRAM_API_HASH": "x",
+        "SOURCE_CHANNEL": "x",
+    }
+    cfg = load_app_config_from_mapping(
+        {**base, "TELEGRAM_BOT_USERNAME": "@perimeter_watch_bot"}
+    )
+    assert cfg.telegram_bot_username == "perimeter_watch_bot"
+    with pytest.raises(ConfigError, match="TELEGRAM_BOT_USERNAME"):
+        load_app_config_from_mapping({**base, "TELEGRAM_BOT_USERNAME": "bad-name"})
 
 
 def test_security_contact_template_loads_optional_values():

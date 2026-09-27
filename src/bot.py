@@ -633,7 +633,7 @@ class BotQueries:
             )
             for row in rows
         ]
-        passes = segment_passes(events, max_gap_seconds=600, min_cameras=3)
+        passes = segment_passes(events, max_gap_seconds=600, min_cameras=1)
         camera_order = tuple(camera.id for camera in self.cameras.ordered())
         return build_patrol_report(
             passes, camera_order, window_start=start, window_end=end

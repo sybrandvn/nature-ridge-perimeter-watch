@@ -163,7 +163,20 @@ def test_patrol_report_caption_handles_no_passes():
         window_end=datetime(2026, 9, 21, 4, 0, tzinfo=UTC),
     )
     assert report.passes == ()
-    assert "No multi-camera guard passes" in report.caption
+    assert "No guard patrol activity" in report.caption
+
+
+def test_build_patrol_report_labels_single_camera_burst_as_perimeter_visit():
+    report = build_patrol_report(
+        [Pass(events=(_clip_event("cam02", "2026-09-20T18:14:00+00:00"),))],
+        ("cam01", "cam02"),
+        window_start=datetime(2026, 9, 20, 16, 0, tzinfo=UTC),
+        window_end=datetime(2026, 9, 21, 4, 0, tzinfo=UTC),
+    )
+
+    assert report.passes[0].camera_count == 1
+    assert "perimeter visit" in report.passes[0].label
+    assert "Includes 1 perimeter-only visit" in report.caption
 
 
 def test_render_patrol_report_produces_a_valid_png_with_and_without_passes():

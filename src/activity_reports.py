@@ -286,8 +286,9 @@ class PatrolPass:
     @property
     def label(self) -> str:
         gaps = ",".join(self.gap_camera_ids) if self.gap_camera_ids else "none"
+        kind = "perimeter visit" if self.camera_count == 1 else "patrol pass"
         return (
-            f"{self.index}. {self.start:%H:%M}-{self.end:%H:%M}, "
+            f"{self.index}. {kind}, {self.start:%H:%M}-{self.end:%H:%M}, "
             f"cameras={self.camera_count}, gaps={gaps}"
         )
 
@@ -303,12 +304,20 @@ class PatrolReport:
         if not self.passes:
             return (
                 f"Guard patrol passes\n{self.window_label}\n"
-                "No multi-camera guard passes detected in the night window."
+                "No guard patrol activity detected in the night window."
             )
         noun = "pass" if len(self.passes) == 1 else "passes"
+        perimeter_visits = sum(patrol.camera_count == 1 for patrol in self.passes)
+        visit_summary = (
+            f" Includes {perimeter_visits} perimeter-only visit"
+            f"{'s' if perimeter_visits != 1 else ''}."
+            if perimeter_visits
+            else ""
+        )
         return (
             f"Guard patrol passes\n{self.window_label}\n"
-            f"{len(self.passes)} candidate {noun}. See chart for times, cameras, and gaps."
+            f"{len(self.passes)} candidate {noun}.{visit_summary} "
+            "See chart for times, cameras, and gaps."
         )
 
 
@@ -407,7 +416,7 @@ def _draw_patrol_timeline(
     if not report.passes:
         _text(
             image,
-            "No multi-camera guard passes detected",
+            "No guard patrol activity detected",
             (left + 20, round((top + bottom) / 2)),
             scale=0.55,
             colour=(115, 121, 128),
@@ -462,9 +471,10 @@ def render_patrol_report(report: PatrolReport) -> bytes:
     _text(image, report.window_label, (72, 116), scale=0.58, colour=(102, 107, 113))
 
     full_coverage = sum(1 for patrol in report.passes if not patrol.gap_camera_ids)
+    perimeter_visits = sum(patrol.camera_count == 1 for patrol in report.passes)
     cards = (
         ("PASSES", str(len(report.passes))),
-        ("CAMERAS TRACKED", str(len(report.camera_order))),
+        ("PERIMETER VISITS", str(perimeter_visits)),
         ("FULL COVERAGE", str(full_coverage)),
     )
     for index, (label, value) in enumerate(cards):

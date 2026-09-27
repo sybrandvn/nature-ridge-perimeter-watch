@@ -219,7 +219,25 @@ async def test_trustee_can_access_patrols(tmp_path):
     await controller.patrols(update, None)
     kwargs = message.reply_photo.await_args.kwargs
     assert kwargs["photo"].name == "patrols.png"
-    assert "No multi-camera guard passes" in kwargs["caption"]
+    assert "No guard patrol activity" in kwargs["caption"]
+
+
+def test_patrol_report_includes_single_camera_perimeter_visit(tmp_path):
+    conn, _config, _cameras, queries = _setup(tmp_path)
+    _final_event(
+        conn,
+        message_id=1,
+        camera_id="cam02",
+        timestamp="2026-09-19T18:30:00Z",
+        category="guard_candidate",
+        reason="inside_motion",
+    )
+
+    report = queries.patrol_report()
+
+    assert len(report.passes) == 1
+    assert report.passes[0].camera_count == 1
+    assert "perimeter visit" in report.passes[0].label
 
 
 async def test_patrols_menu_callback_sends_a_photo_and_is_trustee_only(tmp_path):

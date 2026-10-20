@@ -1,7 +1,49 @@
 # Next-agent handoff: operate and improve the production watcher
 
-Updated 2026-09-21 after the staged camera-event lifecycle and proactive system notifications were
-implemented and reviewed.
+Updated 2026-10-19 for the cam15 mixed-motion environment rule. The deployment notes below that
+date to September remain historical; no local watcher container was running during this update.
+
+The approved update is now live on the Oracle host reached by SSH alias `bastion`, at
+`/opt/nature-ridge-perimeter-watch`. Activation on 2026-10-19 passed readiness and heartbeat checks;
+the single watcher is healthy on ARM64, Python 3.12.14, schema 10, extractor v9 and renderer v3.
+The existing runtime was retained. The rollback image is
+`nature-ridge-perimeter-watch:pre-cam15-20261019T184538Z`; consistent database/session backups,
+previous source and validation reports are under the server's
+`data/backups/pre-cam15-20261019T184538Z/`. Ground-truth labels remain identical (1,014 entries).
+On the server, the source update is applied as working-tree changes on top of `b1c8721`;
+preserve and reconcile those changes before a future Git update.
+
+### Cam15 classifier update, 2026-10-19
+
+- User approved the measured cam15-only rule after reviewing its offline preservation results.
+  It acts only before animal/incident returns, retains flashlight priority, and requires mixed
+  scene activity, exactly one direct subject detection, mostly inferred boxes and a flare ramp.
+  The six numeric limits are in `config/thresholds.yaml`; camera identity is an explicit keyword
+  passed by shared clip analysis, debug rendering, and real-clip audit tools.
+- `motion-features-v9` adds `genuine_detection_count` and `scored_frame_count` without changing
+  detector tracking. Old feature caches are invalidated. Debug rendering is version 3 and receives
+  the same camera identity as production classification.
+- The frozen baseline at `data/reports/false-alarm-review-2026-10-19/validation/baseline.jsonl`
+  covers 1,014 tagged clips (845 class labels and 169 startup-only tags) plus eight live review
+  clips. The production implementation matches the measured hypothesis: only cam15/24395,
+  24398 and 24680 change to `environment_candidate/cam15_mixed_environment`. All historical
+  tagged predictions, 39 alerting positive clips and all 24 animal + five incident events remain
+  preserved. October 19's 24680 event is diagnostic and still lacks human confirmation; the two
+  October 10 false alarms are user-confirmed environment.
+- Verification completed: **941 tests pass**, Ruff is clean, and all 1,022 records were freshly
+  extracted from video and replayed through the production analysis path with no cache. The
+  deployed ARM64 image also passed all 24 frozen feature examples, H.264 encode/decode, and an
+  old/new comparison using 13 review videos already present on the server, including both cam15
+  animal-event carrier clips and all three nuisance alert clips. The other 11 review videos were
+  absent from server storage; no footage was uploaded. Existing shared features had no drift.
+- Replay using `python -m scripts.check_environment_hypothesis --production --baseline ...
+  --out ...`. The check deliberately keeps cam13/7778's pre-existing approved-alert discrepancy
+  visible: distance 0.099375 is below the 0.10 threshold, so both old and new paths are unclassified.
+  `regression_passed` can be true while the strict overall `passed` remains false. Do not remove
+  this approved clip from coverage or change its label to obtain a green result.
+- Labels and live delivery records are not changed by the rule or regression tools. Do not start
+  this stale local database/session as another live watcher merely to activate the update; use
+  the actual running deployment and preserve its state.
 
 ## Completed production path
 
@@ -89,21 +131,24 @@ but do not promote the existing backtest or debug scripts into the service.
 
 ## Current state
 
-- Detector review and production work are committed logically on `main`.
-- `EXTRACTOR_VERSION` is `motion-features-v8` (2026-09-20: added
-  `warmup_dynamic_inside_bottom_left_fraction`).
-- Ruff is clean and the full suite is **872 passing tests** as of 2026-09-21; rerun both before
+- Historical detector work is on `main`; the approved cam15 update is deployed as the source
+  bundle described above. Reconcile the server's deployed changes before any Git update.
+- `EXTRACTOR_VERSION` is `motion-features-v9` (2026-10-19: added direct detection and scored-frame
+  counts; the prior v8 added `warmup_dynamic_inside_bottom_left_fraction`).
+- Ruff is clean and the full suite is **941 passing tests** as of 2026-10-19; rerun both before
   deployment or changing behavior because the count grows with each layer.
-- `DEBUG_RENDER_VERSION` is 2. Version 2 shares warmup observations with scoring and invalidates
-  older cached overlays without changing `EXTRACTOR_VERSION` or classifier outputs.
-- Fresh labelled extraction plus final classifier replay: **817 clips**, TP 23 / FP 29 /
+- `DEBUG_RENDER_VERSION` is 3. It passes camera identity to the classifier so the cam15 environment
+  rule shown by debug matches the live analysis path; v2 introduced shared warmup observations.
+- Historical 2026-09-21 labelled extraction/classifier replay: **817 clips**, TP 23 / FP 29 /
   FN 25 / TN 740, precision 0.442, recall 0.479, F1 0.460 (unknowns counted negative).
-  This is the current, expanded ground-truth corpus and is not directly comparable to the
-  older 708-clip snapshot.
-- Protected-event regression remains green for all 5 incident and 20 animal events.
+  This historical snapshot is not directly comparable to the older 708-clip snapshot or the
+  October expanded corpus.
+- The standing fixture retains all five incident and 20 animal events; the full October labelled
+  corpus retains all five incident and 24 animal events and all 39 previously alerting clips.
 - cam12/9162 remains `animal_candidate`: it is labelled `unknown`, but the user's
   review says it may contain a small animal as well as a camera artifact.
-- Telegram and Docker production paths are implemented as summarized above. BotFather setup is
+- Historical workstation deployment, 2026-09-21: Telegram and Docker production paths were
+  implemented as summarized above. BotFather setup was
   complete, the token and alert destination are configured, one trustee is authorized, and the
   workstation watcher was rebuilt/recreated from `4ce3141` on 2026-09-21. It is healthy on schema
   10, reports `DEBUG_RENDER_VERSION=2`, and runs the Linux `amd64` image on `x86_64`. Its staged
@@ -111,10 +156,9 @@ but do not promote the existing backtest or debug scripts into the service.
   No security-role user is configured. The pre-upgrade state is preserved at
   `data/backups/pre-schema-v10-20260921T064510Z` and image tag
   `nature-ridge-perimeter-watch:pre-v10-20260921T064510Z`.
-- There is no existing Oracle deployment. Its fresh empty database will initialize directly at
-  schema 10 without migrations; see the [Oracle Cloud runbook](oracle_cloud_deployment.md). If the
-  workstation database is transferred instead, preserve and move its now-migrated schema-10 DB
-  and Telethon session together.
+- The live Oracle deployment now runs the cam15 update as recorded above. Fresh installations
+  still initialize directly at schema 10; see the [Oracle Cloud runbook](oracle_cloud_deployment.md).
+  Preserve the active server's environment, database and session during updates.
 <!-- Legacy schema-copy migration script search terms:
   `scripts.migrate_schema_v9.py` and then `scripts.migrate_schema_v10.py` with the newly built
 -->
@@ -296,8 +340,8 @@ operational setup, evidence-driven follow-up, or optional tooling.
 
 ### Deployment inputs and housekeeping
 
-1. Deploy the staged/system-alert watcher to Oracle with a fresh schema-10 database. Use the v9/v10
-   migration chain only when retaining the workstation database.
+1. Keep operating the live Oracle watcher described above. Use the migration chain only for older
+   schema copies; the cam15 update required no schema migration.
 2. Fill the optional security-company/control-room/armed-response contact values when known, and
    add a `security` role user if trustees want that access tier. One trustee is already configured.
 3. Decide whether the storage-constrained server should enable `MEDIA_RETENTION_ENABLED`; leave it
@@ -305,9 +349,9 @@ operational setup, evidence-driven follow-up, or optional tooling.
 4. Retry Telegram restoration for `cam02/15475` and `cam01b/17386`. They are the only two known
    missing local clips out of 16,899 and do not block live operation.
 
-ARM64 is not the current deployment architecture: both the live Docker server and rebuilt image
-are AMD64. If the deployment target changes, validate the container on the actual ARM64 host rather
-than treating a cross-build alone as runtime validation.
+The current Oracle server and deployed image are ARM64; the development workstation is AMD64.
+Native runtime/media and classifier checks passed on the Oracle host on 2026-10-19. Validate on
+the actual target host when changing architecture rather than relying on a cross-build alone.
 
 ### Evidence-driven detector work
 

@@ -473,6 +473,39 @@ The authoritative operating and next-work summary is `docs/next_agent_handoff.md
 decision history; their older future-tense sections are historical rather than current setup
 instructions.
 
+For classifier experiments, freeze labels and cold-extracted predictions before changing rules.
+Compare every tagged clip and its event, including startup-only tags and explicitly approved
+ambiguous footage. A surviving sibling must not conceal a newly suppressed animal/incident clip.
+Reject new historical alerts or changes to tagged non-environment predictions. Keep unconfirmed
+review footage separate from confirmed false alarms, and report existing baseline failures
+separately from regressions introduced by the proposal.
+
+The cam15 mixed-motion rule requires multiple tracked objects, a minority of tracked box area
+outside, exactly one direct detection over at least three scored frames, at least two thirds
+inferred boxes, and at least two warmup/flare frames. It applies only to cam15 and only immediately
+before an animal/incident result; flashlight rules retain priority. Thresholds live in
+`config/thresholds.yaml`. Missing camera identity or direct-detection counts preserve the previous
+alert behavior. Feature extraction is versioned as `motion-features-v9` so older cached features
+are recomputed; debug render version 3 supplies the same camera identity as live analysis.
+
+The fixed hypothesis and the implemented rule can both be checked using
+`scripts/check_environment_hypothesis.py`. Replay the implemented rule against the frozen corpus:
+
+```bash
+uv run python -m scripts.check_environment_hypothesis --production \
+  --baseline data/reports/false-alarm-review-2026-10-19/validation/baseline.jsonl \
+  --out data/reports/false-alarm-review-2026-10-19/validation/production-integrity-report.json
+```
+
+The tool requires protected-fixture coverage, checks that omitting the camera-specific rule still
+reproduces the baseline, and verifies that the scoped production result matches the tested
+hypothesis exactly. Omitting `--production` reruns the broader experimental variants. The tool
+does not write live state. It exits unsuccessfully for either a regression or an existing
+approved-alert discrepancy; inspect `regression_passed`, `violations`, and `baseline_issues`
+separately. The 2026-10-19 audit found cam13/7778 already unclassified at a fence distance of
+0.099375, below the 0.10 alert floor, despite its documented permission to alert. This discrepancy
+is retained in the report and real-clip regression fixture rather than silently waived.
+
 ## Fail-safe classification policy
 
 Bounding-box aspect ratio for a crawling person overlaps large animals — classical CV cannot

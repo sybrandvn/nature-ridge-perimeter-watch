@@ -4,7 +4,13 @@ This is the repository-specific first-install procedure for the Oracle Cloud wat
 Docker Engine and Docker Compose are already installed. It deliberately does not cover generic VM,
 SSH, firewall, or DNS setup.
 
-There is no pre-existing Oracle deployment. A fresh install with an empty `data/` directory creates
+The live Oracle deployment is at `/opt/nature-ridge-perimeter-watch` on SSH alias `bastion`.
+The cam15 update was activated and verified healthy on 2026-10-19; see
+[the current handoff](next_agent_handoff.md) for its rollback image and state backups. Its
+validated source bundle is applied on top of `b1c8721` as working-tree changes; reconcile those
+changes before updating from Git. This runbook's first-install steps apply to new installations.
+
+A fresh install with an empty `data/` directory creates
 the database directly at schema 10 and does **not** run migrations. The v8-to-v9-to-v10 migration
 chain applies only when retaining this workstation's existing database.
 

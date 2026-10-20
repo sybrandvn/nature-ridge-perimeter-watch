@@ -96,6 +96,8 @@ FEATURE_COLUMNS = (
     "path_length",
     "jitter",
     "persistence",
+    "genuine_detection_count",
+    "scored_frame_count",
     "motion_pixel_fraction",
     "blob_count",
     "motion_pixel_fraction_median",

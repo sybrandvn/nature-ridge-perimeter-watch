@@ -1425,6 +1425,8 @@ def _temporal_features(
         "path_length": path_length(summary.genuine_centroids),
         "jitter": jitter(summary.genuine_centroids),
         "persistence": persistence(summary.genuine_frames_detected, frame_count),
+        "genuine_detection_count": float(summary.genuine_frames_detected),
+        "scored_frame_count": float(frame_count),
         "motion_pixel_fraction": summary.motion_pixel_fraction,
         "blob_count": float(summary.blob_count),
         "motion_pixel_fraction_median": summary.motion_pixel_fraction_median,
@@ -1691,6 +1693,8 @@ def features_from_detection(
             return None
         return {
             "scored_motion_present": 0.0,
+            "genuine_detection_count": 0.0,
+            "scored_frame_count": float(len(detection.frames)),
             "green_light_ratio": 0.0,
             "green_light_flicker": 0.0,
             "outside_pixel_fraction": 0.0,

@@ -134,3 +134,17 @@ def test_cache_round_trips_features_and_no_motion(tmp_path):
     ).fetchone()
     assert row["extractor_version"] == EXTRACTOR_VERSION
     conn.close()
+
+
+def test_v8_features_without_direct_detection_counts_are_not_reused(tmp_path):
+    conn = db.connect(tmp_path / "cache.db")
+    db.put_cached_track(
+        conn, channel_id="channel", message_id=1,
+        extractor_version="motion-features-v8", motion_fingerprint="same-inputs",
+        features={"persistence": 1 / 3, "recovered_fraction": 2 / 3},
+    )
+
+    assert get_cached_features(
+        conn, channel_id="channel", message_id=1, fingerprint="same-inputs"
+    ) == (False, None)
+    conn.close()

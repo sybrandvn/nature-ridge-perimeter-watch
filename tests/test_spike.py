@@ -1307,6 +1307,27 @@ def _fake_frame_detection(index: int, contour: np.ndarray) -> "motion.FrameDetec
     )
 
 
+def test_detection_counts_exclude_inferred_reverse_and_boxless_frames():
+    contour = _rect_contour(5, 5, 10, 10)
+    frames = [_fake_frame_detection(i, contour) for i in range(6)]
+    frames[1] = replace(frames[1], recovered=True)
+    frames[2] = replace(frames[2], filled_by_reverse=True)
+    frames[3] = replace(frames[3], largest=None, centroid=None)
+    frames[5] = replace(frames[5], centroid=None)
+    detection = motion.ClipDetection(
+        frames=frames, background=_blank_frame()[:, :, 0], frame_width=60,
+        frame_height=60, warmup_dropped=0, total_frames=6,
+        dropped_frames=[], dropped_frame_boxes=[],
+    )
+
+    summary = scoring._summarize_detection_features(detection, exclude_mask=None)
+    features = scoring._temporal_features(detection, summary)
+
+    assert features["genuine_detection_count"] == 2.0
+    assert features["scored_frame_count"] == 6.0
+    assert features["persistence"] == pytest.approx(2 / 6)
+
+
 def test_extract_clip_features_excludes_merged_blob_frame_from_best_contour(monkeypatch):
     # Frame 0: a single small square subject, unmerged. Frame 1: a much larger
     # wide rectangle -- as if the multi-object tracker's own accounting says
@@ -2218,6 +2239,8 @@ def test_features_from_detection_keeps_warmup_flashlight_without_settled_track()
 
     assert result is not None
     assert result["scored_motion_present"] == 0.0
+    assert result["genuine_detection_count"] == 0.0
+    assert result["scored_frame_count"] == 0.0
     assert result["warmup_flashlight_ratio"] > 0.0
 
 

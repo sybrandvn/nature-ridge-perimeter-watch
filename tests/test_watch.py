@@ -17,8 +17,8 @@ def test_bot_debug_render_is_cached_by_production_inputs(monkeypatch, tmp_path):
     source.write_bytes(b"video")
     calls = []
 
-    def fake_render(_source, _zone, *, out_path, motion_thresholds, **_kwargs):
-        calls.append(motion_thresholds)
+    def fake_render(_source, _zone, *, out_path, motion_thresholds, camera_id, **_kwargs):
+        calls.append((motion_thresholds, camera_id))
         output = type(source)(out_path)
         output.write_bytes(b"debug")
         return str(output)
@@ -43,4 +43,5 @@ def test_bot_debug_render_is_cached_by_production_inputs(monkeypatch, tmp_path):
     assert first == second
     assert first is not None and first.read_bytes() == b"debug"
     assert len(calls) == 1
-    assert calls[0].compensate_warmup is False
+    assert calls[0][0].compensate_warmup is False
+    assert calls[0][1] == "cam01"

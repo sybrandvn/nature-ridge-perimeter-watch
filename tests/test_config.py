@@ -725,6 +725,12 @@ _REPO_THRESHOLDS = Path(__file__).parents[1] / "config" / "thresholds.yaml"
 # scripts/check_incident_regression.py and a labelled-corpus backtest diff, and
 # update this table in the same commit.
 _GOLDEN_THRESHOLDS = {
+    "cam15_mixed_object_count_min": 2.0,
+    "cam15_mixed_outside_fraction_max": 0.5,
+    "cam15_mixed_genuine_detection_count": 1.0,
+    "cam15_mixed_scored_frame_count_min": 3.0,
+    "cam15_mixed_recovered_fraction_min": 2 / 3,
+    "cam15_mixed_flare_frames_min": 2.0,
     "green_light_ratio_min": 0.02,
     "green_light_flicker_min": 0.02,
     "warmup_flashlight_ratio_min": 0.0019,

@@ -107,9 +107,10 @@ def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, z
         seen.setdefault("drawn_warmup_objects", []).extend(objects)
         return real_draw_warmup(canvas, objects, **kwargs)
 
-    def capture_classification(features):
+    def capture_classification(features, **kwargs):
         seen["classified_features"] = features
-        return real_classify(features)
+        seen["classification_camera"] = kwargs.get("camera_id")
+        return real_classify(features, **kwargs)
 
     monkeypatch.setattr(render_debug, "detect_clip", capture_detect)
     monkeypatch.setattr(render_debug, "features_from_detection", capture_features)
@@ -123,6 +124,7 @@ def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, z
         zone,
         out_path=str(tmp_path / "out.mp4"),
         timestamp="2026-01-01T12:00:00Z",
+        camera_id="cam15",
         motion_thresholds=configured_motion,
     )
 
@@ -135,6 +137,7 @@ def test_render_clip_scores_the_same_detection_it_draws(monkeypatch, tmp_path, z
     assert seen["detector_settings"]["compensate_warmup"] is False
     assert seen["detector_settings"]["anchor_refine"] is True
     assert seen["classified_features"]["is_daylight"] == 1.0
+    assert seen["classification_camera"] == "cam15"
 
 
 def test_draw_light_mask_outlines_green_pixels_when_not_daylight_gated():

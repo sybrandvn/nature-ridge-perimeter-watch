@@ -113,6 +113,18 @@ classification:
     implausible_height_fraction_min: 0.5
     # classify() docstring, "sustained whole-frame motion".
     motion_pixel_fraction_median_min: 0.12
+    # 2026-10-19, cam15-only mixed-scene gate, applied just before an alert.
+    # Fixed hypothesis tested on 1,014 historical tagged clips plus eight live
+    # review clips. Both confirmed Oct 10 bush alarms are suppressed, with all
+    # historical predictions unchanged (39 alerting positive clips, 29 events).
+    # Mixed motion alone costs four positive clips; sparse evidence alone costs
+    # twelve. Keep the conjunction and camera scope; full derivation in README.
+    cam15_mixed_object_count_min: 2
+    cam15_mixed_outside_fraction_max: 0.5
+    cam15_mixed_genuine_detection_count: 1
+    cam15_mixed_scored_frame_count_min: 3
+    cam15_mixed_recovered_fraction_min: 0.6666666666666666
+    cam15_mixed_flare_frames_min: 2
 
   alert:
     # Minimum temporal evidence before geometry may emit animal_candidate or

@@ -114,7 +114,7 @@ DEFAULTS = {
     "flare_tolerance": 3.0,
     "max_flare_fraction": 0.4,
 }
-DEBUG_RENDER_VERSION = 2
+DEBUG_RENDER_VERSION = 3
 REVIEW_DEBUG_ROOT = Path("data/reports/debug")
 UNFILED_DEBUG_ROOT = REVIEW_DEBUG_ROOT / "unfiled"
 
@@ -563,6 +563,7 @@ def render_clip(
     *,
     out_path: str,
     title: str = "",
+    camera_id: str | None = None,
     scale: int = 2,
     threshold: int = DEFAULTS["threshold"],
     min_blob_area_fraction: float = DEFAULTS["min_area"],
@@ -654,7 +655,7 @@ def render_clip(
     )
     if features is not None and timestamp_daylight is not None:
         features["is_daylight"] = float(timestamp_daylight)
-    classification = classify_detailed(features)
+    classification = classify_detailed(features, camera_id=camera_id)
 
     width, height = detection.frame_width * scale, detection.frame_height * scale
     # None unless this camera opted in via `metric_calibration` in cameras.yaml.
@@ -1388,6 +1389,7 @@ def main(argv: list[str] | None = None) -> int:
             camera.zone_at(clip.get("timestamp")),
             out_path=out_path,
             title=title,
+            camera_id=camera.id,
             scale=args.scale,
             threshold=args.threshold,
             min_blob_area_fraction=args.min_area,

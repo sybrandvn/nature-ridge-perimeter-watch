@@ -70,6 +70,7 @@ def render_bot_debug_video(
         camera.zone_at(clip.timestamp),
         out_path=str(temporary),
         title=f"{camera.id}/{clip.message_id}",
+        camera_id=camera.id,
         scale=2,
         reference_background=reference,
         timestamp=clip.timestamp,

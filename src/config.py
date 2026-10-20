@@ -719,6 +719,12 @@ class ClassificationThresholds:
     blob_count_median_min: float
     implausible_height_fraction_min: float
     motion_pixel_fraction_median_min: float
+    cam15_mixed_object_count_min: float
+    cam15_mixed_outside_fraction_max: float
+    cam15_mixed_genuine_detection_count: float
+    cam15_mixed_scored_frame_count_min: float
+    cam15_mixed_recovered_fraction_min: float
+    cam15_mixed_flare_frames_min: float
     alert_persistence_min: float
     camera_artifact_black_white_balance_min: float
     outside_pixel_fraction_min: float
@@ -777,6 +783,12 @@ _CLASSIFICATION_FIELDS: Mapping[str, tuple[str, str]] = {
     "blob_count_median_min": ("environment", "blob_count_median_min"),
     "implausible_height_fraction_min": ("environment", "implausible_height_fraction_min"),
     "motion_pixel_fraction_median_min": ("environment", "motion_pixel_fraction_median_min"),
+    "cam15_mixed_object_count_min": ("environment", "cam15_mixed_object_count_min"),
+    "cam15_mixed_outside_fraction_max": ("environment", "cam15_mixed_outside_fraction_max"),
+    "cam15_mixed_genuine_detection_count": ("environment", "cam15_mixed_genuine_detection_count"),
+    "cam15_mixed_scored_frame_count_min": ("environment", "cam15_mixed_scored_frame_count_min"),
+    "cam15_mixed_recovered_fraction_min": ("environment", "cam15_mixed_recovered_fraction_min"),
+    "cam15_mixed_flare_frames_min": ("environment", "cam15_mixed_flare_frames_min"),
     "alert_persistence_min": ("alert", "persistence_min"),
     "camera_artifact_black_white_balance_min": (
         "alert",

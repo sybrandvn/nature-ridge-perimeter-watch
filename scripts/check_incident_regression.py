@@ -165,7 +165,7 @@ def main() -> None:
         )
         if features is not None and entry.get("timestamp"):
             features["is_daylight"] = is_daylight(entry["timestamp"])
-        category = classify(features)
+        category = classify(features, camera_id=entry["camera_id"])
         checked += 1
         alerted = category in ALERT_CATEGORIES
         event_results[event].append(alerted)

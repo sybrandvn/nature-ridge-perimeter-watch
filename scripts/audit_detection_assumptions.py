@@ -344,7 +344,7 @@ def audit_corpus(csv_path, db_path):
                 )
                 if features is not None:
                     features["is_daylight"] = float(is_daylight(meta["timestamp"]))
-                result = classify_detailed(features)
+                result = classify_detailed(features, camera_id=meta["camera_id"])
                 category, reason = result.category, result.reason
                 extras.append(f"{meta['camera_id']}/{meta['message_id']}")
             analyzed.append({

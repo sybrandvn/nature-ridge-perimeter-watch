@@ -184,6 +184,16 @@ Rules:
     0.0714 and the weakest confirmed animal at 0.0769.
     Relative persistence is used instead of a minimum frame count so short,
     genuine events such as cam10/7631 (0.1111) remain eligible.
+  - environment_candidate (cam15 mixed scene): immediately before an alert,
+    require at least two tracked objects with a minority of tracked box area
+    outside, exactly one genuine subject detection over at least three scored
+    frames, at least two-thirds inferred boxes and at least two flare frames.
+    Added 2026-10-19 after cold replay of 1,014 tagged clips and eight live
+    review clips: only cam15/24395, 24398 and 24680 change; all historical
+    classifications and 29 positive events are preserved. Mixed motion alone
+    costs four positive clips; weak tracking alone costs twelve. Camera scope
+    and the full conjunction are required. Missing identity/count evidence
+    leaves alert eligibility intact; flashlight rules keep their priority.
   - guard_candidate (onside warmup plus terminal camera artifact): immediately
     before an animal/incident return, the later track has exactly one genuine
     final-frame detection, earlier reverse-filled boxes, and clipped black+
@@ -464,11 +474,38 @@ def _insufficient_alert_evidence(
 
 
 def _alert_suppression(
-    features: dict[str, float], thresholds: ClassificationThresholds
+    features: dict[str, float], thresholds: ClassificationThresholds,
+    *, camera_id: str | None = None,
 ) -> ClassificationResult | None:
     """Apply evidence gates that are meaningful only before an alert."""
     if insufficient := _insufficient_alert_evidence(features, thresholds):
         return insufficient
+    # Cam15's steep view sees illumination changes on bushes on both sides.
+    # A lone outside detection can then seed a mostly inferred subject track.
+    # 2026-10-19 cold replay: this conjunction changes only the three reviewed
+    # live alerts; all 1,014 historical tagged classifications stay identical.
+    # Applying mixed motion or sparse tracking across the fleet loses animals.
+    # Missing camera/count evidence must therefore leave alert eligibility intact.
+    mixed_outside = features.get("multi_object_outside_fraction_weighted", 1.0)
+    if (
+        camera_id == "cam15"
+        and features.get("multi_object_count", 0.0) >= thresholds.cam15_mixed_object_count_min
+        and 0.0 < mixed_outside < thresholds.cam15_mixed_outside_fraction_max
+        and features.get("genuine_detection_count", -1.0)
+        == thresholds.cam15_mixed_genuine_detection_count
+        and features.get("scored_frame_count", 0.0) >= thresholds.cam15_mixed_scored_frame_count_min
+        and features.get("recovered_fraction", 0.0)
+        >= thresholds.cam15_mixed_recovered_fraction_min - 1e-9
+        and features.get("long_flare_frames", 0.0) >= thresholds.cam15_mixed_flare_frames_min
+    ):
+        return ClassificationResult(
+            "environment_candidate", "cam15_mixed_environment",
+            {name: features[name] for name in (
+                "multi_object_count", "multi_object_outside_fraction_weighted",
+                "genuine_detection_count", "scored_frame_count", "recovered_fraction",
+                "long_flare_frames",
+            )},
+        )
     terminal_reverse_seed = features.get("terminal_reverse_seed", 0.0)
     black_white_balance = features.get("blob_black_white_balance", 0.0)
     if (
@@ -504,6 +541,7 @@ def _alert_suppression(
 def classify_detailed(
     features: dict[str, float] | None,
     thresholds: ClassificationThresholds | None = None,
+    *, camera_id: str | None = None,
 ) -> ClassificationResult:
     """The rule chain itself -- see the module docstring for what each rule
     means and where its thresholds come from. `guard_candidate` is checked
@@ -528,11 +566,12 @@ def classify_detailed(
     `far_outside_multitrack`, `blinding_blob_white`,
     `motion_pixel_sustained`, `animal_row_area`,
     `insufficient_detection_evidence`, `outside_colour`,
-    `outside_no_colour`, `warmup_inside_terminal_artifact`,
+    `outside_no_colour`, `warmup_inside_terminal_artifact`, `cam15_mixed_environment`,
     `outside_person_daylight`, `jitter_solidity`,
     `inside_only_daylight`, `inside_only_night`, `no_rule_matched`), never
     renamed or reused for a different rule -- a caller may match on it.
-    `contributing` holds exactly the feature values
+    `camera_id` scopes `cam15_mixed_environment` to the reviewed camera; an
+    omitted camera never enables that rule. `contributing` holds exactly the feature values
     that rule's condition compared, read with the same accessor (`[...]` vs
     `.get(..., default)`) the condition itself uses, so it carries the same
     KeyError contract classify() always has."""
@@ -664,7 +703,7 @@ def classify_detailed(
         and features["color_fraction"] > thresholds.color_fraction_min
         and features.get("is_daylight", False)
     ):
-        if suppressed := _alert_suppression(features, thresholds):
+        if suppressed := _alert_suppression(features, thresholds, camera_id=camera_id):
             return suppressed
         return ClassificationResult(
             "animal_candidate",
@@ -702,7 +741,7 @@ def classify_detailed(
         and features.get("motion_pixel_fraction_median", 0.0)
         <= thresholds.motion_pixel_fraction_median_min
     ):
-        if suppressed := _alert_suppression(features, thresholds):
+        if suppressed := _alert_suppression(features, thresholds, camera_id=camera_id):
             return suppressed
         return ClassificationResult(
             "incident_candidate",
@@ -757,7 +796,7 @@ def classify_detailed(
         <= thresholds.motion_pixel_fraction_median_min
         and features.get("is_daylight", False)
     ):
-        if suppressed := _alert_suppression(features, thresholds):
+        if suppressed := _alert_suppression(features, thresholds, camera_id=camera_id):
             return suppressed
         return ClassificationResult(
             "animal_candidate",
@@ -797,7 +836,7 @@ def classify_detailed(
         and features.get("scenery_motion_fraction", 0.0)
         < thresholds.motion_pixel_fraction_median_min
     ):
-        if suppressed := _alert_suppression(features, thresholds):
+        if suppressed := _alert_suppression(features, thresholds, camera_id=camera_id):
             return suppressed
         return ClassificationResult(
             "incident_candidate",
@@ -838,7 +877,7 @@ def classify_detailed(
         and features.get("motion_pixel_fraction_median", 0.0)
         <= thresholds.motion_pixel_fraction_median_min
     ):
-        if suppressed := _alert_suppression(features, thresholds):
+        if suppressed := _alert_suppression(features, thresholds, camera_id=camera_id):
             return suppressed
         return ClassificationResult(
             "animal_candidate",
@@ -901,7 +940,7 @@ def classify_detailed(
                         "row_normalised_area": features.get("row_normalised_area", 0.0),
                     },
                 )
-            if suppressed := _alert_suppression(features, thresholds):
+            if suppressed := _alert_suppression(features, thresholds, camera_id=camera_id):
                 return suppressed
             return ClassificationResult(
                 "animal_candidate",
@@ -913,7 +952,7 @@ def classify_detailed(
                     "row_normalised_area": features.get("row_normalised_area", 0.0),
                 },
             )
-        if suppressed := _alert_suppression(features, thresholds):
+        if suppressed := _alert_suppression(features, thresholds, camera_id=camera_id):
             return suppressed
         return ClassificationResult(
             "incident_candidate",
@@ -970,11 +1009,12 @@ def classify_detailed(
 def classify(
     features: dict[str, float] | None,
     thresholds: ClassificationThresholds | None = None,
+    *, camera_id: str | None = None,
 ) -> str:
     """Backwards-compatible category-only view of classify_detailed() -- see
     that function for the rule chain, the threshold source, and what each
     reason code means."""
-    return classify_detailed(features, thresholds).category
+    return classify_detailed(features, thresholds, camera_id=camera_id).category
 
 
 def is_blinding_foreground(

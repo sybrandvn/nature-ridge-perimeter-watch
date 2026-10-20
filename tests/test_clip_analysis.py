@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from src import db
@@ -35,3 +36,22 @@ def test_analyze_clip_threads_timestamp_and_classifies(tmp_path: Path):
     assert result.features["is_daylight"] == 0.0
     assert result.classification.category == "guard_candidate"
     conn.close()
+
+
+def test_analyze_clip_applies_cam15_rule_through_production_entry_point():
+    from src.config import load_cameras_config
+
+    path = Path(__file__).parent / "fixtures/environment_hypothesis.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    row = next(row for row in rows if row["message_id"] == 24395)
+
+    result = analyze_clip(
+        conn=None, channel_id=row["channel_id"], message_id=row["message_id"],
+        video_path="clip.mp4", timestamp=row["timestamp"],
+        camera=load_cameras_config("config/cameras.yaml").by_id("cam15"),
+        thresholds=load_thresholds_config("config/thresholds.yaml"),
+        extract_fn=lambda *_args, **_kwargs: dict(row["features"]), use_cache=False,
+    )
+
+    assert result.classification.category == "environment_candidate"
+    assert result.classification.reason == "cam15_mixed_environment"

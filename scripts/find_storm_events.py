@@ -82,7 +82,9 @@ def collect_signals(
                 "message_id": clip["message_id"],
                 "timestamp": clip["timestamp"],
                 "label": clip["label"],
-                "is_candidate": classify(features) == "environment_candidate",
+                "is_candidate": (
+                    classify(features, camera_id=clip["camera_id"]) == "environment_candidate"
+                ),
             }
         )
     for camera_id_ in sorted(unknown_cameras):
@@ -115,7 +117,7 @@ def _worker(clip: dict[str, Any]) -> dict[str, Any] | None:
         "message_id": clip["message_id"],
         "timestamp": clip["timestamp"],
         "label": clip["label"],
-        "is_candidate": classify(features) == "environment_candidate",
+        "is_candidate": classify(features, camera_id=clip["camera_id"]) == "environment_candidate",
     }
 
 

@@ -94,7 +94,7 @@ def analyze_clip(
     if features is not None:
         features["is_daylight"] = float(is_daylight(timestamp))
     return ClipAnalysis(
-        classification=classify_detailed(features),
+        classification=classify_detailed(features, camera_id=camera.id),
         features=features,
         blinding_foreground=is_blinding_foreground(features),
         cache_hit=cache_hit,

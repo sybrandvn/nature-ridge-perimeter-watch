@@ -506,6 +506,28 @@ separately. The 2026-10-19 audit found cam13/7778 already unclassified at a fenc
 0.099375, below the 0.10 alert floor, despite its documented permission to alert. This discrepancy
 is retained in the report and real-clip regression fixture rather than silently waived.
 
+The per-object vegetation prototype is an offline measurement tool. It links observed contours
+across startup and settled frames, measures each against an independent reference, and checks
+whether separate unmatched objects would veto environment suppression. Reference matches are
+scenery evidence; unmatched appearance does not identify a person or animal. Missing, flat,
+tiny, merged or unregistered patches remain uncertain, and inferred boxes never establish a
+moving trajectory. The live classifier does not import this prototype.
+
+```bash
+uv run python -m scripts.probe_vegetation \
+  --baseline data/reports/false-alarm-review-2026-10-19/validation/production-cold-replay.jsonl \
+  --out data/reports/vegetation-prototype-2026-10-21
+```
+
+The default scope is cam07 and cam12. References use at least five different earlier events
+from the same camera, mounting era and lighting within 180 days; the entire evaluation corpus
+and its siblings are excluded. Derived references are written only below `--out`. The report
+compares proposals against the current production baseline, preserves labels and approved
+ambiguous alerts, and reports reference coverage and existing baseline issues. A successful
+command means the experiment completed; inspect event reductions and preservation results
+before considering a classifier change. The initial experiment removed no additional false
+alerts, so its measurements remain reporting-only.
+
 ## Fail-safe classification policy
 
 Bounding-box aspect ratio for a crawling person overlaps large animals — classical CV cannot

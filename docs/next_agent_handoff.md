@@ -1,7 +1,7 @@
 # Next-agent handoff: operate and improve the production watcher
 
-Updated 2026-10-19 for the cam15 mixed-motion environment rule. The deployment notes below that
-date to September remain historical; no local watcher container was running during this update.
+Updated 2026-10-21 after the offline per-object vegetation prototype. The deployment notes below
+that date to September remain historical; no local watcher container was started for this work.
 
 The approved update is now live on the Oracle host reached by SSH alias `bastion`, at
 `/opt/nature-ridge-perimeter-watch`. Activation on 2026-10-19 passed readiness and heartbeat checks;
@@ -44,6 +44,36 @@ preserve and reconcile those changes before a future Git update.
 - Labels and live delivery records are not changed by the rule or regression tools. Do not start
   this stale local database/session as another live watcher merely to activate the update; use
   the actual running deployment and preserve its state.
+
+### Offline vegetation prototype, 2026-10-21
+
+- `scripts/probe_vegetation.py` and `src/vegetation_probe.py` are offline-only. They link actual
+  object contours across startup and settled frames and measure reference resemblance and
+  directly observed trajectories. Template/reverse boxes and merged-identity predictions cannot
+  establish a moving trajectory. Novel appearance is not a person/animal identification.
+- Re-extracted all 145 tagged cam07/cam12 clips without cache, retaining the 1,022-clip current
+  production baseline for preservation checks. Experimental references exclude all evaluation
+  events and siblings, use only earlier footage within 180 days, and require at least five
+  different events from the same camera, mounting era and lighting. Derived images remain in the
+  report directory; the live reference store is unchanged.
+- 100 clips had sufficient reference sources, and 84 had usable registration. The probe found
+  39 reference-matching tracks; 28 clips had both reference-matching and unmatched motion. None
+  of the four proposals changes an urgent classification or removes another environment event.
+  No reference-matching track qualified as bounded return motion. Comparing individual earlier
+  frames with an eight-pixel local search did not establish stronger evidence for the target
+  bushes at the existing 0.94 reference threshold.
+- Verification: all 958 tests pass, including 17 prototype checks for reference independence,
+  unknown evidence, real trajectories, merged identities and startup-subject preservation. Ruff
+  and whitespace checks are clean.
+- Keep the prototype as diagnostics. Missing references for the earliest storms, sparse daylight
+  footage and cam12's remounted era limit coverage; zero new regressions is not evidence that
+  the prototype can recognise every protected subject. All 1,014 labels and current 39 alerting
+  positive clips / 29 events remain intact. Cam13/7778's existing baseline issue remains visible.
+- Reproduce with the command in README. Local evidence and reference-source provenance are in
+  `data/reports/vegetation-prototype-2026-10-21/`; `report.json` contains the four integrity reports,
+  `objects.jsonl` contains per-object observations, and `reference-check/results.json` records
+  the individual-reference/local-search diagnostic. Production thresholds and service state
+  were not changed.
 
 ## Completed production path
 
@@ -135,7 +165,7 @@ but do not promote the existing backtest or debug scripts into the service.
   bundle described above. Reconcile the server's deployed changes before any Git update.
 - `EXTRACTOR_VERSION` is `motion-features-v9` (2026-10-19: added direct detection and scored-frame
   counts; the prior v8 added `warmup_dynamic_inside_bottom_left_fraction`).
-- Ruff is clean and the full suite is **941 passing tests** as of 2026-10-19; rerun both before
+- Ruff is clean and the full suite is **958 passing tests** as of 2026-10-21; rerun both before
   deployment or changing behavior because the count grows with each layer.
 - `DEBUG_RENDER_VERSION` is 3. It passes camera identity to the classifier so the cam15 environment
   rule shown by debug matches the live analysis path; v2 introduced shared warmup observations.

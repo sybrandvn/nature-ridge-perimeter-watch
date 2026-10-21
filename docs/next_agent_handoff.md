@@ -3,6 +3,9 @@
 Updated 2026-10-21 after the offline per-object vegetation prototype. The deployment notes below
 that date to September remain historical; no local watcher container was started for this work.
 
+Read `AGENTS.md` for current repository conventions. The authoritative report layout is in
+`data/reports/README.md`: date-first is implemented; topic-first was discussed as a recommendation.
+
 The approved update is now live on the Oracle host reached by SSH alias `bastion`, at
 `/opt/nature-ridge-perimeter-watch`. Activation on 2026-10-19 passed readiness and heartbeat checks;
 the single watcher is healthy on ARM64, Python 3.12.14, schema 10, extractor v9 and renderer v3.

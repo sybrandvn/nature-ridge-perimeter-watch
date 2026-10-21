@@ -6,6 +6,14 @@ Use one layout for all generated reports:
 <category>/<YYYY-MM-DD>/<topic>/
 ```
 
+This is the implemented layout used by the existing folders and debug CLI defaults.
+Topic-first ordering (`<category>/<topic>/<YYYY-MM-DD>/`) was recommended in discussion
+but has not been implemented. Use the layout above for current work. A future migration
+must update the actual folders, output defaults, affected tests and path references together.
+
+This guide is the source of truth for report placement. Link to it from other guidance
+rather than defining a different convention elsewhere.
+
 Use a lowercase topic with words separated by hyphens. The date is the report or experiment's
 start date in Africa/Johannesburg, rather than the date of the source footage. Keep an existing
 bundle's internal files together; filenames inside it can preserve their original provenance.

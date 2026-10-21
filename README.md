@@ -18,6 +18,9 @@ Without Make, use `uv sync --locked`, `uv run ruff check .` and `uv run pytest -
 Camera geometry and detector thresholds live in `config/`; environment settings live in `.env`.
 Local source footage, database state, sessions and reports live in `data/` and are ignored by Git.
 
+For coding work, start with [AGENTS.md](AGENTS.md). The [reports guide](data/reports/README.md)
+records the implemented folder convention and distinguishes it from proposed changes.
+
 ## Structure
 
 ```text

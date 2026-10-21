@@ -61,7 +61,7 @@ readiness; opening the absent database initializes it directly at schema 10:
 install -d data
 docker compose --profile tools build --pull toolbox
 docker compose --profile tools run --rm --no-deps toolbox \
-  python -m scripts.container_healthcheck --readiness --media-smoke
+  python -m scripts.ops.container_healthcheck --readiness --media-smoke
 ```
 
 If no session was copied, authorize one interactively before starting the watcher:
@@ -118,9 +118,9 @@ For the expected v8 deployment, run exactly:
 
 ```bash
 docker compose --profile tools run --rm --no-deps toolbox \
-  python -m scripts.migrate_schema_v9
+  python -m scripts.migrations.migrate_schema_v9
 docker compose --profile tools run --rm --no-deps toolbox \
-  python -m scripts.migrate_schema_v10
+  python -m scripts.migrations.migrate_schema_v10
 ```
 
 Each migration is transactional and version-gated. Stop if either command reports a version other
@@ -132,7 +132,7 @@ starting the long-running service:
 
 ```bash
 docker compose --profile tools run --rm --no-deps toolbox \
-  python -m scripts.container_healthcheck --readiness --media-smoke
+  python -m scripts.ops.container_healthcheck --readiness --media-smoke
 ```
 
 The JSON result must contain `"ready": true`, `"schema_version": 10`, and
@@ -146,7 +146,7 @@ The toolbox and watcher share the same built image tag, so no second build is ne
 docker compose up -d --no-build watcher
 docker compose ps
 docker compose logs --tail=200 watcher
-docker compose exec watcher python -m scripts.container_healthcheck \
+docker compose exec watcher python -m scripts.ops.container_healthcheck \
   --readiness \
   --heartbeat /app/data/live/watcher.heartbeat \
   --max-heartbeat-age 600
@@ -162,7 +162,7 @@ each configured transport:
 
 ```bash
 docker compose --profile tools run --rm --no-deps toolbox \
-  python scripts/send_test_alert.py
+  python -m scripts.ops.send_test_alert
 ```
 
 Then verify one harmless bot query such as `/health`. Do not manufacture a camera event just to

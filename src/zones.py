@@ -2,7 +2,7 @@
 
 Pure geometry, no video required: this operates on normalized (x, y) points in
 [0, 1], x=column fraction (0=left), y=row fraction (0=top, 1=bottom of frame).
-Used by the (future) motion/classification pipeline and by scripts/spike.py's
+Used by the (future) motion/classification pipeline and by scripts/analysis/spike.py's
 feature extraction once real contours exist.
 
 Side convention: plain screen position, nothing direction-relative. For a query

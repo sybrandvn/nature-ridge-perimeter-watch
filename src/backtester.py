@@ -1,4 +1,4 @@
-"""Wires scripts/backtest.py's screening pass into the immutable run records
+"""Wires scripts/analysis/backtest.py's screening pass into the immutable run records
 `src/db.py` already has -- `backtest_runs`/`backtest_results` plus
 create_run/finish_run/add_backtest_result/iter_backtest_results/
 iter_backtest_runs, written and unit-tested but called by nothing until this
@@ -25,7 +25,7 @@ from src import db
 from src.config import load_thresholds_config
 from src.errors import DbError
 
-# Columns scripts.backtest.run_backtest() always puts on a row that are NOT
+# Columns scripts.analysis.backtest.run_backtest() always puts on a row that are NOT
 # part of the feature vector -- everything else in the row is a feature,
 # including "label" and "blinding_foreground" (kept in `features` on purpose:
 # they are what makes a stored run analysable later, see record_run()).
@@ -34,7 +34,7 @@ _NON_FEATURE_COLUMNS = frozenset({"channel_id", "message_id", "camera_id", "cate
 # Resolved from __file__, not a bare relative string: this is an internal
 # detail of what record_run() hashes, not a caller-supplied parameter, and
 # should not depend on the caller's working directory the way cameras_path
-# (a real parameter, matching scripts/backtest.py's own cwd-relative
+# (a real parameter, matching scripts/analysis/backtest.py's own cwd-relative
 # defaults) is allowed to.
 _REPO_THRESHOLDS_PATH = Path(__file__).resolve().parents[1] / "config" / "thresholds.yaml"
 
@@ -74,7 +74,7 @@ def record_run(
     run_id: str | None = None,
     notes: str | None = None,
 ) -> str:
-    """Persist one backtest pass (`scripts.backtest.run_backtest()`'s output)
+    """Persist one backtest pass (`scripts.analysis.backtest.run_backtest()`'s output)
     as an immutable run. Returns the run_id.
 
     `thresholds_path` defaults to `src/classify.py`, not

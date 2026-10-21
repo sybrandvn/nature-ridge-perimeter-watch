@@ -9,7 +9,7 @@ classification thresholds into `config/thresholds.yaml` (user-directed, 2026-09-
 Branch: `feat/phase2-refactor`. Stay on it. Never merge to `main`.
 
 **The one rule: classification behaviour must not change.** Every threshold in
-`scripts/backtest.py::classify()` was measured against real labelled footage over thirteen
+`scripts/analysis/backtest.py::classify()` was measured against real labelled footage over thirteen
 sessions of work (`docs/handoff.md`). This task moves that code and moves those numbers into
 config; it does not re-derive them. If you find yourself reasoning about whether a threshold is
 *correct*, stop — that is not this task.
@@ -20,7 +20,7 @@ config; it does not re-derive them. If you find yourself reasoning about whether
 
 1. `docs/plan.md` → "Phase 2 refactor brief (2026-09-09)" — the per-step reality check.
 2. `docs/handoff.md` → "Handoff for a new agent (2026-09-09, session close #14)" — current state.
-3. `scripts/backtest.py` lines 1-250 — the module docstring. This is the provenance record for
+3. `scripts/analysis/backtest.py` lines 1-250 — the module docstring. This is the provenance record for
    every threshold you are about to move. Read it, do not summarise it, do not reflow it.
 
 Baseline as measured 2026-09-09: **577 tests passing**, working tree clean, `data/history/` holds
@@ -44,7 +44,7 @@ corpus diff always points at exactly one change.
    current `classification` values are stale and wrong: it says
    `outside_pixel_fraction.alert_min: 0.5` where the real, measured rule is `0.6`, and it carries a
    whole `aspect_ratio` section whose rule was retired 2026-09-04. The hardcoded constants and
-   inline numbers in `scripts/backtest.py::classify()` are the validated source of truth. When
+   inline numbers in `scripts/analysis/backtest.py::classify()` are the validated source of truth. When
    Step 1 writes the new YAML, every value comes from the code. Do **not** "reconcile" a
    disagreement by moving toward the YAML's existing number.
 2. **Do not touch `thresholds.yaml`'s `motion:` section.** It feeds
@@ -55,12 +55,12 @@ corpus diff always points at exactly one change.
    order is load-bearing and documented as such (guard before environment before shape). Moving a
    number into YAML must not alter which side of a comparison it sits on.
 4. **Do not change `features[...]` to `features.get(...)` or the reverse.** The mix is
-   deliberate — `tests/test_backtest.py::test_classify_raises_on_missing_feature_key` asserts that
+   deliberate — `tests/scripts/analysis/test_backtest.py::test_classify_raises_on_missing_feature_key` asserts that
    a features dict missing a core key raises `KeyError` rather than silently miscategorising.
 5. **Move docstrings verbatim.** The `classify()` docstring and the module docstring's rule
    derivations are the only record of how each number was measured. Copy them character-for-
    character. Do not shorten, re-indent, or "tidy" them.
-6. **Do not touch** `scripts/spike.py`, `src/features.py`, `src/zones.py`, `detect_clip`, or
+6. **Do not touch** `scripts/analysis/spike.py`, `src/features.py`, `src/zones.py`, `detect_clip`, or
    `extract_clip_features`. Not one line of code. (Step 4 updates a few *docstring* cross-
    references in these files; that is the only permitted edit, and none in `spike.py` beyond prose.)
 7. **`src/` must never import from `scripts/`.** `src/classify.py` may import `src.config`; it must
@@ -95,8 +95,8 @@ must run against the *unmodified* code.
 BASE=data/reports/scratch/refactor_baseline_2026-09-09
 mkdir -p $BASE
 uv run pytest -q | tail -1 | tee $BASE/tests_before.txt
-uv run python scripts/backtest.py --labelled-only --out $BASE/labelled_before.csv
-uv run python scripts/check_incident_regression.py | tee $BASE/incident_before.txt
+uv run python -m scripts.analysis.backtest --labelled-only --out $BASE/labelled_before.csv
+uv run python -m scripts.analysis.check_incident_regression | tee $BASE/incident_before.txt
 ```
 
 Expect ~678 rows and roughly 3-5 minutes for the backtest run. Confirm `tests_before.txt` says
@@ -211,7 +211,7 @@ Requirements:
   `ThresholdsConfig.classification_fingerprint()` (reusing `_stable_hash`) — Step 9 needs the
   latter for the run record's `thresholds_hash`.
 
-Add to `tests/test_config.py`:
+Add to `tests/unit/test_config.py`:
 
 - loads the repo's real `config/thresholds.yaml` and asserts all 16 fields;
 - `ConfigError` on a missing key, naming the path;
@@ -242,7 +242,7 @@ and redo. Note the constants stay hardcoded here; Step 5 replaces them.
 
 Move these into `src/classify.py`, unchanged:
 
-| what | current location in `scripts/backtest.py` |
+| what | current location in `scripts/analysis/backtest.py` |
 | --- | --- |
 | module docstring rule derivations (lines 1-250) | see note below |
 | `MEDIAN_FENCE_DISTANCE_MAX = 0.40` | ~line 303 |
@@ -256,21 +256,21 @@ Move these into `src/classify.py`, unchanged:
 | `_EVENT_CATEGORY_PRIORITY` | line 403 |
 | `classify_event()` | line 417 |
 
-On the module docstring: `scripts/backtest.py`'s docstring currently mixes what the *script* does
+On the module docstring: `scripts/analysis/backtest.py`'s docstring currently mixes what the *script* does
 (screening tool, CLI usage) with how each *classification rule* was derived. Move the rule
 derivations to `src/classify.py`'s module docstring verbatim; leave the script/CLI framing in
-`scripts/backtest.py` and have it point at `src.classify` for rule provenance.
+`scripts/analysis/backtest.py` and have it point at `src.classify` for rule provenance.
 
-Everything else stays in `scripts/backtest.py`: `ExtractFn`, `REPORT_COLUMNS`, `_IDENTITY_COLUMNS`,
+Everything else stays in `scripts/analysis/backtest.py`: `ExtractFn`, `REPORT_COLUMNS`, `_IDENTITY_COLUMNS`,
 `_NON_NUMERIC`, `iter_clips_with_files`, `_reference_background`, `run_backtest`, `write_csv`,
 `main`.
 
 In this step `src/classify.py`'s only imports are `from __future__ import annotations` and
 `from collections.abc import Iterable`.
 
-In `scripts/backtest.py`, replace the moved definitions with a re-export so every existing caller
+In `scripts/analysis/backtest.py`, replace the moved definitions with a re-export so every existing caller
 keeps working untouched. **The `F401` suppression is mandatory, not optional:** after the move
-`scripts/backtest.py` calls only `classify` and `is_blinding_foreground` in its own code — the six
+`scripts/analysis/backtest.py` calls only `classify` and `is_blinding_foreground` in its own code — the six
 constants and `classify_event` are re-exported purely for existing callers, so without the
 suppression `uv run ruff check . --fix` will *silently delete them* and the tests will fail
 somewhere confusing. Verified against this repo's ruff config 2026-09-09.
@@ -295,7 +295,7 @@ Verify and commit:
 ```bash
 uv run ruff check . --fix && uv run pytest -q
 git diff --stat tests/                               # must be EMPTY
-git diff scripts/backtest.py | grep -c 'classify'    # sanity: the shim survived --fix
+git diff scripts/analysis/backtest.py | grep -c 'classify'    # sanity: the shim survived --fix
 ```
 
 Commit: `refactor: extract classify() and friends into src/classify.py`
@@ -306,10 +306,10 @@ Commit: `refactor: extract classify() and friends into src/classify.py`
 
 ```bash
 BASE=data/reports/scratch/refactor_baseline_2026-09-09
-uv run python scripts/backtest.py --labelled-only --out $BASE/labelled_after_step2.csv
+uv run python -m scripts.analysis.backtest --labelled-only --out $BASE/labelled_after_step2.csv
 diff <(sort $BASE/labelled_before.csv) <(sort $BASE/labelled_after_step2.csv) \
   && echo "IDENTICAL" || echo "DIFFERS -- STOP"
-uv run python scripts/check_incident_regression.py | tee $BASE/incident_after_step2.txt
+uv run python -m scripts.analysis.check_incident_regression | tee $BASE/incident_after_step2.txt
 diff $BASE/incident_before.txt $BASE/incident_after_step2.txt && echo "REGRESSION CHECK IDENTICAL"
 ```
 
@@ -325,40 +325,40 @@ Nothing to commit. Record the result in your session notes.
 
 Update these import sites:
 
-- `scripts/check_incident_regression.py:40` — `from scripts.backtest import classify`
-- `scripts/find_storm_events.py:38` — `from scripts.backtest import ExtractFn, classify, iter_clips_with_files`
-  (keep `ExtractFn` and `iter_clips_with_files` from `scripts.backtest`; take `classify` from `src.classify`)
-- `scripts/rank_candidates.py:48` — `from scripts.backtest import is_blinding_foreground`
+- `scripts/analysis/check_incident_regression.py:40` — `from scripts.analysis.backtest import classify`
+- `scripts/analysis/find_storm_events.py:38` — `from scripts.analysis.backtest import ExtractFn, classify, iter_clips_with_files`
+  (keep `ExtractFn` and `iter_clips_with_files` from `scripts.analysis.backtest`; take `classify` from `src.classify`)
+- `scripts/analysis/rank_candidates.py:48` — `from scripts.analysis.backtest import is_blinding_foreground`
 
-Then remove the re-export block from `scripts/backtest.py` (including its `F401` suppression) and
+Then remove the re-export block from `scripts/analysis/backtest.py` (including its `F401` suppression) and
 import only what it actually calls — which, verified 2026-09-09, is exactly `classify` and
 `is_blinding_foreground`. It calls none of the six constants and does not call `classify_event`;
 those appear in its docstrings only, so leave the prose references and drop the imports. Once the
 suppression is gone, `ruff check . --fix` deleting an unused import is correct behaviour again.
 
-Split the tests. Move these from `tests/test_backtest.py` into a new `tests/test_classify.py`,
-along with the `_features` helper (copy it; `tests/test_backtest.py` still needs it):
+Split the tests. Move these from `tests/scripts/analysis/test_backtest.py` into a new `tests/unit/test_classify.py`,
+along with the `_features` helper (copy it; `tests/scripts/analysis/test_backtest.py` still needs it):
 
 - every `test_classify_*` test
 - every `test_is_blinding_foreground_*` test
 - every `test_classify_event_*` test
 
-Leave in `tests/test_backtest.py`: `test_iter_clips_with_files*`,
+Leave in `tests/scripts/analysis/test_backtest.py`: `test_iter_clips_with_files*`,
 `test_run_backtest_assembles_rows_and_skips_unknown_camera`, and the `write_csv` test.
 
 The move is a mechanical rename. **Do not change a single assertion or expected value.** The total
 test count must not drop: same tests, different files.
 
-Also update the docstring cross-references that name the old path. Each mentions `scripts.backtest`
+Also update the docstring cross-references that name the old path. Each mentions `scripts.analysis.backtest`
 where it now means `src.classify`:
 
 - `src/storm_events.py:3`
-- `src/features.py:162` ("Same value as `scripts.backtest`'s `GREEN_LIGHT_RATIO_MIN`") — prose only
+- `src/features.py:162` ("Same value as `scripts.analysis.backtest`'s `GREEN_LIGHT_RATIO_MIN`") — prose only
 - `src/zones.py:487`
-- `scripts/spike.py:1274` — docstring text only; **do not touch any code in this file**
-- `scripts/rank_candidates.py:131, 407, 458, 554`
-- `scripts/find_storm_events.py:3`
-- `scripts/check_incident_regression.py:3, 16`
+- `scripts/analysis/spike.py:1274` — docstring text only; **do not touch any code in this file**
+- `scripts/analysis/rank_candidates.py:131, 407, 458, 554`
+- `scripts/analysis/find_storm_events.py:3`
+- `scripts/analysis/check_incident_regression.py:3, 16`
 
 Verify, and re-run the Step 3 diff — it must still be IDENTICAL.
 
@@ -407,7 +407,7 @@ their explanatory comments by folding each into the YAML key comment written in 
 the module docstring — the derivation prose must survive somewhere, and it must not be duplicated
 in two places that can drift.
 
-Add to `tests/test_classify.py`:
+Add to `tests/unit/test_classify.py`:
 
 - an explicit-thresholds test per rule family, constructing a `ClassificationThresholds` with one
   field moved and asserting the category changes as expected — this is what proves the wiring is
@@ -493,7 +493,7 @@ Verify by comparing every *pre-existing* column instead:
 
 ```bash
 BASE=data/reports/scratch/refactor_baseline_2026-09-09
-uv run python scripts/backtest.py --labelled-only --out $BASE/labelled_after_step7.csv
+uv run python -m scripts.analysis.backtest --labelled-only --out $BASE/labelled_after_step7.csv
 uv run python - <<'PY'
 import csv
 base = "data/reports/scratch/refactor_baseline_2026-09-09"
@@ -541,10 +541,10 @@ business call, not an engineering one. Storing the real category verbatim keeps 
 honest and leaves that decision where it belongs.
 
 1. In `src/db.py`: extend `VALID_PREDICTIONS` to include the eight real categories *in addition
-   to* the existing four (keep the four — `tests/test_db.py` uses them and the Phase 3 vocabulary
+   to* the existing four (keep the four — `tests/unit/test_db.py` uses them and the Phase 3 vocabulary
    may still arrive). Extend the `CHECK (predicted_class IN (...))` list in `_SCHEMA_SQL` to match,
    exactly. Bump `SCHEMA_VERSION` from `5` to `6`.
-2. Write `scripts/migrate_schema_v6.py`, following `scripts/migrate_schema_v5.py`'s structure and
+2. Write `scripts/migrations/migrate_schema_v6.py`, following `scripts/migrations/migrate_schema_v5.py`'s structure and
    docstring style. SQLite cannot alter a CHECK constraint in place, and `backtest_results` is
    **empty**, so the migration is a drop-and-recreate of that one table plus a `schema_version`
    update. It must:
@@ -552,14 +552,14 @@ honest and leaves that decision where it belongs.
      assumption is what makes drop-and-recreate safe, so verify it rather than trusting this doc;
    - touch nothing else — not `clips`, `labels`, `system_events`, `blob_tracks`, `backtest_runs`;
    - be idempotent: if `schema_version` is already 6, print that and exit 0.
-3. Add a `tests/test_db.py` case asserting a `*_candidate` value is accepted and a junk value still
+3. Add a `tests/unit/test_db.py` case asserting a `*_candidate` value is accepted and a junk value still
    raises `DbError`.
 4. Back up and migrate the live database:
 
 ```bash
 cp data/perimeter_watch.db data/backups/legacy_root/perimeter_watch.db.bak-2026-09-09-pre-v6
-uv run python scripts/migrate_schema_v6.py
-uv run python scripts/check_incident_regression.py | tail -3   # proves the db still opens
+uv run python -m scripts.migrations.migrate_schema_v6
+uv run python -m scripts.analysis.check_incident_regression | tail -3   # proves the db still opens
 ```
 
 `db.connect` hard-errors on a `schema_version` mismatch, so until the migration is run every tool
@@ -608,11 +608,11 @@ Behaviour:
   the identity columns, keeping `label` and `blinding_foreground` (they are what makes a stored run
   analysable later).
 
-Wire it into `scripts/backtest.py::main()`: after `write_csv`, record the run and print the
+Wire it into `scripts/analysis/backtest.py::main()`: after `write_csv`, record the run and print the
 `run_id`. Add a `--no-record` flag to skip it. Record by default — a run nobody can find again is
 the exact problem step 28 exists to fix. Keep the CSV output unchanged; this is additive.
 
-Add `tests/test_backtester.py` against a `tmp_path` database: a completed run's row count and
+Add `tests/unit/test_backtester.py` against a `tmp_path` database: a completed run's row count and
 `status`, a failing insert leaving `status='failed'`, `git_revision=None` tolerated, and a
 duplicate `run_id` rejected.
 
@@ -624,8 +624,8 @@ Commit: `feat: src/backtester.py records immutable backtest runs`
 
 ```bash
 uv run ruff check . --fix && uv run pytest -q
-uv run python scripts/check_incident_regression.py
-uv run python scripts/backtest.py --labelled-only \
+uv run python -m scripts.analysis.check_incident_regression
+uv run python -m scripts.analysis.backtest --labelled-only \
   --out data/reports/scratch/refactor_baseline_2026-09-09/labelled_final.csv
 uv run python -c "
 from src import db; from src.config import load_app_config

@@ -255,7 +255,7 @@ def detect_clip(
     target, rather than this clip's median background. This can reveal a
     subject that is already present for most of a short clip and was therefore
     absorbed into its own median. It is off by default and must be measured
-    through ``scripts.backtest --reference-background-primary`` before any
+    through ``scripts.analysis.backtest --reference-background-primary`` before any
     production decision: a reference mismatch can also make stationary scene
     changes look like foreground.
 

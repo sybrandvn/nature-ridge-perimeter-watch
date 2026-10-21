@@ -1,10 +1,10 @@
 """Metadata backfill: consume channel messages and persist clips/system_events.
 
-Promoted from scripts/meta_backfill.py (Phase 1 step 19) now that the approach is
+Promoted from scripts/ingest/meta_backfill.py (Phase 1 step 19) now that the approach is
 validated by the Phase 0 spike. Pure/async-generic and fully unit-testable without a
 live Telegram connection: it only needs an async iterator of RawMessage-like objects.
 Real Telethon wiring (client construction, credentials, CLI) stays in
-scripts/meta_backfill.py, which is now a thin wrapper around this module.
+scripts/ingest/meta_backfill.py, which is now a thin wrapper around this module.
 """
 
 from __future__ import annotations

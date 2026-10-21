@@ -1,6 +1,6 @@
 # Gate 2 — CV feasibility spike: separability finding
 
-Generated from `scripts/spike.py` across every camera with labelled clips
+Generated from `scripts/analysis/spike.py` across every camera with labelled clips
 (`data/reports/spike_cam*.csv`). 160 feature rows from 165 labels — 5 clips
 produce no detectable motion at all and are dropped, which is correct
 behaviour for genuinely blank frames.
@@ -207,7 +207,7 @@ but incident's rate rose from 0% to 31% once more incident clips were
 labelled, so treat it as a mild prior, not a rule.
 
 **Storm/wind hypothesis (large scattered motion, not one compact blob).**
-Added two new spike features (`scripts/spike.py`, `min_blob_area_fraction`
+Added two new spike features (`scripts/analysis/spike.py`, `min_blob_area_fraction`
 default `0.0005` matching `config/thresholds.yaml`'s `blob.min_area_fraction`):
 `motion_pixel_fraction` (peak fraction of the frame that's foreground motion
 in any single frame) and `blob_count` (peak number of simultaneous blobs above
@@ -292,7 +292,7 @@ finished (16886 clips, 16558 with detections).
 ### The documented rules had silently degraded
 
 Guard labels grew 110 -> 200 since the main body of this document was written,
-and the `scripts/backtest.py` rules got worse as they did:
+and the `scripts/analysis/backtest.py` rules got worse as they did:
 
 | rule | then | now |
 |---|---|---|
@@ -307,7 +307,7 @@ most of the guard population.
 
 Sixteen candidates were prototyped and scored by AUC against the labels. Six
 survived and are now in `src/features.py` / `src/zones.py` and wired into
-`scripts/spike.py` (`FEATURE_COLUMNS` is now 24 wide):
+`scripts/analysis/spike.py` (`FEATURE_COLUMNS` is now 24 wide):
 
 | feature | what it captures | why it helps |
 |---|---|---|
@@ -395,6 +395,6 @@ cam07 takes 151 of the top 250. Standardising features per camera helps
 
 `data/reports/candidates_2026-08-30.csv` holds a per-camera stratified review
 queue (top 25 unlabelled per camera, 417 rows) with a matching
-`.message_ids` file for `scripts/label.py --message-ids-file`. Labelling that
+`.message_ids` file for `scripts/review/label.py --message-ids-file`. Labelling that
 queue -- especially the cam07 / cam04 / cam03 / cam13 rows -- is the highest
 value next action, because it supplies the negatives those cameras lack.

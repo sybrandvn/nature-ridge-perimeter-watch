@@ -3,7 +3,7 @@
 > **Current-status checkpoint (2026-09-20):** the detector, backfill/label/backtest loop, live
 > Telethon watcher, durable event/delivery state, Docker service, Telegram query bot, live media
 > retrieval, opt-in server retention, and resumable bulk restoration are implemented. Use
-> `README.md` for operator commands and `docs/next_agent_handoff.md` for current state and next
+> `docs/operator-guide.md` for operator commands and `docs/next_agent_handoff.md` for current state and next
 > work. The chronological plan below is retained as decision history; older statements that these
 > components are deferred or unbuilt describe their status at that checkpoint.
 
@@ -16,7 +16,7 @@ historical constraints, not the current architecture.
 
 | concern | original plan | implemented system |
 | --- | --- | --- |
-| service process | no live loop | `scripts/watch.py` runs `src.live_watcher.LiveWatcher` and the query bot |
+| service process | no live loop | `scripts/ops/watch.py` runs `src.live_watcher.LiveWatcher` and the query bot |
 | ingestion and grouping | classify clips independently; sibling policy undecided | Telethon ingestion persists messages, groups siblings by embedded event timestamp, waits up to the measured 300-second window, and finalizes completion captions immediately |
 | event resolution | reporting-only OR; longer-sibling preference proposed | any animal/incident sibling is preserved; longer-only and completed-guard overrides are rejected because they lost protected events; a late urgent sibling reopens a suppressed event |
 | delivery reliability | manually invoked alert functions | a durable per-transport outbox records pending/sending/delivered/failed/ambiguous attempts, retries bounded failures, and quarantines interrupted sends for review |
@@ -37,13 +37,13 @@ Full measurement and discovery narrative in `/memories/repo/incident-findings.md
 `classify()` categories** — the short preview catches the scan before a flashlight/track settles,
 so it reads as `incident_candidate`/`animal_candidate` while the full clip is plainly
 `guard_candidate` (confirmed twice this session: cam01a/18603-18604, cam08/10852-10853). Since
-both clips of an event are usually labelled identically once one is, `scripts/backtest.py
+both clips of an event are usually labelled identically once one is, `scripts/analysis/backtest.py
 --labelled-only` was **double-counting almost every animal/incident event** (47 labelled clip
-rows collapsed to only 25 unique physical events when grouped by `scripts.label._event_key`) —
+rows collapsed to only 25 unique physical events when grouped by `scripts.review.label._event_key`) —
 every feature/AUC/threshold number quoted earlier in this file was computed over that inflated,
 truncation-mixed population, not the true one.
 
-**New tool, not a `classify()` change:** `scripts.backtest.classify_event(categories)` reduces a
+**New tool, not a `classify()` change:** `scripts.analysis.backtest.classify_event(categories)` reduces a
 whole event's sibling categories to one verdict, `incident_candidate`/`animal_candidate` always
 winning (matches the standing "shape may never suppress an outside alert" rule) — reporting/
 analysis only, never called from the live per-clip path. Re-measured the full labelled corpus
@@ -82,8 +82,8 @@ Supersedes the stale figures below wherever they conflict. Full narrative in `do
 section #5; measurements in `/memories/repo/incident-findings.md`.
 
 **Triage now has three outputs, not one queue:** the incident/animal review queue
-(`scripts/rank_candidates.py --out`), a separate maintenance "clean this camera" queue
-(`--maintenance-out`), and a `blinding_foreground` flag in `scripts/backtest.py` that is
+(`scripts/analysis/rank_candidates.py --out`), a separate maintenance "clean this camera" queue
+(`--maintenance-out`), and a `blinding_foreground` flag in `scripts/analysis/backtest.py` that is
 deliberately *independent* of `category` — a clip can be a real guard sighting and an obstructed
 lens at the same time.
 
@@ -108,7 +108,7 @@ false-alert source and is 55% concentrated on cam10.
 backtest.py::classify()`'s animal/incident geometry rule now requires `median_fence_distance <
 MEDIAN_FENCE_DISTANCE_MAX (0.40)` as well as `> 0.1`. Re-measured through the real rule order:
 environment leak into the alert channel drops 29 -> 14 clips, all 5 incident events still alert
-(`scripts/check_incident_regression.py` passes 5/5), and the accepted cost is exactly one animal
+(`scripts/analysis/check_incident_regression.py` passes 5/5), and the accepted cost is exactly one animal
 event with no sibling clip to cover it, `cam10/7632` (now `unclassified`, was already noted
 "visually marginal/hard to confirm, enters during IR flare" at labelling time). This is a
 deliberate, explicit break of the standing "never lose an animal" constraint for this one known
@@ -117,7 +117,7 @@ clip, not a silent regression.
 **CORRECTED (2026-09-08): `cam10/7632`'s event is not actually lost.** "No sibling clip to cover
 it" was wrong -- its short/duplicate preview sibling `cam10/7631` independently reads
 `animal_candidate` on its own (`median_fence_distance` 0.365-0.370, under the bound), confirmed via
-`scripts.backtest.classify_event(['animal_candidate', 'unclassified']) == 'animal_candidate'`. A
+`scripts.analysis.backtest.classify_event(['animal_candidate', 'unclassified']) == 'animal_candidate'`. A
 live system processing Telegram messages one at a time would alert on `7631` before the fuller
 `7632` even arrives, so this sighting is not lost in practice -- only the standalone `7632` clip
 fails to independently re-confirm it, which is what "accepted cost" was actually describing. Not
@@ -134,7 +134,7 @@ True)` now does real per-pixel tracking through the dropped IR-flare/warmup wind
 photometric gain/offset fit onto the settled background, then the same diff/track pipeline as
 every scored frame), plus brightness/colour-corrected warmup frames for display. Scoped safe by
 construction -- it only improves the already render-only `dropped_frame_boxes`, never touches
-`FEATURE_COLUMNS` -- and wired into `scripts/render_debug.py`'s debug videos. Full detail,
+`FEATURE_COLUMNS` -- and wired into `scripts/review/render_debug.py`'s debug videos. Full detail,
 validation numbers and the one known remaining limitation (`cam06/21520`'s dwelling subject) in
 `docs/handoff.md`'s "IR flare tracking" section.
 
@@ -151,13 +151,13 @@ Phase 1 work should build on this without inheriting stale numbers:
 
 ## Scope decisions (2026-08-28)
 - Historical first-round scope: camera-order discovery, CV spike, backtester, and stub alert
-  modules. The production entry point is now `scripts/watch.py`; Docker/Compose and the durable
+  modules. The production entry point is now `scripts/ops/watch.py`; Docker/Compose and the durable
   delivery outbox were added after calibration.
 - Two gates: camera-order inference, then CV feasibility. Either failing changes the plan.
 - **Gate 1 resolved without inference (2026-08-28):** the user decided camera order is just
   numerical/alphabetical by id (cam01, cam01a, cam01b, cam02, ... cam16) — no reason to expect the
   physical fence order differs. `config/cameras.yaml` `order` field set directly from that sort.
-  `scripts/infer_camera_order.py` (steps 3-9 below) is no longer on the critical path; kept for
+  `scripts/analysis/infer_camera_order.py` (steps 3-9 below) is no longer on the critical path; kept for
   optional later validation, not required before Phase 1.
 - Labeling target: stratified ~300-500 clips, oversampling animal/incident.
 - Zone editor: browser UI (no reliable WSL GUI assumed).
@@ -200,7 +200,7 @@ movement as an incident) had they stayed there. `neighbour` (added 2026-09-07) c
 person seen OUTSIDE the fence who isn't a resident or an intruder -- typically a neighbouring
 property's own worker, visible near/through the perimeter. Distinct from `resident` (interior
 side, identified) and from `incident` (a real security concern); see cam14/3495, the first
-confirmed example. Migrated with `scripts/migrate_add_neighbour_label.py` (widened the `labels`
+confirmed example. Migrated with `scripts/migrations/migrate_add_neighbour_label.py` (widened the `labels`
 CHECK constraint only, `schema_version` stayed 5, same no-op-on-existing-rows pattern as the
 `resident` migration).
 
@@ -327,7 +327,7 @@ blocker — do not treat its numbers (150 clips, 0.22 precision) as current; the
 everything in `docs/handoff.md`.
 10. [done] Download a clip subset for 2-3 cameras chosen using 0a activity stats and known incident
     locations, ideally including the camera that caught the crawl. Span night, storm, animal,
-    guard, and intruder examples. `scripts/download_clips.py` does this against rows already in
+    guard, and intruder examples. `scripts/ingest/download_clips.py` does this against rows already in
     `clips` (from 0a): filter by camera and an optional timestamp window, cap per camera, fetch
     each message's media via Telethon to `data/history/{camera_id}/{message_id}.mp4` through a
     `.part` file and atomic rename, and record the path back into `clips.file_path`. Deliberately
@@ -360,7 +360,7 @@ everything in `docs/handoff.md`.
     distinct green — added beyond the original feature list), green-light flicker (std
     deviation of the whole-frame green ratio across the clip -- the guard sweeps the beam
     rather than holding it still, catching guard clips the single-frame reading misses),
-    row-normalised area, edge density, path length, jitter, persistence. `scripts/spike.py`
+    row-normalised area, edge density, path length, jitter, persistence. `scripts/analysis/spike.py`
     run per-camera into `data/reports/spike_{camera_id}.csv`. The per-clip detector uses
     median-background subtraction after dropping IR-warmup frames, not consecutive-frame
     differencing — the latter locks onto the whole-frame brightness swing these cameras
@@ -390,7 +390,7 @@ everything in `docs/handoff.md`.
     Locked deps/ruff/pytest/`.env.example` existed from the Phase 0 spike already. Structured
     logging added 2026-08-30 as `src/logging_setup.py::configure_logging` (a `JsonFormatter` on
     the root logger) — replaces the old per-call-site `logger.info(json.dumps({...}))` pattern in
-    `scripts/meta_backfill.py`/`scripts/download_clips.py` with `logger.info(event, extra={...})`.
+    `scripts/ingest/meta_backfill.py`/`scripts/ingest/download_clips.py` with `logger.info(event, extra={...})`.
     "Console entry points" scoped down to the existing `main()` + `if __name__ == "__main__"`
     pattern per script: this project is `uv init --app --no-package` (flat `src/`, no
     `[build-system]`), so real installed `[project.scripts]` entries aren't meaningful without
@@ -403,7 +403,7 @@ everything in `docs/handoff.md`.
     framework by default (export labels to JSONL, delete db, reimport, is the documented
     fallback). In
     practice, once `clips` holds real backfilled volume, a targeted in-place table rebuild
-    (`scripts/migrate_schema_v5.py`: rename, recreate from the current schema, copy+transform,
+    (`scripts/migrations/migrate_schema_v5.py`: rename, recreate from the current schema, copy+transform,
     bump `schema_version`, keep the old table rather than dropping it) is the proportionate
     approach for a change scoped to one table — done for the v4->v5 label split, 2026-08-29.
     Schema v10 now includes `clips`, `labels`, `blob_tracks`, `system_events`, `backtest_runs`,
@@ -418,10 +418,10 @@ everything in `docs/handoff.md`.
 19. [done, 2026-08-30] Promote the Phase 0 scripts into supported modules (`src/backfill.py`,
     `src/sequence.py`) now that their approach is validated. `src/sequence.py` was already
     promoted (built directly there during 0b). `src/backfill.py` is new: `run_backfill`/
-    `extract_primitives`/`RawMessage` moved out of `scripts/meta_backfill.py` verbatim, which is
+    `extract_primitives`/`RawMessage` moved out of `scripts/ingest/meta_backfill.py` verbatim, which is
     now a thin wrapper around it (Telethon client wiring + `main()` only), matching the
-    established pattern in `scripts/infer_camera_order.py` (algorithm in `src/`, script keeps only
-    I/O glue). `tests/test_meta_backfill.py` renamed to `tests/test_backfill.py` to match.
+    established pattern in `scripts/analysis/infer_camera_order.py` (algorithm in `src/`, script keeps only
+    I/O glue). `tests/test_meta_backfill.py` renamed to `tests/unit/test_backfill.py` to match.
 
 
 ## Ship readiness (replaces Gate 2 pass/fail, 2026-09-08)
@@ -433,7 +433,7 @@ corpus (re-run, don't trust a quoted number — every session in `docs/handoff.m
 the hard way at least once):
 
 1. **Hard constraint, non-negotiable: no labelled incident event stops alerting.**
-   `scripts/check_incident_regression.py` passes (currently 5/5 events). Any change that would
+   `scripts/analysis/check_incident_regression.py` passes (currently 5/5 events). Any change that would
    break this needs the user's explicit, logged sign-off on the specific clip lost (as already
    practiced — see `docs/handoff.md`'s `cam10/7632` correction for what that looks like done
    right, and what it looks like done wrong the first time).
@@ -444,7 +444,7 @@ the hard way at least once):
    is a real number, not a vibe, but it is the user's number to set, not an agent's to assume —
    pick a concrete target (e.g. "under N alert-channel clips per night on average" or a leak
    percentage) and record it here once chosen. Until then, track the trend via
-   `scripts/backtest.py` + `scripts/rank_candidates.py` (`docs/handoff.md` has the running series:
+   `scripts/analysis/backtest.py` + `scripts/analysis/rank_candidates.py` (`docs/handoff.md` has the running series:
    29→14→6 environment-leak clips, 39→26 guard-leak clips, across sessions #5-#7) rather than
    gating on an unset number.
 4. **No known, unaddressed corpus-wide detector bug materially distorts the classifier's own
@@ -452,7 +452,7 @@ the hard way at least once):
    #10-#11) — measured net-positive on the labelled sample but not yet safe as a default; see that
    section for the specific gate before flipping it on.
 5. **The full test suite and the incident regression check both stay green** —
-   `uv run ruff check . --fix && uv run pytest -q` and `scripts/check_incident_regression.py`, the
+   `uv run ruff check . --fix && uv run pytest -q` and `scripts/analysis/check_incident_regression.py`, the
    same two commands this repo has run before every commit since session #1.
 
 Phase 2 work (below) is judged against this bar, not against a resurrected Gate 2.
@@ -508,7 +508,7 @@ Phase 2 work (below) is judged against this bar, not against a resurrected Gate 
 The empirical work since Phase 0c built real equivalents of most of steps 20-25 under different
 names, ad hoc, while gate 2 sat undecided (now retired — see Ship readiness above). **This is
 reorganisation, not new detection logic.** The single rule for all of it: behaviour must not
-change. `uv run ruff check . --fix && uv run pytest -q` and `scripts/check_incident_regression.py`
+change. `uv run ruff check . --fix && uv run pytest -q` and `scripts/analysis/check_incident_regression.py`
 must stay green throughout, and any extracted module's output should be verified byte-identical
 against the pre-refactor code on the full labelled corpus before being trusted, same discipline as
 every `detect_clip`-level change already in `docs/handoff.md`'s history. Adding new tests during
@@ -524,7 +524,7 @@ worth recording here since they affect anyone touching `src/classify.py` or `src
   eight `*_candidate`/`no_motion`/`unclassified` categories; the CHECK constraint only accepted the
   planned four-class routing vocabulary (`guard_side`/`outside_alert`/`outside_priority`/
   `ambiguous`) this step's own plan text specifies below, which was never built. Rather than map the
-  eight measured categories onto those four, schema v6 (`scripts/migrate_schema_v6.py`) widened the
+  eight measured categories onto those four, schema v6 (`scripts/migrations/migrate_schema_v6.py`) widened the
   constraint to accept both. Mapping would have encoded an alerting policy nobody has validated;
   choosing one is gated on Ship readiness criterion #3 above, still unset. If that vocabulary is
   ever actually built, the mapping decision still needs to happen then, not retroactively now.
@@ -542,17 +542,17 @@ worth recording here since they affect anyone touching `src/classify.py` or `src
 | step | plan says | what actually exists | verdict |
 | --- | --- | --- | --- |
 | 25 `classify.py` | typed rule engine, reason codes per decision | **DONE.** `src/classify.py`: `classify_detailed()` returns `ClassificationResult(category, reason, contributing)`, `classify()` is a one-line wrapper. All 16 thresholds load from `config/thresholds.yaml` via `src.config.ClassificationThresholds`, no hardcoded constants left. | Landed 2026-09-09. Verified byte-identical to the pre-refactor code on the full 678-clip labelled corpus at every intermediate step (extraction, config wiring, reason codes) — see the execution plan doc for the per-step diffs. |
-| 28 `backtester.py` | immutable runs: timestamp, config snapshot/hash, git revision | **DONE.** `src/backtester.py::record_run()` wires the existing `create_run`/`finish_run`/`add_backtest_result` functions in; wired into `scripts/backtest.py::main()` by default (`--no-record` to skip). | Landed 2026-09-09, needed schema v6 (see above) since the existing CHECK constraint couldn't accept a real `classify()` output. |
+| 28 `backtester.py` | immutable runs: timestamp, config snapshot/hash, git revision | **DONE.** `src/backtester.py::record_run()` wires the existing `create_run`/`finish_run`/`add_backtest_result` functions in; wired into `scripts/analysis/backtest.py::main()` by default (`--no-record` to skip). | Landed 2026-09-09, needed schema v6 (see above) since the existing CHECK constraint couldn't accept a real `classify()` output. |
 | 23 `zones.py` | polyline/side/depth/ignore on top of cached tracks | `src/zones.py` exists, in daily use | **Already done**, just not literally "on top of cached tracks" (see step 22) since nothing is cached yet. No action needed unless step 22 changes its inputs. |
 | 22 `motion.py` | cached zone-independent blob tracks, `EXTRACTOR_VERSION` | **Operational cache shipped 2026-09-13.** `MotionThresholds` strictly loads all 22 real settings; `src/motion.py` owns `EXTRACTOR_VERSION`, complete cache identity, persistence through `blob_tracks`, and the complete detector/tracking implementation; backtests use the cache by default with `--no-cache` available. On 678 labelled clips, uncached/cold/warm CSVs were byte-identical and warm runtime was 3.7s versus ~6m. | **Correctness/performance goal met; optional cache refinement remains.** The cached JSON payload is the final feature map, keyed by video, resolved zone, reference background, daylight and motion config. It is safe but zone-aware: a geometry edit recomputes extraction. Compact JSON-safe geometry and metric observation DTOs now replay those feature groups exactly, but are not persisted. Do not cache `ClipDetection` wholesale; it contains large NumPy imagery. |
 | 24 browser zone editor | draw polyline/depth/ignore in a browser, atomic dated write | **Nothing** — every fence trace to date is "hand the user an upscaled frame, they draw in a paint tool, colour-threshold it back out" (`README.md` section 4) | Real, standalone feature work, not a refactor of anything existing. Lowest priority of the five unless retracing cameras becomes frequent enough that the manual process is the bottleneck — it currently isn't (18 cameras, dated-history schema already handles remounts). |
-| 20/21 backfill/parsing | hardened camera-ID parsing, resumable full backfill | `src/message_parsing.py`, `scripts/meta_backfill.py`, `scripts/download_clips.py`, live retrieval, and `scripts/restore_media.py`; 17,000+ clips processed | **Operationally done.** The system has exercised parsing, deduplication, atomic downloads, restoration, and health-event storage at corpus and live scale. New caption forms still require fixtures as they appear. |
+| 20/21 backfill/parsing | hardened camera-ID parsing, resumable full backfill | `src/message_parsing.py`, `scripts/ingest/meta_backfill.py`, `scripts/ingest/download_clips.py`, live retrieval, and `scripts/ingest/restore_media.py`; 17,000+ clips processed | **Operationally done.** The system has exercised parsing, deduplication, atomic downloads, restoration, and health-event storage at corpus and live scale. New caption forms still require fixtures as they appear. |
 
 **Remaining optional engineering tracks:** the step-22 raw-track architectural refinement or step
 24's zone editor. Neither blocks the completed watcher architecture.
 
 ### Phase 3: Labels, backtester, retrospective sequences
-26. **[done]** `scripts/label.py`: resumable, prints the clip path by default, optional configured player,
+26. **[done]** `scripts/review/label.py`: resumable, prints the clip path by default, optional configured player,
     single-key labelling, skip and correction support.
 27. **[partial]** `src/sequence.py` and the query bot support patrol passes, timing, coverage, and
     gaps. The originally proposed standalone retrospective adjacent-camera probe report remains
@@ -589,7 +589,7 @@ worth recording here since they affect anyone touching `src/classify.py` or `src
 
 ### Phase 4: Alert delivery and operator documentation
 32. **[done]** `telegram_alert.py` and `ntfy_alert.py` are tested transport functions;
-    `scripts/send_test_alert.py` verifies configured delivery with representative examples. They
+    `scripts/ops/send_test_alert.py` verifies configured delivery with representative examples. They
     are now called by the live watcher through durable delivery state.
 33. **[done]** README covers setup, authorization, Docker operation, backfill/restoration,
     geometry, labelling, backtesting, alert tests, retention, and recovery.
@@ -625,7 +625,7 @@ worth recording here since they affect anyone touching `src/classify.py` or `src
 
 ### Phase 6: Live watcher and operations
 
-40. **[done]** `scripts/watch.py` receives source-channel messages through Telethon and delegates
+40. **[done]** `scripts/ops/watch.py` receives source-channel messages through Telethon and delegates
     deterministic, serialized processing to `src.live_watcher.LiveWatcher`.
 41. **[done]** Schema v8 introduced `live_messages`, pending/final `live_events`, analyzed
     `live_event_clips`, and per-transport `live_deliveries`; v9 added staged camera resolutions and
@@ -645,7 +645,7 @@ worth recording here since they affect anyone touching `src/classify.py` or `src
 45. **[done]** Compose runs the watcher with persistent data, restart policy, read-only container
     filesystem, readiness/heartbeat healthcheck, and separate tools/bootstrap profiles.
 46. **[done]** Opt-in retention preserves urgent/pending evidence and current camera media, cleans
-    obsolete debug renders, and works with live retrieval plus resumable `scripts/restore_media.py`.
+    obsolete debug renders, and works with live retrieval plus resumable `scripts/ingest/restore_media.py`.
 
 ## Sensitivity note
 Patrol-compliance analytics profile identifiable individuals' movements and working patterns.
@@ -736,7 +736,7 @@ access as part of ongoing operation; the bot has shipped.
     never enters the band region at his row; the confirmed real-world crawl-along-the-fence
     subject never crossed into it). n=1 is far too small to certify anything either way. **Neither
     the calibration functions nor the fence-band functions are wired into
-    `scripts/backtest.py::classify`** -- this was deliberately left as additive infrastructure,
+    `scripts/analysis/backtest.py::classify`** -- this was deliberately left as additive infrastructure,
     same as `scenery_motion_fraction`'s own history; a real rule needs a labelled sample size and
     threshold sweep this session didn't have time for (only 1 camera is calibrated at all).
   - **All 18 cameras now have `fence_bottom` traced (2026-09-05, later same day) -- phases 4/5
@@ -783,7 +783,7 @@ access as part of ongoing operation; the bot has shipped.
   session's re-derivation)**: the user's insight — "guards are on the inside, they can cross the
   line since they are visible through the fence if they walk close, they shine their flashlight
   across the fence" — is not a hypothesis, it's confirmed in this session's re-derivation of the
-  animal/incident rule (see the commit re-deriving `scripts.backtest.classify`): `outside_pixel_
+  animal/incident rule (see the commit re-deriving `scripts.analysis.backtest.classify`): `outside_pixel_
   fraction` alone scores AUC 0.700 for animal+incident vs guard+environment, but is NOT safe as a
   standalone rule (guard false-fire 40%+ at every threshold tried) precisely because guards
   routinely register as "outside" too. The idea, not yet built: track the fence-side of the
@@ -848,9 +848,9 @@ The live loop, listener/event buffering, delivery outbox and crash recovery, Doc
 query bot, media restoration, and retention were previously listed here and are now complete.
 
 ## Relevant files
-- `scripts/meta_backfill.py`, `scripts/infer_camera_order.py`, `scripts/download_clips.py`,
-  `scripts/spike.py`, `scripts/label.py`, `scripts/watch.py`, `scripts/restore_media.py`,
-  `scripts/send_test_alert.py`
+- `scripts/ingest/meta_backfill.py`, `scripts/analysis/infer_camera_order.py`, `scripts/ingest/download_clips.py`,
+  `scripts/analysis/spike.py`, `scripts/review/label.py`, `scripts/ops/watch.py`, `scripts/ingest/restore_media.py`,
+  `scripts/ops/send_test_alert.py`
 - `src/config.py`, `src/db.py`, `src/motion.py`, `src/zones.py`, `src/classify.py`,
   `src/backfill.py`, `src/sequence.py`, `src/backtester.py`, `src/clip_analysis.py`,
   `src/message_parsing.py`

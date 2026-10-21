@@ -40,4 +40,4 @@ RUN mkdir -p data/history data/live data/logs data/reference_bg data/reports \
 USER perimeter
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python", "-m", "scripts.container_healthcheck", "--readiness"]
+CMD ["python", "-m", "scripts.ops.container_healthcheck", "--readiness"]

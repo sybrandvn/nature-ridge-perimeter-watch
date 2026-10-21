@@ -1,6 +1,6 @@
 """The classification rule engine: one clip's feature vector -> one category.
 
-Extracted from scripts/backtest.py 2026-09-09 with no change to what it
+Extracted from scripts/analysis/backtest.py 2026-09-09 with no change to what it
 computes (plan.md step 25; see docs/phase2_refactor_execution_plan.md). Every
 threshold below was measured against real labelled footage over the sessions
 recorded in docs/handoff.md, and every rule's derivation is kept here verbatim
@@ -364,7 +364,7 @@ Rules:
     depth_cutoff) -- without that guard this rule would confidently suppress
     blobs it never actually classified.
     Measured at EVENT level on the 416-clip labelled corpus (217 events,
-    grouped by shared physical trigger via scripts.label._event_key, since a
+    grouped by shared physical trigger via scripts.review.label._event_key, since a
     startup_state=blank precursor clip is expected to read as nothing on its
     own): 0/5 incident events lost, 145/193 currently-unclassified guard clips
     become a confident guard_candidate. This is why the event-level view
@@ -555,7 +555,7 @@ def classify_detailed(
     `thresholds` defaults to the repo's real config/thresholds.yaml
     (`default_thresholds()`) when not given; pass an explicit
     `ClassificationThresholds` to vary one value without touching that file
-    (see tests/test_classify.py).
+    (see tests/unit/test_classify.py).
 
     `reason` is one fixed code per rule (`no_features`, `green_light`,
     `warmup_flashlight`, `warmup_dynamic_inside`,
@@ -1082,7 +1082,7 @@ _EVENT_CATEGORY_PRIORITY = (
 def classify_event(categories: Iterable[str]) -> str:
     """Reduce every sibling clip's own `classify()` category for one physical
     event (an "(Initial*)"/"(Stopped*)" pair sharing one embedded timestamp,
-    see `scripts.label._event_key`) down to a single event-level verdict, so
+    see `scripts.review.label._event_key`) down to a single event-level verdict, so
     a truncated preview clip's weaker read can never hide what a fuller
     sibling actually shows (measured 2026-09-07: cam01a/18603-18604 and
     cam08/10852-10853 both had the short preview alone read `incident_

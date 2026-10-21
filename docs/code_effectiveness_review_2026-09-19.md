@@ -128,7 +128,7 @@ the recorded animal labels, not a new visual confirmation of their contents.
 
 ### 1. P1 — The protected-event regression can pass without an alert, or without footage
 
-Locations: `scripts/check_incident_regression.py:97`, `:158`, `:187`;
+Locations: `scripts/analysis/check_incident_regression.py:97`, `:158`, `:187`;
 `tests/fixtures/incident_regression.jsonl`.
 
 The checker tests absence from a suppression denylist. That list omits
@@ -170,7 +170,7 @@ existing NULL paths against local files without re-downloading blindly.
 
 ### 3. P1 — The debug video does not show the same analysis as the backtest
 
-Locations: `scripts/render_debug.py:527`, `:541`, `:553`, `:581`.
+Locations: `scripts/review/render_debug.py:527`, `:541`, `:553`, `:581`.
 
 Three mismatches coexist:
 
@@ -353,7 +353,7 @@ summary and ranker; ranker scaling is fitted before leave-one-out splitting;
 longest-per-event fitting can still retain blank/duplicate rows when the informative
 sibling is absent or undetected. Neighbour is omitted from `NEGATIVE_LABELS` and
 silently excluded from that model's fit. Parallel extraction catches all exceptions
-and changes them to undetected clips (`scripts/rank_candidates.py:245`). Report
+and changes them to undetected clips (`scripts/analysis/rank_candidates.py:245`). Report
 errors explicitly, freeze cohort membership, fit preprocessing inside each split,
 and split by camera/night/incident episode as appropriate. Existing in-sample
 threshold margins are not held-out validation.
@@ -441,11 +441,11 @@ Run from the repository root:
 ```bash
 uv run ruff check .
 uv run pytest -q
-uv run python scripts/backtest.py --labelled-only --no-record --out /tmp/review.csv
-uv run python scripts/backtest.py --labelled-only --no-cache --no-record --out /tmp/review-cold.csv
-uv run python scripts/check_incident_regression.py
-uv run python scripts/audit_detection_assumptions.py
-uv run python scripts/audit_detection_assumptions.py --backtest-csv /tmp/review.csv > /tmp/audit.json
+uv run python -m scripts.analysis.backtest --labelled-only --no-record --out /tmp/review.csv
+uv run python -m scripts.analysis.backtest --labelled-only --no-cache --no-record --out /tmp/review-cold.csv
+uv run python -m scripts.analysis.check_incident_regression
+uv run python -m scripts.analysis.audit_detection_assumptions
+uv run python -m scripts.analysis.audit_detection_assumptions --backtest-csv /tmp/review.csv > /tmp/audit.json
 ```
 
 The audit script reads the real DB only when `--backtest-csv` is supplied, then
@@ -455,14 +455,14 @@ not that this diagnostic command itself failed. It is not yet a CI acceptance ga
 The normal backtest can populate the feature cache even with `--no-record`; use
 `--no-cache` when that write is undesirable.
 
-Local evidence is retained under `data/reports/code_review_2026-09-19/`:
+Local evidence is retained under `data/reports/investigations/2026-09-19/code-review/`:
 `audit.json`, the cached and cold CSVs, summary JSON, test output and regression
 output. These are gitignored and reflect the labels/reference images present during
 this review. The diagnostic script and this report are the durable handoff.
 
 Documentation reconciliation: the newest handoff supersedes older implementation
 plans. README still calls Gate 2 blocking and parts of the capability map still
-point into `scripts/spike.py` or call wired features reporting-only. The older
+point into `scripts/analysis/spike.py` or call wired features reporting-only. The older
 refactor plan is a historical execution record, not a restriction against the
 review requested here. Update the current capability map after each repair rather
 than appending another contradictory current-state claim to historical prose.

@@ -8,20 +8,16 @@ __pycache__/
 *.session
 *.session-journal
 
-# Local data: raw corpus, live captures, generated reports, sqlite db
-data/history/*
-data/live/*
-data/reports/*
-!data/history/.gitkeep
-!data/live/.gitkeep
-!data/reports/.gitkeep
+# Local data: ignore contents at every depth, including new artifact folders.
+# Only the layout guide and empty-directory placeholders belong in Git.
+/data/**
+!/data/**/
+!/data/**/.gitkeep
+!/data/README.md
 *.db
 *.db-wal
 *.db-shm
 *.db.bak-*
-data/backups/
-data/*.log
-data/logs/
 
 # Editors / OS
 .vscode/
@@ -30,5 +26,3 @@ data/logs/
 # Test/lint caches
 .pytest_cache/
 .ruff_cache/
-data/reference_bg/*
-!data/reference_bg/.gitkeep

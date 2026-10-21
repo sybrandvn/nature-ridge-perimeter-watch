@@ -7,7 +7,7 @@ centroids across a clip's frames, since those need a track rather than a
 single blob.
 
 All frame-level functions are testable against synthetic OpenCV-drawn shapes,
-without needing real camera footage -- see tests/test_features.py.
+without needing real camera footage -- see tests/unit/test_features.py.
 """
 
 from __future__ import annotations
@@ -231,7 +231,7 @@ FLASHLIGHT_MIN_BLOB_AREA = 8
 
 # Same value as src.classify's green_light_ratio_min threshold, deliberately -- one
 # "is this a real flashlight, not noise" bar shared by the classify() rule and
-# scripts.spike's opt-in track_contour candidate-preference (see its
+# scripts.analysis.spike's opt-in track_contour candidate-preference (see its
 # `flashlight_scores` parameter), so a candidate is never held to a different
 # standard than a finished clip's own best_contour would be.
 FLASHLIGHT_CANDIDATE_MIN_RATIO = 0.02
@@ -361,7 +361,7 @@ def flashlight_bbox_overlap(
     """Fraction of a tracked box's own pixels (not just its best-frame
     contour, see `green_light_ratio`) that read as the guard's flashlight.
 
-    Shared by `scripts.render_debug` (marks a box as the flashlight itself,
+    Shared by `scripts.review.render_debug` (marks a box as the flashlight itself,
     not a subject) and `src.scoring.extract_clip_features` (so the render
     and the model score the same signal the same way) -- checked per tracked
     frame, so a beam that only fills the box briefly still gets counted.
@@ -621,7 +621,7 @@ def optical_flow_direction_coherence(
 
     MEASURED AGAINST THE FULL LABELLED CORPUS 2026-09-09, honest result: the
     per-clip aggregate this feeds (`flow_direction_coherence`, median over
-    every consecutive-genuine-frame pair -- see `scripts.spike.
+    every consecutive-genuine-frame pair -- see `scripts.analysis.spike.
     extract_clip_features`) does NOT separate environment from guard/animal/
     incident the way the hypothesis above predicted. Measured medians (only
     over clips with `flow_direction_coherence_has_evidence`): environment

@@ -2,13 +2,13 @@
 
 Written 2026-09-09, from a full read of `docs/plan.md`, `docs/handoff.md` (sessions #1-#15),
 `docs/gate2_separability_finding.md`, `docs/detection_capability_map.md`, `src/classify.py`,
-`src/features.py`, `scripts/spike.py`, `scripts/rank_candidates.py` and the live database.
+`src/features.py`, `scripts/analysis/spike.py`, `scripts/analysis/rank_candidates.py` and the live database.
 
 ## Implementation status (updated same day, later session)
 
 Section 7's "do first" and most of "do next" items are DONE, on `feat/phase2-refactor`, in this
 order (each committed and verified separately -- full test suite green throughout, 665 tests,
-`scripts/check_incident_regression.py` unaffected):
+`scripts/analysis/check_incident_regression.py` unaffected):
 
 1. **The `_multi_object_outside_features` bbox bug (1.1) -- FIXED.** Was reading corner-form
    `(x0,y0,x1,y1)` as `(x,y,w,h)`. Measured impact confirmed as described (105/141 sampled clips
@@ -23,7 +23,7 @@ order (each committed and verified separately -- full test suite green throughou
    labelled clips, 7 animal clips become alerts and no environment clip is added; alert precision
    improves 0.500 -> 0.569 and recall 0.468 -> 0.617. The regression check now passes
    all 8 animal events, with only the pre-existing, signed-off cam10/7632 exception.
-3. **Real metrics in `scripts/backtest.py` (section 0) -- SHIPPED.** Confusion matrix,
+3. **Real metrics in `scripts/analysis/backtest.py` (section 0) -- SHIPPED.** Confusion matrix,
    alert-channel precision/recall/F1, per-camera leak, written as a `.summary.json` alongside
    every backtest CSV. Also fixed `is_daylight` being silently dropped from recorded runs.
 4. **The neighbour rule (2.2) -- SHIPPED as `neighbour_candidate`.** Measured for real (not
@@ -60,7 +60,7 @@ order (each committed and verified separately -- full test suite green throughou
    byte-identical before/after.
 
 9. **Debug renderer now marks every flashlight-scoring multi-track object (`acb7bcc`).**
-   `scripts/render_debug.py`'s `_draw_multi_tracks` previously drew every persistent object but
+   `scripts/review/render_debug.py`'s `_draw_multi_tracks` previously drew every persistent object but
    never checked any of them for flashlight-ness -- only the single main tracked box was ever
    checked. A real flashlight sitting in a DIFFERENT persistent track (exactly what item 8's rule
    detects) never showed up marked in the render, even when `classify()`'s own reason code said it
@@ -93,7 +93,7 @@ order (each committed and verified separately -- full test suite green throughou
     animal/incident/neighbour/resident confusion-matrix row is BYTE-IDENTICAL before/after --
     only guard/environment (both non-critical) shifted, and only in the improving direction on
     net (one new environment->incident_candidate flip is outweighed by two fewer guard->
-    incident_candidate flips). `scripts/check_incident_regression.py` unaffected (same 5/5
+    incident_candidate flips). `scripts/analysis/check_incident_regression.py` unaffected (same 5/5
     incidents, same 3 pre-existing documented animal exceptions). `scipy` added as a real
     dependency for the Hungarian solve.
 11. **Object-linking stage 2 -- per-track person/animal/artifact typing
@@ -159,7 +159,7 @@ Guard leak is 5.4% and environment leak 3.1%. Both are an order of magnitude bet
 19.5%/18.5% event-level figures session #6 was reacting to. Meanwhile animal recall is 41% and
 neighbour recall is 0%.
 
-**Nothing in the repo reports this table.** `scripts/backtest.py::main` writes a CSV and prints a
+**Nothing in the repo reports this table.** `scripts/analysis/backtest.py::main` writes a CSV and prints a
 `Counter` of categories; it never compares `category` against the `label` column it faithfully
 carries. Every precision/recall/AUC figure in this repo was computed by hand in a session and
 survives only as prose in a docstring. That is the single cheapest thing to fix and it gates
@@ -171,7 +171,7 @@ honest judgement of everything else — see §2.4.
 
 ### 1.1 CONFIRMED BUG: `_multi_object_outside_features` reads the bbox in the wrong convention
 
-`scripts/spike.py:1882`.
+`scripts/analysis/spike.py:1882`.
 
 ```python
 x, y, w, h = obj.bbox
@@ -181,9 +181,9 @@ areas[obj.track_id] = areas.get(obj.track_id, 0.0) + float(w * h)
 ```
 
 `TrackedObject.bbox` is **corner form** `(x0, y0, x1, y1)`. It is built by `_contour_bbox`
-(`scripts/spike.py:174`), which returns `(x, y, x + w, y + h)`. The dead-reckoning path inside
-`track_multiple_objects` (`scripts/spike.py:801`) unpacks it as `x0, y0, x1, y1`, and so does the
-renderer (`scripts/render_debug.py:430`). This one function is the only place that reads it as
+(`scripts/analysis/spike.py:174`), which returns `(x, y, x + w, y + h)`. The dead-reckoning path inside
+`track_multiple_objects` (`scripts/analysis/spike.py:801`) unpacks it as `x0, y0, x1, y1`, and so does the
+renderer (`scripts/review/render_debug.py:430`). This one function is the only place that reads it as
 width/height.
 
 Consequences, all silent:
@@ -205,7 +205,7 @@ Consequences, all silent:
 | clips where the dominant object's outside-fraction flips by more than 0.5 | **49 / 141 (35%)** |
 
 The unit tests do not catch this because they construct `TrackedObject(bbox=(x, y, w, h))` by hand
-(`tests/test_spike.py:1467,1484,1497,1514,1545`), with comments that only make sense under the
+(`tests/scripts/analysis/test_spike.py:1467,1484,1497,1514,1545`), with comments that only make sense under the
 width/height reading (`# area 900 (30x30)`). The tests encode the bug.
 
 **This invalidates commit `c1e55c4`'s measurement.** The `multi_object_*` features were measured,
@@ -217,12 +217,12 @@ Fix: one line, plus re-derive the two tests to corner form. Then re-run the meas
 
 ### 1.2 The incident regression check validates a configuration nobody runs, and ignores animals
 
-`scripts/check_incident_regression.py` is the only automated guardrail in the repo, so both of
+`scripts/analysis/check_incident_regression.py` is the only automated guardrail in the repo, so both of
 these matter.
 
 **It does not pass a reference background.** Line 78 calls `extract_clip_features(path, zone,
-daylight_hint=...)` with no `reference_background`. `scripts/backtest.py` and
-`scripts/rank_candidates.py` both pass one. The guard therefore scores clips through a different
+daylight_hint=...)` with no `reference_background`. `scripts/analysis/backtest.py` and
+`scripts/analysis/rank_candidates.py` both pass one. The guard therefore scores clips through a different
 detector than either analysis tool and than what would ship.
 
 **Its 21 non-incident fixture rows are decorative.** The fixture holds 10 incident rows (5 events),
@@ -235,7 +235,7 @@ criterion #2 ("no labelled animal event is silently dropped") is not actually en
 
 ### 1.3 The ranker's cross-validation leaks siblings, and its feature count has drifted 2.5x
 
-`scripts/rank_candidates.py`:
+`scripts/analysis/rank_candidates.py`:
 
 - **`NUMERIC_FEATURES` is 48, not the 19 the module docstring claims** (line 5). It is derived from
   `FEATURE_COLUMNS`, which has grown to 55.
@@ -259,7 +259,7 @@ criterion #2 ("no labelled animal event is silently dropped") is not actually en
 
 ### 1.4 Minor, but it bit this review
 
-`scripts/backtest.py:56` puts `is_daylight` in `_NON_NUMERIC`, so it is dropped from
+`scripts/analysis/backtest.py:56` puts `is_daylight` in `_NON_NUMERIC`, so it is dropped from
 `REPORT_COLUMNS`, from the CSV, and from the `features_json` that `record_run` stores. Runtime
 classification is correct (line 128 sets it immediately before line 129 classifies), so this is a
 reporting gap, not a rule bug. But it means **no recorded backtest row can be replayed faithfully**
@@ -408,7 +408,7 @@ persistent ids with `merged_ids`. Weaknesses to fix first, all visible in the co
 
 - Assignment is greedy and per-track, not globally optimal, so two genuinely distinct subjects with
   overlapping boxes both claim the same candidate and get reported as "merged" rather than
-  separated (`scripts/spike.py:760-806`).
+  separated (`scripts/analysis/spike.py:760-806`).
 - A candidate claimed by any track can never spawn a new id, so a second subject entering inside an
   existing track's box is invisible until it separates.
 - Merged tracks dead-reckon indefinitely with no cap.
@@ -502,7 +502,7 @@ returns to where it started; a subject does not. Concretely, two cheap forms:
   moved away in between? Robust to short tracks in a way the displacement ratio is not.
 - **Per-pixel duty cycle:** count how many times each pixel *crosses* the foreground threshold
   across the clip, rather than accumulating magnitude. A vegetation pixel alternates repeatedly; a
-  subject's pixel fires once as it passes. `scripts/motion_heatmap.py` already accumulates
+  subject's pixel fires once as it passes. `scripts/review/motion_heatmap.py` already accumulates
   per-pixel change but takes a peak over time, deliberately (its docstring records why). The
   *crossing count* is a different statistic on the same data and is not currently computed
   anywhere.
@@ -632,7 +632,7 @@ false-fire spike 15-60 minutes after sunset that it exists to address. The mitig
 back** — `iter_backtest_runs`/`iter_backtest_results` are called only from tests. The module's own
 docstring says it exists so "two runs could never be reliably compared or reproduced"; half of that
 is delivered. A `backtest-diff` tool comparing two `run_id`s, plus real metrics in
-`scripts/backtest.py` (§0), would turn every future change from a hand-measured session narrative
+`scripts/analysis/backtest.py` (§0), would turn every future change from a hand-measured session narrative
 into a reproducible number. Given how much of this repo's history is "an earlier figure went stale
 and nobody noticed", this pays for itself quickly.
 
@@ -686,7 +686,7 @@ Ranked by value per unit of risk.
    corrupt numbers.
 2. **Make `check_incident_regression.py` assert on animal events too, and pass a reference
    background** (§1.2). Ship readiness criterion #2 is currently unenforced.
-3. **Add real metrics to `scripts/backtest.py`** (§0) — a confusion matrix against the `label`
+3. **Add real metrics to `scripts/analysis/backtest.py`** (§0) — a confusion matrix against the `label`
    column it already carries, plus per-camera breakdown. Everything else in this list is easier to
    judge once this exists.
 4. **Ship the neighbour rule** (§2.2). 5/5 with zero protected-class cost, and daylight's 1.8%

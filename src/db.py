@@ -1,6 +1,6 @@
 """SQLite persistence: schema init and narrow repository functions.
 
-Schema changes use explicit scripts/migrate_schema_vN.py migrations. New
+Schema changes use explicit scripts/migrations/migrate_schema_vN.py migrations. New
 databases are initialized directly at the current version.
 """
 
@@ -266,7 +266,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     elif row["version"] != SCHEMA_VERSION:
         raise DbError(
             f"Database schema_version {row['version']} does not match code "
-            f"version {SCHEMA_VERSION}. Run the matching scripts/migrate_schema_vN.py "
+            f"version {SCHEMA_VERSION}. Run the matching scripts/migrations/migrate_schema_vN.py "
             "migration before starting this version."
         )
 

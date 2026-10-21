@@ -21,7 +21,7 @@ authoritative record of everything session #16 measured and shipped, with its ow
 ## Handoff for a new agent (2026-09-19, session #22)
 
 The user reviewed the residual false-alert set in detail. Their notes are now in the live label
-DB (backups: `data/backups/labels_pre_false_alert_review_20260919.jsonl` and
+DB (backups: `data/backups/labels/labels_pre_false_alert_review_20260919.jsonl` and
 `labels_after_false_alert_review_20260919.jsonl`). Corrections include cam06/6505+6506 spider web,
 cam07/18570 foliage/artifact and cam07/19045+19046 maintenance foliage as `environment`; 17752 is
 also explicitly a blank bad-startup clip. Small daylight motion cam05/9694+9695 and unclear
@@ -117,10 +117,10 @@ download logs to `data/logs/`, the completed unknown review and trace source to
 `data/reports/archive/backtests_2026-09-09/`. Raw history, the live DB, labels, all historical
 investigation folders, and referenced debug renders were retained. Only redundant blank Cam12
 canvases, an editor temp file, stale `cam12/day_07.png`, and regenerable Python/test caches were
-deleted. Cam12 references were rebuilt in place; `scripts/build_reference_bg.py --camera` now
+deleted. Cam12 references were rebuilt in place; `scripts/analysis/build_reference_bg.py --camera` now
 merges the rebuilt camera into the existing manifest instead of erasing every other camera.
 
-The production boundary is now explicit in README and enforced by `tests/test_architecture.py`:
+The production boundary is now explicit in README and enforced by `tests/unit/test_architecture.py`:
 `src` never imports `scripts`. Detection/scoring/classification, DB/config, reference handling and
 alert transports are in `src`; scripts are operator/offline CLIs. There is still no live Telegram
 watcher/orchestrator, so the repo has reusable production logic but not an end-to-end production
@@ -190,8 +190,8 @@ an optional reprocessing optimization rather than a detection requirement.
 **Completed 2026-09-18:** `src.motion.detect_clip` is the public and physical detector entry point;
 debug/zone-rendering callers use it directly. The contour, template-recovery, single-track,
 multi-object, reference/anchor tracing, and clip-orchestration code now lives in `src.motion`.
-The lazy bridge and temporary legacy tracking oracle have been removed, leaving `scripts.spike`
-responsible for feature scoring and reports. `scripts.backtest --reference-background-primary
+The lazy bridge and temporary legacy tracking oracle have been removed, leaving `scripts.analysis.spike`
+responsible for feature scoring and reports. `scripts.analysis.backtest --reference-background-primary
 --no-record` is a separate, uncached experimental mode: it differences scored frames against an
 aligned cross-clip reference to test recovery of subjects absorbed by a short clip's own median.
 It remains off by default and must be judged on the labelled corpus before becoming a detector
@@ -219,7 +219,7 @@ ground-plane implausible-height gate and reaches only the cam10 bird event plus 
 16,886-clip report.
 
 Labelled-corpus delta: exactly 7 category changes, all animal clips moving into the alert channel.
-Alert precision/recall/F1 move from 0.500/0.468 to 0.569/0.617/0.592. `scripts/check_incident_regression.py` passes all 5
+Alert precision/recall/F1 move from 0.500/0.468 to 0.569/0.617/0.592. `scripts/analysis/check_incident_regression.py` passes all 5
 incident events and all 8 animal events, with only the already signed-off cam10/7632 exception.
 The debug renderer also now rounds fractional dead-reckoned multi-track boxes before OpenCV drawing
 and mask slicing; this is renderer-only and does not change cached feature semantics.
@@ -229,10 +229,10 @@ feature cache is correct and fast; changing geometry still invalidates/recompute
 reapplying zones to a zone-independent raw-track payload.
 
 **Progress 2026-09-16:** the detector-owned in-memory DTOs (`TrackedObject`, `FrameDetection`,
-`ClipDetection`) now live in `src.motion` and are re-exported by `scripts.spike` for compatibility.
+`ClipDetection`) now live in `src.motion` and are re-exported by `scripts.analysis.spike` for compatibility.
 `render_debug.py` consumes them from their new home. This is deliberately only the first seam:
 `ClipDetection` still contains NumPy frames/masks/contours and is not a cache payload; detector
-implementation and zone-specific feature reduction remain in `scripts.spike` pending a compact
+implementation and zone-specific feature reduction remain in `scripts.analysis.spike` pending a compact
 serialisable raw-track design.
 
 **Progress, second seam:** `src.scoring.features_from_detection()` now re-scores an existing
@@ -253,7 +253,7 @@ Final dictionary assembly is also split into `_appearance_features()`, `_tempora
 small orchestration boundary over six explicit groups (those four plus geometry and metric replay).
 
 **Progress, scoring ownership:** all reusable scoring code now lives in `src/scoring.py`.
-Operational consumers import it directly. `scripts/spike.py` is reduced to the labelled-corpus
+Operational consumers import it directly. `scripts/analysis/spike.py` is reduced to the labelled-corpus
 report schema, database iteration, CSV writing and its CLI; it no longer owns detector or scorer
 implementation. Tests address `src.motion` and `src.scoring` as the respective owners instead of
 depending on compatibility re-exports from the script.
@@ -267,7 +267,7 @@ signatures are coupled to those values by a test. `src/motion.py` defines
 `EXTRACTOR_VERSION=motion-features-v1`, builds a cache identity from video bytes, motion config,
 resolved camera geometry, daylight hint, and reference-background pixels, and persists both real
 feature mappings and explicit no-motion results through the existing `blob_tracks` table.
-`scripts/backtest.py` uses it by default; `--no-cache` bypasses reads and writes.
+`scripts/analysis/backtest.py` uses it by default; `--no-cache` bypasses reads and writes.
 
 Corpus verification on all 678 labelled clips: uncached, cold-cache and warm-cache CSVs had the
 same SHA-256 (`899354925d35676f...`) and identical metrics (precision 0.500, recall 0.468). The
@@ -280,7 +280,7 @@ Honest remaining architectural refinement: this caches final JSON-safe feature m
 therefore includes zone/reference identity. It is correct and fast, but not the plan's ultimate
 zone-independent raw-track payload—editing geometry invalidates and recomputes rather than cheaply
 reapplying `zones.py`. Do not serialize `ClipDetection` wholesale (NumPy frames/masks/contours).
-A later extraction of the detector from `scripts/spike.py` into `src/motion.py` should define a
+A later extraction of the detector from `scripts/analysis/spike.py` into `src/motion.py` should define a
 smaller raw-track DTO; bump `EXTRACTOR_VERSION` when that payload or extraction semantics change.
 
 ## Where the project is
@@ -302,7 +302,7 @@ below.
   `config/cameras.yaml` from real captions.
 - **Phase 0b / gate 1 (camera-order inference) — resolved without inference (2026-08-28).**
   User decided fence order is just numerical/alphabetical by camera id; `order` is set directly
-  in `config/cameras.yaml` (cam01=0 ... cam16=17). `scripts/infer_camera_order.py` still exists
+  in `config/cameras.yaml` (cam01=0 ... cam16=17). `scripts/analysis/infer_camera_order.py` still exists
   for optional later validation but is off the critical path.
 - **Phase 0c / gate 2 (CV feasibility spike) — all 6 steps done, gate decision pending user
   sign-off.** Fence geometry was extended from the original 3 spike cameras to all 18 labelled
@@ -318,7 +318,7 @@ below.
 | 2. Download clips | done — 142+ clips on disk across the spike cameras, later downloads extended to more cameras |
 | 3. Fence polylines | done — extended from 3 to all 18 labelled cameras (2026-08-28) |
 | 4. Hand-label ~150 clips | done, and ongoing past the original milestone — 281 labels rows as of 2026-08-29: 174 with a known event class (guard 126, environment 22, unknown 11, incident 10, animal 5), 121 with only a `startup_state` so far (event class pending its partner clip's review — see schema v5 note below) |
-| 5. Run `scripts/spike.py` | done — rerun 2026-08-30 with the corrected zone geometry (see below); `data/reports/spike_all_2026-08-30.csv` is current |
+| 5. Run `scripts/analysis/spike.py` | done — rerun 2026-08-30 with the corrected zone geometry (see below); `data/reports/spike_all_2026-08-30.csv` is current |
 | 6. Read the CSV, decide gate 2 | **written finding done (`docs/gate2_separability_finding.md`), pass/fail call is the user's, not yet made — see staleness note below before signing off** |
 
 ## The next task: gate 2 pass/fail
@@ -378,7 +378,7 @@ revisiting before any further implementation.
   truth.
 - **No migration framework by default.** The documented fallback is: export labels to JSONL,
   delete the DB, reimport. In practice, once `clips` holds real backfilled volume (16,887 rows),
-  that's disproportionate for a change scoped to one table -- `scripts/migrate_schema_v5.py` did
+  that's disproportionate for a change scoped to one table -- `scripts/migrations/migrate_schema_v5.py` did
   an in-place rebuild instead (rename, recreate from the current schema, copy+transform, bump
   `schema_version`, keep the old table rather than dropping it), run via a raw `sqlite3`
   connection since `db.connect()` enforces an exact version match. Still export JSONL and
@@ -405,7 +405,7 @@ Found via a live-db audit: 123 startup-family rows, 107 with their partner still
 Now `label` (nullable, 5 real classes) and `startup_state` (`clear`/`blank`/`duplicate`) are
 separate columns. Labeling any clip in an event propagates its class to every sibling sharing
 the same embedded alert timestamp that doesn't have one yet. `docs/plan.md`'s Ground truth
-labels section has the full column semantics; `scripts/migrate_schema_v5.py` is the migration
+labels section has the full column semantics; `scripts/migrations/migrate_schema_v5.py` is the migration
 that ran on the live db (158 rows unchanged, 16 startup-family rows inherited an already-known
 partner class, 107 left `label=NULL` pending — those events' partner clips still need review,
 which is the bulk of what's left in the current `--message-ids-file` shortlist session).
@@ -427,7 +427,7 @@ fails the same way but with looser earlier-frame differences (moving subject, no
   `left`/`right` values still do the actual geometry work.
 - **Gate 1 (camera order)** resolved 2026-08-28 — numerical/alphabetical by id, no inference run.
 - **121 labels rows have only a `startup_state`, no event class yet** (schema v5 migration, see
-  above) — their partner clip needs review. `scripts/label.py --message-ids-file` now pulls a
+  above) — their partner clip needs review. `scripts/review/label.py --message-ids-file` now pulls a
   shortlisted clip's partner into the queue automatically when this applies.
 - **Real-time pairing logic is designed but not built.** For the live pipeline (not this Phase 0
   spike): pair a new clip with the last one for the same camera when their embedded alert
@@ -442,12 +442,12 @@ Steps 15-19 of `docs/plan.md`. `src/config.py`/`src/db.py` (config loading, SQLi
 the Phase 0 spike, so there was nothing to add there. What was actually built:
 
 - `src/logging_setup.py`: a `JsonFormatter` + `configure_logging()` on the root logger, replacing
-  the old per-call-site `logger.info(json.dumps({...}))` pattern in `scripts/meta_backfill.py` and
-  `scripts/download_clips.py` (now `logger.info(event, extra={...})`).
+  the old per-call-site `logger.info(json.dumps({...}))` pattern in `scripts/ingest/meta_backfill.py` and
+  `scripts/ingest/download_clips.py` (now `logger.info(event, extra={...})`).
 - `src/backfill.py`: `run_backfill`/`extract_primitives`/`RawMessage` promoted out of
-  `scripts/meta_backfill.py`, which is now a thin Telethon-wiring wrapper around it — matching the
-  existing `src/sequence.py` + `scripts/infer_camera_order.py` split (algorithm in `src/`, script
-  keeps only I/O glue). `tests/test_meta_backfill.py` renamed to `tests/test_backfill.py`.
+  `scripts/ingest/meta_backfill.py`, which is now a thin Telethon-wiring wrapper around it — matching the
+  existing `src/sequence.py` + `scripts/analysis/infer_camera_order.py` split (algorithm in `src/`, script
+  keeps only I/O glue). `tests/test_meta_backfill.py` renamed to `tests/unit/test_backfill.py`.
 - "Console entry points" (from step 15) deliberately not added as real `[project.scripts]`: this
   repo is `uv init --app --no-package` (no `[build-system]`), so installed entry points aren't
   meaningful without converting to a packaged layout, which would contradict the flat-layout
@@ -461,9 +461,9 @@ pass/fail call for anything threshold-dependent.
 
 Off the phased plan — a debugging/tuning pass on the spike-2 detector prompted by specific hard
 clips (a camouflaged rooikat, a man whose accomplice's hand was drowning him out, a barely-visible
-dassie). `scripts/motion_heatmap.py` (new) and `scripts/spike.py` both changed; 306 tests passing.
+dassie). `scripts/review/motion_heatmap.py` (new) and `scripts/analysis/spike.py` both changed; 306 tests passing.
 
-- **`scripts/motion_heatmap.py`** — standalone CLI, not wired into `spike.py`. Accumulates a
+- **`scripts/review/motion_heatmap.py`** — standalone CLI, not wired into `spike.py`. Accumulates a
   per-pixel change signal across a whole clip and colorizes it, for judging where a marginal
   subject moved when per-frame detection only shows a dot. Normalises by the 90th percentile of
   *active* pixels, not the frame max — on the two-person clip a hand near the camera peaked ~4x
@@ -482,7 +482,7 @@ dassie). `scripts/motion_heatmap.py` (new) and `scripts/spike.py` both changed; 
   via a sliding-window "corroborated by neighbouring frames" test (only 2.2% of motion pixels sit
   within 20px of the tracked box across 60 clips, 47.3% sit >60px away — the existing
   `fragment_close_kernel_size` MORPH_CLOSE already recovers what's reachable).
-- Debug clips re-rendered via `scripts/render_debug.py` after all of the above (2026-08-31):
+- Debug clips re-rendered via `scripts/review/render_debug.py` after all of the above (2026-08-31):
   cam08/7360 (rooikat) and cam08/4053 (man) both track correctly; cam05/18270 (dassie) still only
   a 9px recovered box, expected given how faint its signal is; cam10/4042 correctly shows an IR
   flare frame with 12 spurious multi-tracks scattered across a bush, not a real subject — this is
@@ -525,14 +525,14 @@ alternative's measurements: `/memories/repo/nature-ridge-conventions.md`.
 - Also found (not fixed): `animal_or_incident_candidate`'s `aspect_ratio < 0.95` premise has
   inverted under the current tracker — animal+incident median aspect_ratio is now 1.24-1.41,
   higher than guard's 1.05, the opposite of the original gate-2 doc. Still fires on 74/200 (37%)
-  of guard clips. Flagged in `scripts/backtest.py`'s docstring, not re-derived this pass.
-- Fix shipped: new `environment_candidate` category in `scripts/backtest.py::classify`,
+  of guard clips. Flagged in `scripts/analysis/backtest.py`'s docstring, not re-derived this pass.
+- Fix shipped: new `environment_candidate` category in `scripts/analysis/backtest.py::classify`,
   `blob_count > 10` (max simultaneous motion blobs in a frame — the strongest univariate
   discriminator found, AUC 0.933 environment-vs-guard). Checked after `guard_candidate` but before
   the shape-based rules. Measured: 59% environment recall, 4.5% guard false-fire, **0/15 leak**
   against the full labelled animal+incident set (hard constraint held) — verified both via the
   sweep and a direct re-check against animal/incident alone. 3 spot-checked debug renders
-  (`scripts/render_debug.py`) confirm the rule behaves as expected, including its known limit (a
+  (`scripts/review/render_debug.py`) confirm the rule behaves as expected, including its known limit (a
   near-blank clip too short to accumulate the blob_count signal).
 - 309 tests passing (was 306), committed on `feat/phase1-finalisation`.
 - **Next natural step, not done this pass:** re-derive `animal_or_incident_candidate` now that its
@@ -545,8 +545,8 @@ alternative's measurements: `/memories/repo/nature-ridge-conventions.md`.
 Follow-on from the environment_candidate work above, picked up directly from the user reviewing
 those debug renders. 316 tests passing.
 
-- `scripts/render_debug.py`'s HUD title now includes the clip's embedded local (SAST) camera
-  timestamp, reusing `scripts.label._EVENT_TS_RE` (already used for event-sibling grouping) rather
+- `scripts/review/render_debug.py`'s HUD title now includes the clip's embedded local (SAST) camera
+  timestamp, reusing `scripts.review.label._EVENT_TS_RE` (already used for event-sibling grouping) rather
   than a new regex, e.g. `cam08/4292 guard @ 24-03-24 18:39:45`.
 - 12 more guard/environment debug clips rendered across cameras not previously spot-checked
   (`data/reports/debug_render/guard_env_batch2/`), sampled across env_TP/env_FN/guard_TP/
@@ -583,8 +583,8 @@ those debug renders. 316 tests passing.
     the mask once from `zone.ignore` and passes it to both the whole-frame check (feeds
     `green_light_flicker`) and the tracked-subject check.
   - No camera currently has any `ignore` polygons configured, so this is a no-op today — all 309
-    pre-existing tests still passed unchanged. New tests added in `tests/test_features.py` and
-    `tests/test_spike.py` cover the mask rasterisation and the end-to-end suppression.
+    pre-existing tests still passed unchanged. New tests added in `tests/unit/test_features.py` and
+    `tests/scripts/analysis/test_spike.py` cover the mask rasterisation and the end-to-end suppression.
 - **Not yet resolved: dusk/dawn/night time-of-day design.** User asked whether to use camera
   saturation or a seasonal sunrise/sunset curve to identify dusk/dawn/night. Saturation-only is
   likely a poor choice — already disproven by the "Daylight-gate fix investigated and ABANDONED"
@@ -596,13 +596,13 @@ those debug renders. 316 tests passing.
   implementing.
 - **cam08 fence re-trace: done.** User traced clip 4292's fence-top over the 4x-upscaled reference
   frame; re-extracted via the standard red-trace/color-threshold recipe and verified with
-  `scripts/visualize_zone.py` — line tracks the mesh post edge, not the diagonal cable distractor.
+  `scripts/review/visualize_zone.py` — line tracks the mesh post edge, not the diagonal cable distractor.
   `config/cameras.yaml`'s cam08 entry already reflects this.
 
 ## Camera mount drift confirmed + dated fence-history feature (2026-08-31, later same session)
 
 User noticed cam01a's fence looked "way off" on clip 18124 but correct on clip 22635, and asked to
-find where the camera moved. Bisected both cam01a and cam06 via `scripts/visualize_zone.py` over a
+find where the camera moved. Bisected both cam01a and cam06 via `scripts/review/visualize_zone.py` over a
 spread of historical clips (message_id + real DB timestamp), comparing scene framing frame by frame.
 
 - **cam01a: confirmed hard remount**, precisely bounded: old framing (fence post on the left,
@@ -625,8 +625,8 @@ spread of historical clips (message_id + real DB timestamp), comparing scene fra
   `Camera.zone` stays the current/most-recent geometry (every existing call site not yet updated
   keeps working unchanged); new `Camera.zone_at(timestamp)` picks the latest entry whose
   `effective_from` is at or before `timestamp`, falling back to `zone` if there's no history or the
-  timestamp is `None`/unparseable. `scripts/backtest.py`, `scripts/rank_candidates.py`,
-  `scripts/render_debug.py`, `scripts/spike.py` and `scripts/visualize_zone.py` (new `--timestamp`
+  timestamp is `None`/unparseable. `scripts/analysis/backtest.py`, `scripts/analysis/rank_candidates.py`,
+  `scripts/review/render_debug.py`, `scripts/analysis/spike.py` and `scripts/review/visualize_zone.py` (new `--timestamp`
   flag) all updated to call `zone_at(clip["timestamp"])` instead of the static `.zone`. cam01a is
   the first (and so far only) camera using `zones:`. 321 tests passing.
 - **Not yet done:** cam06's drift is still unresolved (no dated entry added — would need a second
@@ -645,17 +645,17 @@ this exact confusion, both worth reading before proposing a new discriminator).
   cause of an `environment` clip, not its own `VALID_LABELS` entry — do not add one. A prior
   attempt at a storm-specific metric (fraction of frames with whole-frame-ish motion, tried
   against 4 user-flagged storm clips: cam15/9944, 9954, 9956, 18948) failed to separate them from
-  ordinary guard/environment clips; see the `scripts/backtest.py` note in
+  ordinary guard/environment clips; see the `scripts/analysis/backtest.py` note in
   `/memories/repo/nature-ridge-conventions.md` before retrying that specific approach.
-- **Plan for next session:** add more debug clips (`scripts/render_debug.py`) covering
+- **Plan for next session:** add more debug clips (`scripts/review/render_debug.py`) covering
   guard/environment cases, especially ones the current rules misclassify, and iterate on
   detector/feature/rule changes against them.
 - **Hard constraint: do not regress incidents or animals while tuning guard/environment.** As of
   the last full count (`/memories/repo/nature-ridge-conventions.md`, 2026-08-30 section), ground
   truth had 10 `incident` rows and 5 `animal` rows against 200 `guard` / 22 `environment` — re-run
   the count at the start of the next session, don't trust this number as still current. User does
-  not expect more incidents to turn up, but does expect the backtest (`scripts/backtest.py` /
-  `scripts/rank_candidates.py`) to surface additional animal sightings over time — any
+  not expect more incidents to turn up, but does expect the backtest (`scripts/analysis/backtest.py` /
+  `scripts/analysis/rank_candidates.py`) to surface additional animal sightings over time — any
   guard/environment rule change should be checked against the full labelled incident+animal set
   (not just guard/environment precision) before being adopted, same discipline as the gate-2 and
   daylight-gate investigations already in memory.
@@ -783,7 +783,7 @@ session — worth checking `git status` early next time.
 unpushed. 432 label rows (guard 252, environment 39, unknown 18, resident 10, incident 10,
 animal 10, plus 93 with only a `startup_state`). 52 debug renders across 6 folders under
 `data/reports/debug_render/` (gitignored, local-only). 133 per-camera reference backgrounds in
-`data/reference_bg/` (also gitignored) — rebuild with `scripts/build_reference_bg.py` as the
+`data/reference_bg/` (also gitignored) — rebuild with `scripts/analysis/build_reference_bg.py` as the
 corpus grows.
 
 **What changed on 2026-09-04.** The per-camera reference background (item 2 below) was built,
@@ -850,7 +850,7 @@ exact idea:**
    wind-blown foliage is real motion everywhere. That failure as a *prior* is exactly the signal
    wanted as an *environment feature*. The tool already exists and is already validated.
 3. **The bar to beat is `blob_count`**, AUC 0.933 for environment-vs-guard, currently used at
-   threshold 10 in `scripts/backtest.py::classify` for 59% environment recall at 4.5% guard
+   threshold 10 in `scripts/analysis/backtest.py::classify` for 59% environment recall at 4.5% guard
    false-fire and zero animal/incident leak. Any new feature must be measured against that
    baseline, and must be checked against the **full** animal+incident set \u2014 the user's standing
    constraint is that no tuning may lose an animal or an incident.
@@ -862,7 +862,7 @@ cam11/4309, cam11/4310, cam09/21522 by sparsity), so any reference-derived featu
 value when no reference exists \u2014 do not let "no reference" silently read as "no scenery motion".
 
 **B. Decide whether the reference-background veto feeds scoring.** It is currently wired only into
-`scripts/render_debug.py`. `scripts/backtest.py` and `scripts/rank_candidates.py` still pass no
+`scripts/review/render_debug.py`. `scripts/analysis/backtest.py` and `scripts/analysis/rank_candidates.py` still pass no
 reference, so **no feature value has moved corpus-wide** and every recorded AUC remains
 comparable. Turning it on there would change `persistence`, `longest_detection_run`,
 `recovered_fraction` and the other provenance-derived features on the ~7% of clips it affects, and
@@ -942,16 +942,16 @@ cam14/21501 27px — without alignment those score as false locks).
 **Stages 2-4 are now built and committed (`be45a20`, `6b45155`, `65f18f7`) — awaiting a keep/discard
 decision.** What shipped:
 
-- `src/reference_bg.py` + `scripts/build_reference_bg.py`. References are bucketed by camera, mount
+- `src/reference_bg.py` + `scripts/analysis/build_reference_bg.py`. References are bucketed by camera, mount
   era, daylight and calendar quarter, sparse quarters folding into the nearest populated sibling;
   up to 40 clips sampled evenly per bucket. **133 references built** into `data/reference_bg/`
   (gitignored). `reference_for` returns `None` rather than crossing an era boundary — cam12's
   post-remount clips get no reference at all, which is correct.
-- The veto in `scripts/spike.py`: `_run_track_pass(reference_background=..., max_scenery_streak=2,
+- The veto in `scripts/analysis/spike.py`: `_run_track_pass(reference_background=..., max_scenery_streak=2,
   scenery_correlation=0.94)`. Applies only to appearance-recovered frames that are also
   near-stationary, and nulls the frozen run retroactively. With no reference passed the behaviour
   is byte-identical to before, which is the fallback for sparse cameras.
-- `scripts/render_debug.py` resolves each clip's reference automatically; `--no-reference-bg`
+- `scripts/review/render_debug.py` resolves each clip's reference automatically; `--no-reference-bg`
   renders the old behaviour for comparison.
 
 **Full-sweep result (52 clips, old vs new): 7 clips changed, 44 frames dropped, 0 gained**, 4 clips
@@ -1037,11 +1037,11 @@ section above) works and this broader per-blob version does not: the veto additi
 the box to be near-stationary across several consecutive frames before comparing it to the
 reference at all, which a translating illuminated guard never satisfies.
 
-**What shipped anyway, harmlessly:** `scripts/spike.py` gained `scenery_motion_fraction` +
+**What shipped anyway, harmlessly:** `scripts/analysis/spike.py` gained `scenery_motion_fraction` +
 `has_reference_background` (the latter diagnostic-only, added to `rank_candidates.py`'s
 `_NON_FEATURE_COLUMNS`) — purely additive dict keys / dataclass fields with defaults, zero
 regression, 5 new tests. Kept as real infrastructure for a future refined attempt (see next
-paragraph), but **not** wired into `scripts/backtest.py::classify` — doing so would make
+paragraph), but **not** wired into `scripts/analysis/backtest.py::classify` — doing so would make
 guard/environment separation worse, not better. `environment_candidate` is unchanged
 (`blob_count > 10`).
 
@@ -1078,7 +1078,7 @@ environment 96, animal 10, incident 10, resident 10, unknown 18.
 
 - `1680f29` — cross-camera storm/environment corroboration. New `src/storm_events.py`
   (`ClipSignal`, `neighbor_cameras`, `find_corroborated_events` via union-find) and
-  `scripts/find_storm_events.py`. A clip is only surfaced when spatial neighbours fire inside a
+  `scripts/analysis/find_storm_events.py`. A clip is only surfaced when spatial neighbours fire inside a
   time window, which is what wind/rain does and a single guard does not.
 - `924937a` — continuous dawn/dusk signal. `src/features.py` gained
   `minutes_from_daylight_boundary()` (signed minutes from the nearer of sunrise/sunset) and
@@ -1159,7 +1159,7 @@ Design decisions already made, with the reasoning:
 
 - `fence_bottom: tuple[Point, ...] | None = None` and `fence_height_m: float = 2.0` go on
   `CameraZone` as the **last fields, with defaults**. There are 25 literal `CameraZone(...)`
-  constructions across 9 test files (16 in `tests/test_zones.py`); a required field would mean
+  constructions across 9 test files (16 in `tests/unit/test_zones.py`); a required field would mean
   touching all of them for nothing. "Suite green with no edits to those 25 sites" is the
   acceptance test for phase 1. Do **not** call it `fence_top` — `fence` already is the top line.
 - Don't rename `fence`, and don't repurpose what it holds. It would touch every call site plus all
@@ -1190,7 +1190,7 @@ sanity-check calibration against the 268 guard clips (`estimated_height_m` shoul
 1.6–1.9 m — if it doesn't, the ruler is wrong, fix or abandon, do not ship) and only then sweep
 thresholds.
 
-**Do not touch `scripts/backtest.py::classify` until phase 5 has numbers.** Out of scope: retracing
+**Do not touch `scripts/analysis/backtest.py::classify` until phase 5 has numbers.** Out of scope: retracing
 all 18 cameras, a zone editor, full perspective homography.
 
 **Confound to encode as a regression fixture:** the bird that sat on the fence, then moved away
@@ -1240,7 +1240,7 @@ uncalibrated" guard.
 - `render_debug.py`/`visualize_zone.py` now draw both lines when both exist (verified visually on
   cam06/21520 night + cam06/8467 daylight).
 - **Deliberately not done, matching the plan's own gating**: no threshold sweep, nothing wired
-  into `scripts/backtest.py::classify`, no other camera retraced. Only cam06 is calibrated.
+  into `scripts/analysis/backtest.py::classify`, no other camera retraced. Only cam06 is calibrated.
 
 **Natural next step if this is picked up again**: trace a `fence_bottom` for a second camera (a
 guard-heavy one with enough labelled volume to be worth calibrating) before attempting any
@@ -1267,13 +1267,13 @@ discovery result (n=1 incident) is too thin to judge `in_fence_band` on its own 
 
 Triage now has **three** independent outputs, not one queue:
 
-1. **Incident/animal queue** — `scripts/rank_candidates.py --out ...`. Now excludes
+1. **Incident/animal queue** — `scripts/analysis/rank_candidates.py --out ...`. Now excludes
    `startup_state` blank/duplicate rows, sub-1s clips that have an event sibling, and
    blinding-foreground rows.
 2. **Maintenance queue** — `--maintenance-out ...`, `write_maintenance_candidates()`. A
    "someone must physically clean this camera" report. Deliberately includes already-labelled
    clips (a labelled guard clip can still show an obstructed lens).
-3. `blinding_foreground` column in `scripts/backtest.py` output, independent of `category` —
+3. `blinding_foreground` column in `scripts/analysis/backtest.py` output, independent of `category` —
    a clip can be a real guard sighting **and** have an obstructed lens.
 
 New features, all measured against the full labelled corpus before shipping:
@@ -1350,8 +1350,8 @@ distant animal, `cam15/17949` (0.586), was **not** at risk: it reads `outside_pi
 so it never satisfied the geometry rule anyway, and its sibling `17950` (0.251) carries the event.
 
 **Decision (2026-09-07): the user accepted the tradeoff.** Shipped as `MEDIAN_FENCE_DISTANCE_MAX
-= 0.40` in `scripts/backtest.py`, one extra clause in the animal/incident geometry rule.
-`scripts/check_incident_regression.py` re-run afterward: still 5/5 incident events alerting,
+= 0.40` in `scripts/analysis/backtest.py`, one extra clause in the animal/incident geometry rule.
+`scripts/analysis/check_incident_regression.py` re-run afterward: still 5/5 incident events alerting,
 `cam10/7632` now reads `unclassified` — the accepted cost, not a silent regression. If the
 cam10-specific concentration (16/29 of the original leak) is revisited later, its `fence_bottom`/
 geometry or its own environment base rate is the next thread to pull, separate from this
@@ -1372,7 +1372,7 @@ tightest combination tested re-admits 6-15 guard/environment clips per animal cl
 
 ### Immediate next step (highest value, well-evidenced)
 `post_flash_red_shift` is a **zero-leak guard identifier corpus-wide** but is currently only used
-by the maintenance queue. It is not yet a rule in `scripts/backtest.py::classify()`. Adding it as
+by the maintenance queue. It is not yet a rule in `scripts/analysis/backtest.py::classify()`. Adding it as
 a `guard_candidate` rule would be easy — but **weigh it against the confusion matrix above first**:
 guard recall is already 71.8%, and every new guard rule sits *ahead* of the geometry rules, so it
 can only push more incidents toward `guard_candidate` (already 3/10). Extra guard recall is not
@@ -1381,7 +1381,7 @@ clearly what this system needs right now; the environment leak above is the bigg
 ### IR flare tracking: IMPLEMENTED (2026-09-07), opt-in via `compensate_warmup`
 
 **What shipped.** `src.motion.detect_clip(..., compensate_warmup=True)` (default `False`,
-wired on only in `scripts/render_debug.py`): each dropped/warmup frame is photometrically matched
+wired on only in `scripts/review/render_debug.py`): each dropped/warmup frame is photometrically matched
 (`src.features.photometric_match`, a per-frame least-squares gain/offset fit) onto the settled
 `background`, then diffed and tracked with the SAME threshold/morphology/contour pipeline used for
 every scored frame — real per-pixel tracking, not the old appearance-template-only guess. Seeded
@@ -1433,7 +1433,7 @@ scoring pipeline for a residual gradient to hide in.
   the user asked for a full re-render, so all 112 files under `data/reports/debug_render/` were
   regenerated in place (correct per-clip camera/timestamp/zone resolution, including the 4
   oddly-named dated-camera-era files) — re-verified 0 errors, and the full suite plus
-  `scripts/check_incident_regression.py` (5/5) stayed green throughout.
+  `scripts/analysis/check_incident_regression.py` (5/5) stayed green throughout.
 
 **Known limitation, honestly not solved:** this does not fully rescue `cam06/21520` (the crawling
 guy who dwells through most of his own clip's median background) — the unseeded fallback finds
@@ -1450,7 +1450,7 @@ its own full LOO-AUC-before/after validation pass, not attempted this session.
 
 ### Also requested: show the IR compensation in the debug renders — DONE
 
-`scripts/render_debug.py`'s warmup-frame panel now shows `dropped_frame_compensated` (colour/
+`scripts/review/render_debug.py`'s warmup-frame panel now shows `dropped_frame_compensated` (colour/
 brightness-corrected) instead of the raw flare frame, and labels a real-diff-tracked box
 ("TRACKED (real diff, brightness/colour corrected)", solid outline) distinctly from the
 appearance-only fallback ("INFERRED - TRACKED (reverse trace)", dashed, unchanged from before).
@@ -1493,7 +1493,7 @@ fresh agent needs to know that aren't obvious from reading the code.**
    sibling clip's own fragile reading), `cam10-2025-10-28T03:51` (a bird on the fence rail —
    ground-plane assumption violated). **These 3 are still open, unfixed, exception-listed by
    design** — not a regression this session caused, real information that was always there.
-3. **`scripts/backtest.py` gained real metrics**: confusion matrix, alert-channel precision/
+3. **`scripts/analysis/backtest.py` gained real metrics**: confusion matrix, alert-channel precision/
    recall/F1, per-camera leak, written to a `.summary.json` alongside every CSV.
 4. **`neighbour_candidate` rule shipped** — a person outside the fence in daylight, at plausible
    human height. Measured on its actual position in the rule chain: 4/5 labelled neighbour clips
@@ -1509,7 +1509,7 @@ fresh agent needs to know that aren't obvious from reading the code.**
    leakage into any protected class), then wired as a third, independent `guard_candidate` rule
    (`multi_object_max_flashlight_ratio`): alert-channel FP 35→23, precision 0.386→0.489, recall
    unchanged, every protected class byte-identical. Then found (via the user's own question — "does
-   any flashlight object get traced as flashlight in the debug clip?") that `scripts/render_debug.py`
+   any flashlight object get traced as flashlight in the debug clip?") that `scripts/review/render_debug.py`
    never visually marked this: only the single main tracked box was ever checked for
    flashlight-ness. Fixed — every persistent object is now checked and marked.
 6. **The multi-object tracker itself rewritten** (`track_multiple_objects` — object-linking stage
@@ -1545,7 +1545,7 @@ fresh agent needs to know that aren't obvious from reading the code.**
    table and the feature's own docstring. `multi_object_artifact_track_count` looks more promising
    in the same pass but is flagged, not claimed, since it's likely correlated with the pre-existing
    `blob_white_fraction`. None of stage 2's features are wired into `classify()`.
-8. **Also shipped along the way, lower-stakes**: `scripts/rank_candidates.py`'s LOO-CV
+8. **Also shipped along the way, lower-stakes**: `scripts/analysis/rank_candidates.py`'s LOO-CV
    sibling-leakage fixed (was fitting on both clips of one physical event); `has_reference_
    background` restored as a ranker input; per-camera feature standardisation added as an
    **opt-in, off-by-default** flag after a real measurement came back negative (LOO AUC 0.884→0.755
@@ -1557,7 +1557,7 @@ fresh agent needs to know that aren't obvious from reading the code.**
 
 ### Schema is now v7
 
-`scripts/migrate_schema_v7.py` (already run against the live `data/perimeter_watch.db`, backed up
+`scripts/migrations/migrate_schema_v7.py` (already run against the live `data/perimeter_watch.db`, backed up
 first). `predicted_class`'s CHECK constraint gained `neighbour_candidate`. **If you have another
 copy of this database, run that migration against it too** — same hard-error-on-mismatch behaviour
 noted in session #15's entry for v6.
@@ -1570,12 +1570,12 @@ Added for `scipy.optimize.linear_sum_assignment` (the tracker rewrite, item 6 ab
 ### Verification discipline this session actually followed
 
 Every item above was measured against the full 678-clip labelled corpus before being trusted —
-`scripts/backtest.py --labelled-only --no-record`, comparing `.summary.json` confusion matrices
+`scripts/analysis/backtest.py --labelled-only --no-record`, comparing `.summary.json` confusion matrices
 and per-clip category diffs against a captured baseline, not just "does it still pass the test
 suite." Two regressions were caught this way BEFORE shipping (the `confirm_frames=3` flashlight
 suppression in item 6, and the animal/person count near-universality in item 7) rather than being
 discovered later or not at all. `uv run ruff check . --fix && uv run pytest -q` and
-`scripts/check_incident_regression.py` stayed green (or at the same 3 documented exceptions)
+`scripts/analysis/check_incident_regression.py` stayed green (or at the same 3 documented exceptions)
 throughout, checked after every single commit, not just at session end.
 
 ### Open decisions still pending — none of these were implemented without sign-off, on purpose
@@ -1614,11 +1614,11 @@ fresh agent needs to know before touching this code.
 ### What landed
 
 `src/classify.py` now exists: `classify_detailed()` holds the same rule chain
-`scripts/backtest.py::classify()` always had, returning a typed
+`scripts/analysis/backtest.py::classify()` always had, returning a typed
 `ClassificationResult(category, reason, contributing)` — 15 reason codes, one per rule, so a
 caller can finally say *which* rule produced a category, not just what the category was.
 `classify()` is now a one-line wrapper (`classify_detailed(...).category`) kept for every existing
-caller. `is_blinding_foreground()` moved alongside it. `scripts/backtest.py` keeps only the
+caller. `is_blinding_foreground()` moved alongside it. `scripts/analysis/backtest.py` keeps only the
 screening harness around them (`run_backtest`, `iter_clips_with_files`, `write_csv`, `main`).
 
 **Beyond the brief's original scope, at the user's explicit direction**: the 16 thresholds
@@ -1638,18 +1638,18 @@ see "Next: motion.py caching" below.
 
 One coupling worth knowing about if you ever touch `green_light_ratio_min`:
 `src/features.py`'s `FLASHLIGHT_CANDIDATE_MIN_RATIO` is deliberately pinned to the same value (one
-"is this a real flashlight" bar shared between `classify()` and `scripts.spike`'s track-scoring).
+"is this a real flashlight" bar shared between `classify()` and `scripts.analysis.spike`'s track-scoring).
 That used to be visible as two adjacent module constants; now that `classify()`'s side lives in
-YAML the coupling is invisible in the code, so `tests/test_config.py::
+YAML the coupling is invisible in the code, so `tests/unit/test_config.py::
 test_flashlight_candidate_ratio_stays_coupled_to_classify_threshold` is what catches a future
 desync. If it ever fails, the fix is almost certainly to also change `FLASHLIGHT_CANDIDATE_MIN_RATIO`
 in `src/features.py`, not to silence the test.
 
 `src/backtester.py::record_run()` wires the `backtest_runs`/`backtest_results` DB functions
-(existing, unit-tested, previously called by nothing) into `scripts/backtest.py::main()`, which now
+(existing, unit-tested, previously called by nothing) into `scripts/analysis/backtest.py::main()`, which now
 records every real run by default (`--no-record` to skip). Needed a schema bump — see next.
 
-**Schema v6** (`scripts/migrate_schema_v6.py`, applied to `data/perimeter_watch.db`, backed up
+**Schema v6** (`scripts/migrations/migrate_schema_v6.py`, applied to `data/perimeter_watch.db`, backed up
 first to `data/backups/legacy_root/perimeter_watch.db.bak-2026-09-09-pre-v6`):
 `backtest_results.predicted_class`'s
 CHECK constraint used to accept only the four-class routing vocabulary
@@ -1658,18 +1658,18 @@ was never built. `classify()` emits eight different categories instead. The cons
 **widened to accept both**, not mapped — collapsing eight measured categories onto four routing
 classes would encode an alerting policy nobody has validated, and picking one is gated on Ship
 readiness criterion #3, still unset. **If you have another copy of this database (a laptop, a
-backup, a second checkout), it needs `uv run python scripts/migrate_schema_v6.py` run against it
+backup, a second checkout), it needs `uv run python -m scripts.migrations.migrate_schema_v6` run against it
 too** — `db.connect()` hard-errors on any schema_version mismatch, so every tool refuses to open an
 unmigrated copy.
 
 ### Verification discipline this session actually followed
 
 Every step was checked byte-identical against the pre-refactor code on the full 678-clip labelled
-corpus (`uv run python scripts/backtest.py --labelled-only --out ...`, diffed against a Step-0
+corpus (`uv run python -m scripts.analysis.backtest --labelled-only --out ...`, diffed against a Step-0
 baseline captured before any edit) — extraction, the config wiring, and the reason-code addition
 all came back with **zero mismatches** on every classification-affecting column. The one step
 whose CSV output legitimately differs (adding the `reason` column) was checked by comparing every
-*other* column instead. `scripts/check_incident_regression.py` stayed at 5/5 incident events
+*other* column instead. `scripts/analysis/check_incident_regression.py` stayed at 5/5 incident events
 throughout. A full, unlabelled-corpus (16,886 clip) pass was also run after the last commit as an
 additional smoke test — see the execution plan doc's Step 10 for that result if it matters to you;
 it has no pre-refactor baseline to diff against (only a labelled-only one was captured at Step 0),
@@ -1680,7 +1680,7 @@ clips outside the labelled set.
 
 This is the one item left in the Phase 2 refactor brief that can make results silently *wrong*
 rather than just slow, so give it a session of its own rather than folding it into something else.
-`scripts/spike.py::detect_clip` takes 22 tuning keyword arguments and carries several sessions of
+`scripts/analysis/spike.py::detect_clip` takes 22 tuning keyword arguments and carries several sessions of
 hard-won correctness fixes (warmup handling, anchor sweep, reference-bg veto, the
 flashlight-candidate work) — extracting it to a cached `src/motion.py` needs the cache key to cover
 every parameter that affects its output, or a config change will silently serve stale cached
@@ -1693,7 +1693,7 @@ Two things worth knowing before starting, found this session while doing the equ
 `EXTRACTOR_VERSION` constant is defined anywhere, and (2) `motion_fingerprint()` hashes
 `thresholds.yaml`'s `motion:` section, which is **not** where `detect_clip`'s real parameters
 live — they're defaults in its own function signature, untouched by this session on purpose
-(nothing in `scripts/spike.py` changed). Wiring `motion:` up is the same class of work this session
+(nothing in `scripts/analysis/spike.py` changed). Wiring `motion:` up is the same class of work this session
 just did for `classification:` (real values from the code, a typed loader, `detect_clip` reads from
 it instead of hardcoded defaults) — but against a function with 22 parameters instead of 16 values,
 and a failure mode that's silent (stale cache) instead of loud (wrong category, caught immediately
@@ -1723,19 +1723,19 @@ tolerable) is still unset. Nothing is blocking that decision from being made whe
 ### The ask for the next agent: organise, don't rebuild
 
 The empirical work across sessions #1-#13 solved real detection/classification problems but did it
-inside `scripts/spike.py` and `scripts/backtest.py` rather than the module boundaries
+inside `scripts/analysis/spike.py` and `scripts/analysis/backtest.py` rather than the module boundaries
 `docs/plan.md` originally specified (`src/motion.py`, `src/classify.py`, `src/backtester.py`). That
 was the right call at the time — gate 2 was undecided and refactoring a moving target would have
 been wasted work — but gate 2 is retired now and the target has stopped moving as much. Time to
 clean it up.
 
 **This is explicitly a refactor, not new detection work.** The full test suite and
-`scripts/check_incident_regression.py` must stay green throughout, and any extracted module's
+`scripts/analysis/check_incident_regression.py` must stay green throughout, and any extracted module's
 output should be checked byte-identical against the pre-refactor version on the full labelled
 corpus before being trusted — same discipline this repo has applied to every real detector change,
 now applied to moving code around instead of changing what it computes. See `docs/plan.md`'s Phase
 2 refactor brief for the concrete per-step breakdown; short version: `classify.py` (extract
-`scripts/backtest.py::classify()`, add reason codes — nothing to build, just organise) and
+`scripts/analysis/backtest.py::classify()`, add reason codes — nothing to build, just organise) and
 `backtester.py` (wire in the `backtest_runs`/`backtest_results` DB functions that already exist and
 already have tests, currently called by nothing) are both low-risk, high-value, and independent of
 each other. `motion.py` (caching `detect_clip`'s output) is real but riskier — its cache key has to
@@ -2057,7 +2057,7 @@ inside (0.0), 36.1% fully outside (1.0), the rest spread between. That alone doe
 **One clip from each cluster, rendered and inspected:**
 - **cam07/4097** (inside=0.0) — already user-confirmed correct in an earlier session (2026-08-31
   QA pass). Not re-litigated.
-- **cam07/22393** (outside=1.0), rendered via `scripts/render_debug.py` and inspected frame-by-
+- **cam07/22393** (outside=1.0), rendered via `scripts/review/render_debug.py` and inspected frame-by-
   frame (`data/reports/scratch/cam07_geometry_2026-09-08/`): a person is clearly visible standing
   on open, textured ground on the side the geometry calls OUTSIDE, while a wire-mesh fence panel
   fills the near side of frame on the side called INSIDE — visually the same shape as cam01's
@@ -2099,7 +2099,7 @@ what the previous session had half-built and left uncommitted.
 
 ### What was actually there at the start of this session
 
-The previous session's uncommitted diff (`scripts/spike.py`, `src/features.py`) had real
+The previous session's uncommitted diff (`scripts/analysis/spike.py`, `src/features.py`) had real
 plumbing — `track_contour`'s `flashlight_scores` parameter, `_run_track_pass`'s
 `flashlight_scores_per_frame`, and `src.features.FLASHLIGHT_CANDIDATE_MIN_RATIO` (deliberately the
 same 0.02 as `classify()`'s own `GREEN_LIGHT_RATIO_MIN`) — all correctly wired to each other. But
@@ -2115,10 +2115,10 @@ tests existed for any of it. Flipping the flag did nothing.
   correctly for the backward one). Off (the default) is a true no-op — confirmed byte-identical
   behaviour, not just "should be."
 - **Threaded through the two real callers.** `extract_clip_features` gained the same parameter
-  (forwarded to `detect_clip`), and `scripts/render_debug.py` gained `--prefer-flashlight-candidate`
+  (forwarded to `detect_clip`), and `scripts/review/render_debug.py` gained `--prefer-flashlight-candidate`
   so a specific clip (e.g. cam07/11174) can be rendered before/after for a human to look at
   directly, not just read numbers about.
-- **6 new tests** (`tests/test_spike.py`): 5 pure `track_contour` cases (prefers a lit candidate
+- **6 new tests** (`tests/scripts/analysis/test_spike.py`): 5 pure `track_contour` cases (prefers a lit candidate
   over a larger unlit one; still prefers size among multiple lit candidates; falls back to
   largest-wins when nothing clears the bar; `None` is byte-identical to the old behaviour; the
   min-reacquire-area floor still applies before colour is even considered) and one end-to-end
@@ -2133,7 +2133,7 @@ below says. **Not yet committed as of writing this** — do that first if pickin
 Script: `data/reports/scratch/flashlight_candidate_2026-09-08/measure.py` (gitignored, local-only,
 per this repo's scratch-analysis convention). Runs `extract_clip_features` twice per labelled clip
 (flag off, flag on) through the real `classify()` pipeline, with the same reference-background and
-`daylight_hint` wiring `scripts/backtest.py` uses in production, and diffs the resulting category.
+`daylight_hint` wiring `scripts/analysis/backtest.py` uses in production, and diffs the resulting category.
 Full per-clip output: `data/reports/scratch/flashlight_candidate_2026-09-08/results.csv`.
 
 **18 of 678 labelled clips changed category:**
@@ -2406,7 +2406,7 @@ already-documented NCC brightness-invariance failure from session #4, showing up
   tries to fix it. Its most-saturated pixels do sit at hue 33.0, exactly `hue_low`, which would
   matter if a human ever does appear there.
 - **cam01/10560-10561 is a worker, i.e. `neighbour`, not `resident`** — relabelled (labels backed
-  up to `data/backups/labels_pre_neighbour_fix_20260908.jsonl` first). This also answers #8's open
+  up to `data/backups/labels/labels_pre_neighbour_fix_20260908.jsonl` first). This also answers #8's open
   cam01 question in part: that person genuinely *is* outside the fence, so `outside: right` read
   him correctly. cam01's 62%-outside rate is not automatically a geometry bug.
 
@@ -2428,7 +2428,7 @@ long-standing assumptions.
 
 ### THE bug: the daylight gate silently disabled flashlight detection on a third of all night clips
 
-`scripts/spike.py`'s gate that zeroes `green_light_ratio`/`green_light_flicker` is
+`scripts/analysis/spike.py`'s gate that zeroes `green_light_ratio`/`green_light_flicker` is
 `color_fraction > 0.15` — purely an image statistic, and **it is not camera-neutral**. Across all
 16,272 genuinely-night clips by the sun table, **29.7% trip it anyway**, concentrated exactly in
 the cameras that record colour-cast night footage:
@@ -2483,7 +2483,7 @@ detected normally — `green_light_ratio` p90 0.268 (3rd highest of any camera),
 fires on 21.1% of its clips, and only 3.8% of its night clips trip the daylight gate (one of the
 lowest rates on site).
 
-Rendering its mislabelled guard clips through `scripts/visualize_zone.py` showed the real
+Rendering its mislabelled guard clips through `scripts/review/visualize_zone.py` showed the real
 mechanism. On **cam07/11174** (labelled guard, note "flashlight") there is an obvious bright green
 flashlight sitting on the fence — and the tracked box is 40% of the frame away, on the bushes the
 beam is lighting up *outside* the fence. `green_light_ratio` only samples pixels inside the tracked
@@ -2579,7 +2579,7 @@ closes the "environment is the weak link now, not guard" finding from #5.
 
 ### What shipped (3 commits)
 
-`b8ec6dd` — **`blob_count_median` and `motion_pixel_fraction_median`** in `scripts/spike.py`.
+`b8ec6dd` — **`blob_count_median` and `motion_pixel_fraction_median`** in `scripts/analysis/spike.py`.
 Both existing features are a PEAK over frames, which is what a storm needs but also fires on a
 single flare-settle frame at the start of a quiet clip — the bug diagnosed in #5 and left unfixed
 because touching the peak thresholds needed a full re-validation. Adding the median alongside
@@ -2588,7 +2588,7 @@ better than the peaks they de-noise (motion_pixel_fraction AUC 0.236 → 0.271 i
 blob_count 0.297 → 0.325), and the gap on the protected side is enormous — the worst real animal
 clip PEAKS at 0.907 whole-frame motion but has a MEDIAN of 0.0015.
 
-`79e426c` — **three gates in `scripts/backtest.py::classify()`**:
+`79e426c` — **three gates in `scripts/analysis/backtest.py::classify()`**:
 
 1. `blob_count_median > 4` → `environment_candidate`, beside the existing peak `blob_count > 10`.
 2. `blob_white_fraction >= 0.4` inside the geometry rule → **a blinded lens never alerts**. Same
@@ -2598,7 +2598,7 @@ clip PEAKS at 0.907 whole-frame motion but has a MEDIAN of 0.0015.
 3. `motion_pixel_fraction_median > 0.12` → sustained whole-frame motion is wind or an unsettled
    IR ramp, not a compact intruder.
 
-`5cf2b82` — **`obstruction_windows()` in `scripts/rank_candidates.py`**, written as a
+`5cf2b82` — **`obstruction_windows()` in `scripts/analysis/rank_candidates.py`**, written as a
 `.windows.csv` sibling whenever `--maintenance-out` is given. See "the maintenance channel" below.
 
 ### The methodology that matters more than the thresholds
@@ -2707,16 +2707,16 @@ quoted earlier in this file.
 
 ### Fresh full-corpus data, ready to work from
 
-Just re-ran `scripts/backtest.py`'s full logic (not `--labelled-only` — every downloaded clip)
+Just re-ran `scripts/analysis/backtest.py`'s full logic (not `--labelled-only` — every downloaded clip)
 via a parallel wrapper (`data/reports/scratch/full_history_2026-09-07/`, not committed — CSVs
 only, regenerate with the `_worker`/`Pool(8)` pattern in that script if it's gone from `/tmp`):
 
 - **`per_clip.csv`** — 16,886 rows, one per downloaded clip, same columns as
-  `scripts.backtest.write_csv` (`REPORT_COLUMNS`: identity + `category` + `blinding_foreground` +
+  `scripts.analysis.backtest.write_csv` (`REPORT_COLUMNS`: identity + `category` + `blinding_foreground` +
   every `FEATURE_COLUMNS` value) plus `caption` (needed to pair siblings).
 - **`per_event.csv`** — 8,613 rows, one per physical event (grouped by
-  `scripts.label._event_key`, i.e. clips sharing an embedded `@ HH:MM:SS` caption timestamp),
-  with `event_category` computed by the new `scripts.backtest.classify_event()` (below) and a
+  `scripts.review.label._event_key`, i.e. clips sharing an embedded `@ HH:MM:SS` caption timestamp),
+  with `event_category` computed by the new `scripts.analysis.backtest.classify_event()` (below) and a
   `message_ids` column listing every clip in that event.
 
 Corpus-wide category counts (`per_clip.csv`, ALL 16,886 clips, mostly unlabelled):
@@ -2739,14 +2739,14 @@ reads `guard_candidate`, `green_light_ratio=0.459`); `cam08` 10852 (short, `inci
 fraction=0.0`).
 
 Since both clips of an event are usually labelled identically once either one is (label
-propagation), **`scripts/backtest.py --labelled-only` was double-counting almost every
+propagation), **`scripts/analysis/backtest.py --labelled-only` was double-counting almost every
 animal/incident event**: 47 labelled animal/incident clip ROWS collapsed to only 25 unique
 EVENTS when this was audited — 88% of them are exactly this short+long pair, both carrying the
 same label. Every feature/AUC/threshold number quoted anywhere earlier in this file (`docs/
 handoff.md` sessions #1-#5) or in `docs/plan.md` up to today's checkpoint was computed over that
 inflated, truncation-mixed population — not a fabricated concern, a confirmed measurement bias.
 
-**New tool shipped, not a `classify()` change:** `scripts.backtest.classify_event(categories) ->
+**New tool shipped, not a `classify()` change:** `scripts.analysis.backtest.classify_event(categories) ->
 str` reduces a whole event's sibling categories to one verdict; `incident_candidate`/`animal_
 candidate` always win (matches the standing "shape may never suppress an outside alert" rule).
 Analysis/reporting only — never called from the live per-clip path, since a real system sees one
@@ -2785,7 +2785,7 @@ the detail:
 - **`resident_candidate` rule** added, split from the inside-only guard fallback by real
   `is_daylight(timestamp)` — NOT `color_fraction` (rejected first: 64% guard false-fire, the same
   "daylight gate is self-defeating" confound as `green_light_ratio`).
-- **`neighbour` label added** (`VALID_LABELS`, migration `scripts/migrate_add_neighbour_label.py`
+- **`neighbour` label added** (`VALID_LABELS`, migration `scripts/migrations/migrate_add_neighbour_label.py`
   already run) — a benign person outside the fence, not resident/guard/threat (a neighbour's
   worker). n=3 now, still too thin for a `classify()` rule of its own.
 - **cam09 fence geometry has a dated history now** (like cam01a/cam12) — the user directly traced
@@ -2806,7 +2806,7 @@ the detail:
   didn't) — of 2,609 unlabelled night+outside candidates, only a 37-clip stratified sample was
   reviewed (`data/reports/scratch/night_outside_review_2026-09-07/`), and even that batch isn't
   fully labelled. This is the largest unexplored population in the whole corpus.
-- **Ranker (`scripts/rank_candidates.py`) group-drop improvement measured, not implemented:**
+- **Ranker (`scripts/analysis/rank_candidates.py`) group-drop improvement measured, not implemented:**
   dropping the track/motion AND metric/calibration feature groups together improves leave-one-out
   AUC by +0.064 (animal+incident vs. rest) — lower risk than a `classify()` change since it only
   affects review-queue ORDER, not the alert/suppress decision.
@@ -2840,7 +2840,7 @@ the detail:
   guard and one as environment. Visual review of the seven survivors found
   flashlight/illumination patterns rather than a credible animal, neighbour,
   or incident; they remain unlabelled in
-  `data/reports/deep_night_outside_review_2026-09-20.message_ids` for human
+  `data/reports/reviews/2026-09-20/deep_night_outside_review_2026-09-20.message_ids` for human
   confirmation.
 - The full-sibling audit showed four of eight reported flashlight cases were
   already caught when the representative clip was scored. Two more

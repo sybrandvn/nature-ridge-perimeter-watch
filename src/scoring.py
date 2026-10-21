@@ -3,7 +3,7 @@
 ``src.motion`` owns video decoding, detection and tracking. This module reduces
 its in-memory ``ClipDetection`` into classifier-ready scalar features, including
 compact geometry and metric replay paths. It has no labelled-corpus or CSV
-responsibilities; those remain in ``scripts.spike``.
+responsibilities; those remain in ``scripts.analysis.spike``.
 """
 
 from __future__ import annotations
@@ -570,7 +570,7 @@ def _multi_object_outside_features_from_tracks(
         for obj in frame_tracks:
             # obj.bbox is corner form (x0, y0, x1, y1) -- see _contour_bbox and
             # track_multiple_objects' own dead-reckoning step, both of which
-            # use this convention, and scripts/render_debug.py's renderer,
+            # use this convention, and scripts/review/render_debug.py's renderer,
             # which unpacks it the same way. Do NOT read this as (x, y, w, h):
             # that silently sends the sample point below the frame for any
             # blob in the lower half (classify_zone has no bounds check and
@@ -1598,7 +1598,7 @@ def extract_clip_features(
     compatible reference is available it uses that aligned cross-clip image as
     the scored-frame difference target, which can recover a subject absorbed
     into this clip's median background. It is reporting-only through
-    ``scripts.backtest --reference-background-primary`` and defaults off.
+    ``scripts.analysis.backtest --reference-background-primary`` and defaults off.
 
     `prefer_flashlight_candidate` (see `detect_clip`) is forwarded unchanged.
     Off by default, unmeasured corpus-wide -- pass `True` here (and thread it

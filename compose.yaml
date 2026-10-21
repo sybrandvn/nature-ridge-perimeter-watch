@@ -29,7 +29,7 @@ x-perimeter-app: &perimeter-app
 services:
   watcher:
     <<: *perimeter-app
-    command: ["python", "-m", "scripts.watch"]
+    command: ["python", "-m", "scripts.ops.watch"]
     restart: unless-stopped
     healthcheck:
       test:
@@ -37,7 +37,7 @@ services:
           "CMD",
           "python",
           "-m",
-          "scripts.container_healthcheck",
+          "scripts.ops.container_healthcheck",
           "--readiness",
           "--heartbeat",
           "/app/data/live/watcher.heartbeat",
@@ -50,12 +50,12 @@ services:
       start_period: 60s
 
   # Reusable operator container. Examples:
-  #   docker compose --profile tools run --rm toolbox python scripts/meta_backfill.py
-  #   docker compose --profile tools run --rm toolbox python scripts/backtest.py --help
+  #   docker compose --profile tools run --rm toolbox python -m scripts.ingest.meta_backfill
+  #   docker compose --profile tools run --rm toolbox python -m scripts.analysis.backtest --help
   toolbox:
     <<: *perimeter-app
     profiles: ["tools"]
-    command: ["python", "-m", "scripts.container_healthcheck", "--readiness"]
+    command: ["python", "-m", "scripts.ops.container_healthcheck", "--readiness"]
 
   # One-time interactive Telethon authorization/channel discovery. The
   # resulting /app/data/session.session persists through the bind mount.
@@ -64,4 +64,4 @@ services:
     profiles: ["bootstrap"]
     stdin_open: true
     tty: true
-    command: ["python", "scripts/list_channels.py"]
+    command: ["python", "-m", "scripts.ingest.list_channels"]

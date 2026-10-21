@@ -16,7 +16,7 @@ Validated 2026-09-04 on this repo's real corpus: at the default
 picks up a different false-positive mode: a guard walking a stretch of
 adjacent cameras triggers them in sequence within the window, which looks
 identical in shape to a real multi-camera storm. Always review the output
-visually (`scripts/label.py --message-ids-file`) before trusting it -- this
+visually (`scripts/review/label.py --message-ids-file`) before trusting it -- this
 module only proposes candidates, it never labels anything.
 """
 

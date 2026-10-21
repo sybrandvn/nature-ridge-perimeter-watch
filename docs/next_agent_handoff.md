@@ -13,6 +13,23 @@ previous source and validation reports are under the server's
 On the server, the source update is applied as working-tree changes on top of `b1c8721`;
 preserve and reconcile those changes before a future Git update.
 
+### Repository organization, 2026-10-21
+
+- Application code remains under `src/`; tools now live in `scripts/{ingest,analysis,review,ops,migrations}/`.
+  Invoke them with `uv run python -m scripts.<group>.<tool>` from the repository root.
+  Compose and Docker use the grouped module paths; rebuild the image with this configuration.
+- `tests/unit/` covers application code; `tests/scripts/` mirrors tool groups, and shared
+  versioned records remain in `tests/fixtures/`. Use `make check`, `make test-unit` or
+  `make test-scripts`. All 958 tests pass before and after the cleanup; Ruff and Compose
+  configuration checks pass, and all 33 grouped tool modules import successfully.
+- Local investigations are filed under `data/reports/investigations/<date>/<topic>/`, review
+  tables under `data/reports/reviews/<date>/`, and standalone backups by type. Existing
+  database, authorization-session, history, live-media and production-reference paths remain
+  stable. Data file contents were checked before and after each move.
+- See `data/README.md` for old-to-new data paths, `scripts/README.md` for tool discovery, and
+  `docs/operator-guide.md` for the detailed workflows previously in README. Historical report
+  contents retain their original provenance paths. No service was started or deployed by this cleanup.
+
 ### Cam15 classifier update, 2026-10-19
 
 - User approved the measured cam15-only rule after reviewing its offline preservation results.
@@ -23,7 +40,7 @@ preserve and reconcile those changes before a future Git update.
 - `motion-features-v9` adds `genuine_detection_count` and `scored_frame_count` without changing
   detector tracking. Old feature caches are invalidated. Debug rendering is version 3 and receives
   the same camera identity as production classification.
-- The frozen baseline at `data/reports/false-alarm-review-2026-10-19/validation/baseline.jsonl`
+- The frozen baseline at `data/reports/investigations/2026-10-19/false-alarm-review/validation/baseline.jsonl`
   covers 1,014 tagged clips (845 class labels and 169 startup-only tags) plus eight live review
   clips. The production implementation matches the measured hypothesis: only cam15/24395,
   24398 and 24680 change to `environment_candidate/cam15_mixed_environment`. All historical
@@ -36,7 +53,7 @@ preserve and reconcile those changes before a future Git update.
   old/new comparison using 13 review videos already present on the server, including both cam15
   animal-event carrier clips and all three nuisance alert clips. The other 11 review videos were
   absent from server storage; no footage was uploaded. Existing shared features had no drift.
-- Replay using `python -m scripts.check_environment_hypothesis --production --baseline ...
+- Replay using `python -m scripts.analysis.check_environment_hypothesis --production --baseline ...
   --out ...`. The check deliberately keeps cam13/7778's pre-existing approved-alert discrepancy
   visible: distance 0.099375 is below the 0.10 threshold, so both old and new paths are unclassified.
   `regression_passed` can be true while the strict overall `passed` remains false. Do not remove
@@ -47,7 +64,7 @@ preserve and reconcile those changes before a future Git update.
 
 ### Offline vegetation prototype, 2026-10-21
 
-- `scripts/probe_vegetation.py` and `src/vegetation_probe.py` are offline-only. They link actual
+- `scripts/analysis/probe_vegetation.py` and `src/vegetation_probe.py` are offline-only. They link actual
   object contours across startup and settled frames and measure reference resemblance and
   directly observed trajectories. Template/reverse boxes and merged-identity predictions cannot
   establish a moving trajectory. Novel appearance is not a person/animal identification.
@@ -69,8 +86,8 @@ preserve and reconcile those changes before a future Git update.
   footage and cam12's remounted era limit coverage; zero new regressions is not evidence that
   the prototype can recognise every protected subject. All 1,014 labels and current 39 alerting
   positive clips / 29 events remain intact. Cam13/7778's existing baseline issue remains visible.
-- Reproduce with the command in README. Local evidence and reference-source provenance are in
-  `data/reports/vegetation-prototype-2026-10-21/`; `report.json` contains the four integrity reports,
+- Reproduce with the command in `docs/operator-guide.md`. Local evidence and reference-source provenance are in
+  `data/reports/investigations/2026-10-21/vegetation-prototype/`; `report.json` contains the four integrity reports,
   `objects.jsonl` contains per-object observations, and `reference-check/results.json` records
   the individual-reference/local-search diagnostic. Production thresholds and service state
   were not changed.
@@ -82,7 +99,7 @@ preserve and reconcile those changes before a future Git update.
 - schema v10 durably stores processed messages, pending/final camera events, analyzed siblings,
   event resolution state, staged camera deliveries, and a separate system-event notification
   outbox. Migrate v7 with v8, v9, then v10; v8 needs v9 then v10, and v9 needs only v10.
-- `src/live_watcher.py` and `scripts/watch.py` provide live Telethon ingestion, atomic media
+- `src/live_watcher.py` and `scripts/ops/watch.py` provide live Telethon ingestion, atomic media
   downloads, measured sibling buffering, conservative urgent-event resolution, Telegram video
   delivery, ntfy delivery, bounded retry, restart recovery, and heartbeat maintenance.
 - Compose now runs `watcher` by default with `restart: unless-stopped`, persistent `./data`, and a
@@ -109,16 +126,16 @@ preserve and reconcile those changes before a future Git update.
   worker thread, and caches it below
   `data/live/debug` with the extraction fingerprint and renderer version. The secondary
   `/debug <video-id>` command accepts any known clip, including a latest-camera video outside the
-  animal/incident history. `scripts.watch.render_bot_debug_video` supplies the timestamp-specific
+  animal/incident history. `scripts.ops.watch.render_bot_debug_video` supplies the timestamp-specific
   zone, reference background, and full `MotionThresholds` record to `render_clip`.
-- `scripts/send_test_alert.py --examples` sends clearly marked copies of the standing cam08/7360
+- `scripts/ops/send_test_alert.py --examples` sends clearly marked copies of the standing cam08/7360
   animal and cam06/21520 incident clips to the configured Telegram alert destination.
 - `src/retention.py` keeps urgent evidence, pending events, and one newest local video per camera.
   When explicitly enabled, other managed videos are removed hourly while metadata remains
   available for live retrieval. The same pass applies that policy to renderer-owned `data/live/debug`
   videos and removes obsolete fingerprint/version variants. It is opt-in via
   `MEDIA_RETENTION_ENABLED=true` and defaults off on development machines.
-- `scripts/restore_media.py` resumably restores every missing database clip in Telegram batches.
+- `scripts/ingest/restore_media.py` resumably restores every missing database clip in Telegram batches.
 - The measured sibling wait is 300 seconds: only 6 of 8,274 observed sibling groups exceeded it;
   99.9% completed within 286 seconds. An Initial incident now sends a clearly marked preliminary
   warning immediately. Completion captions finalize immediately and send a confirmed,
@@ -135,7 +152,7 @@ preserve and reconcile those changes before a future Git update.
 - Warmup debug rendering now consumes the same `WarmupMotionAnalysis` instance as feature scoring.
   It shows the scorer-corrected warmup frame, marks the selected object, valid-but-unselected
   objects, ignore-region objects and size-gated objects, and reports their counts. Use
-  `scripts/render_debug.py --exact-message-id` for clip-level audits; ordinary `--message-id`
+  `scripts/review/render_debug.py --exact-message-id` for clip-level audits; ordinary `--message-id`
   intentionally resolves to the clearer sibling.
 - A 2026-09-20 audit found five environment-labelled Telegram candidates with `blob_count <= 2`:
   cam13/11877 (daylight inside-only), cam12/19244 (outside-colour bushes), cam12/6352 (the known
@@ -190,7 +207,7 @@ but do not promote the existing backtest or debug scripts into the service.
   still initialize directly at schema 10; see the [Oracle Cloud runbook](oracle_cloud_deployment.md).
   Preserve the active server's environment, database and session during updates.
 <!-- Legacy schema-copy migration script search terms:
-  `scripts.migrate_schema_v9.py` and then `scripts.migrate_schema_v10.py` with the newly built
+  `scripts/migrations/migrate_schema_v9.py` and then `scripts/migrations/migrate_schema_v10.py` with the newly built
 -->
 - The representative Telegram smoke test successfully sent cam08/7360 (animal) and cam06/21520
   (incident), including their `Debug view` buttons. Telegram has normal or silent delivery but no
@@ -212,7 +229,7 @@ Run the normal checks with:
 ```bash
 uv run ruff check .
 uv run pytest -q
-uv run python scripts/backtest.py \
+uv run python -m scripts.analysis.backtest \
   --out /tmp/perimeter-labelled.csv --labelled-only --no-record
 ```
 
@@ -231,7 +248,7 @@ stop the watcher and run:
 ```bash
 docker compose stop watcher
 docker compose --profile tools run --rm toolbox \
-  python -m scripts.restore_media --concurrency 8
+  python -m scripts.ingest.restore_media --concurrency 8
 docker compose up -d watcher
 ```
 
@@ -264,7 +281,7 @@ also independent of the settled-track summary. Five labelled guards that previou
 The no-settled-motion condition is deliberate. Onside warmup activity can coexist with a genuine
 outside subject, so warmup evidence must not globally override a later scored track.
 
-`scripts/render_debug.py` now uses the scorer's exact exclusion mask, warmup daylight gate,
+`scripts/review/render_debug.py` now uses the scorer's exact exclusion mask, warmup daylight gate,
 raw-frame flashlight ratios, and per-track peak flashlight scores. Every qualifying green-light
 component is outlined in warmup and settled frames. Daylight-gated warmup candidates remain visible
 in a distinct colour and are labelled as gated; their returned/scored ratio remains zero. A
@@ -323,9 +340,9 @@ intentionally orthogonal.
 - Low-blob environment audit, exact production-input renders, and clearer event representatives:
   `data/reports/debug/2026-09-20/low-blob-environment/`
 - Label backup before the review:
-  `data/backups/labels_pre_false_alert_review_20260919.jsonl`
+  `data/backups/labels/labels_pre_false_alert_review_20260919.jsonl`
 - Label backup after the review:
-  `data/backups/labels_after_false_alert_review_20260919.jsonl`
+  `data/backups/labels/labels_after_false_alert_review_20260919.jsonl`
 - Live labels/database: `data/perimeter_watch.db`
 - Reference backgrounds: `data/reference_bg/`
 
@@ -346,22 +363,22 @@ do not appear in `git status`.
 - `src/db.py` — schema v10 persistence, including camera resolution plus camera/system outboxes.
 - `src/config.py`, `config/thresholds.yaml` — typed classification thresholds.
 - `config/cameras.yaml` — dated geometry and camera configuration.
-- `scripts/backtest.py` — labelled/full-corpus evaluation harness.
-- `scripts/render_debug.py` — visual detector inspection; its HUD shows classification, shared
+- `scripts/analysis/backtest.py` — labelled/full-corpus evaluation harness.
+- `scripts/review/render_debug.py` — visual detector inspection; its HUD shows classification, shared
   warmup-object evidence, rectangular artifact evidence, and global shift evidence. Use
   `--exact-message-id` for a named clip and `--message-id` for its clearer event representative.
-- `scripts/label.py` — label workflow using the shared production event key.
-- `scripts/watch.py` — Telethon process entry point and heartbeat loop.
-- `scripts/migrate_schema_v8.py`, `scripts/migrate_schema_v9.py`, and
-  `scripts/migrate_schema_v10.py` — additive v7-to-v10 migration chain.
-- `scripts/send_test_alert.py` — manual text-transport smoke test; `--examples` sends the standing
+- `scripts/review/label.py` — label workflow using the shared production event key.
+- `scripts/ops/watch.py` — Telethon process entry point and heartbeat loop.
+- `scripts/migrations/migrate_schema_v8.py`, `scripts/migrations/migrate_schema_v9.py`, and
+  `scripts/migrations/migrate_schema_v10.py` — additive v7-to-v10 migration chain.
+- `scripts/ops/send_test_alert.py` — manual text-transport smoke test; `--examples` sends the standing
   labelled animal and incident videos with debug buttons.
 - `.env.example` — existing Telegram, Bot API, ntfy, DB, and operating-window settings.
 - `docs/handoff.md` — full historical investigation log. Start with session #22; older sections
   are retained for provenance and sometimes explicitly superseded.
 - `docs/detection_capability_map.md` — feature inventory and scope.
 
-`tests/test_architecture.py` enforces that `src` does not import `scripts`.
+`tests/unit/test_architecture.py` enforces that `src` does not import `scripts`.
 
 ## What remains
 

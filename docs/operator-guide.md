@@ -445,7 +445,7 @@ the pipeline gets built.
 5. Extract features to CSV:
    ```bash
    uv run python -m scripts.analysis.spike --camera cam_north \
-     --out data/reports/scratch/spike_cam_north.csv
+     --out data/reports/scratch/2026-10-21/spike/features.csv
    ```
 6. Inspect the CSV by hand (or a notebook). Does any threshold combination separate
    guard/environment from animal/incident at usable precision? Explicitly count flashlight and

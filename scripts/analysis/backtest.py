@@ -10,7 +10,8 @@ This file is the screening/reporting harness around them: it walks downloaded
 clips, extracts features, applies src.classify, and writes a CSV.
 
 Run:
-    uv run python -m scripts.analysis.backtest --out data/reports/scratch/backtest.csv
+    uv run python -m scripts.analysis.backtest \
+        --out data/reports/scratch/2026-10-21/backtest/results.csv
 """
 
 from __future__ import annotations

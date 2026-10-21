@@ -20,12 +20,15 @@ preserve and reconcile those changes before a future Git update.
   Compose and Docker use the grouped module paths; rebuild the image with this configuration.
 - `tests/unit/` covers application code; `tests/scripts/` mirrors tool groups, and shared
   versioned records remain in `tests/fixtures/`. Use `make check`, `make test-unit` or
-  `make test-scripts`. All 958 tests pass before and after the cleanup; Ruff and Compose
-  configuration checks pass, and all 33 grouped tool modules import successfully.
+  `make test-scripts`. All 960 tests pass after the report-layout update (958 before it).
+  Ruff and Compose configuration checks pass; all 33 grouped tool modules import successfully.
 - Local investigations are filed under `data/reports/investigations/<date>/<topic>/`, review
-  tables under `data/reports/reviews/<date>/`, and standalone backups by type. Existing
+  tables under `data/reports/reviews/<date>/<topic>/`, and standalone backups by type. Existing
   database, authorization-session, history, live-media and production-reference paths remain
-  stable. Data file contents were checked before and after each move.
+  stable. All report categories now use `<category>/<date>/<topic>/`, including scratch
+  and archived debug output. All 824 report files moved in this follow-up were verified
+  unchanged with SHA-256. Debug CLI fallback uses the current SAST date. See
+  `data/reports/README.md` for the full convention and local move manifests.
 - See `data/README.md` for old-to-new data paths, `scripts/README.md` for tool discovery, and
   `docs/operator-guide.md` for the detailed workflows previously in README. Historical report
   contents retain their original provenance paths. No service was started or deployed by this cleanup.
@@ -182,7 +185,7 @@ but do not promote the existing backtest or debug scripts into the service.
   bundle described above. Reconcile the server's deployed changes before any Git update.
 - `EXTRACTOR_VERSION` is `motion-features-v9` (2026-10-19: added direct detection and scored-frame
   counts; the prior v8 added `warmup_dynamic_inside_bottom_left_fraction`).
-- Ruff is clean and the full suite is **958 passing tests** as of 2026-10-21; rerun both before
+- Ruff is clean and the full suite is **960 passing tests** as of 2026-10-21; rerun both before
   deployment or changing behavior because the count grows with each layer.
 - `DEBUG_RENDER_VERSION` is 3. It passes camera identity to the classifier so the cam15 environment
   rule shown by debug matches the live analysis path; v2 introduced shared warmup observations.
@@ -334,7 +337,7 @@ intentionally orthogonal.
 ## Review data
 
 - Refreshed legacy false-alert set:
-  `data/reports/debug/archive/legacy-debug-render/review_false_alerts_2026-09-19-v2/`
+  `data/reports/archive/2026-09-19/debug-review-false-alerts-v2/`
 - Warmup bottom-left recovery validation and exact cam07/22289 render:
   `data/reports/debug/2026-09-20/warmup-bottom-left-exit/`
 - Low-blob environment audit, exact production-input renders, and clearer event representatives:

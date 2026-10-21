@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,33 @@ from src.config import CameraZone, load_thresholds_config
 from src.motion import TrackedObject, detect_clip
 
 HEIGHT, WIDTH = 48, 64
+
+
+@pytest.mark.parametrize("explicit_output", [False, True])
+def test_cli_files_default_output_by_site_date_and_preserves_explicit_path(
+    monkeypatch, tmp_path, explicit_output
+):
+    # It is already the next day in Johannesburg, even if the host is on UTC.
+    instant = datetime(2026, 10, 21, 22, 30, tzinfo=UTC)
+    monkeypatch.setattr(
+        render_debug, "datetime", SimpleNamespace(now=lambda tz: instant.astimezone(tz))
+    )
+    monkeypatch.setattr(render_debug, "REVIEW_DEBUG_ROOT", tmp_path / "debug")
+    outputs = []
+
+    def fake_render(_source, _zone, *, out_path, **_kwargs):
+        outputs.append(Path(out_path))
+        return out_path
+
+    monkeypatch.setattr(render_debug, "render_clip", fake_render)
+    args = ["--clip", "source.mp4", "--camera", "cam07", "--no-reference-bg"]
+    expected = tmp_path / "debug/2026-10-22/unfiled/cam07/0.mp4"
+    if explicit_output:
+        expected = tmp_path / "selected.mp4"
+        args += ["--out", str(expected)]
+
+    assert render_debug.main(args) == 0
+    assert outputs == [expected]
 
 
 @pytest.fixture

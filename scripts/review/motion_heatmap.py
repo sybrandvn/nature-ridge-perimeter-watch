@@ -36,8 +36,8 @@ penalising fast movement.
 
 Run:
     uv run python -m scripts.review.motion_heatmap data/history/cam08/7360.mp4 \
-        --out data/reports/scratch/motion_heatmap/cam08_7360.png \
-        --overlay-out data/reports/scratch/motion_heatmap/cam08_7360_overlay.png
+        --out data/reports/scratch/2026-10-21/motion-heatmap/cam08_7360.png \
+        --overlay-out data/reports/scratch/2026-10-21/motion-heatmap/cam08_7360_overlay.png
 """
 
 from __future__ import annotations

@@ -109,12 +109,12 @@ FN 18 / TN 636**, precision 0.5370, recall 0.6170, F1 0.5743. Full suite: 748 pa
 Cam12 geometry was initially dated from the 9161/9162 event here. **Superseded by session #22:**
 the checked overlay fit, but comparison clips did not support a camera move on that date. The trace
 is retained as the better geometry for the entire pre-remount era, not as a third dated era. The
-source/review material remains under `data/reports/archive/review_2026-09-19/` (gitignored).
+source/review material remains under `data/reports/archive/2026-09-19/review/` (gitignored).
 
 Repository/data cleanup followed. Root-level DB backups moved to `data/backups/legacy_root/`,
 download logs to `data/logs/`, the completed unknown review and trace source to
-`data/reports/archive/review_2026-09-19/`, and the four old stage-1 backtest pairs to
-`data/reports/archive/backtests_2026-09-09/`. Raw history, the live DB, labels, all historical
+`data/reports/archive/2026-09-19/review/`, and the four old stage-1 backtest pairs to
+`data/reports/archive/2026-09-09/backtests/`. Raw history, the live DB, labels, all historical
 investigation folders, and referenced debug renders were retained. Only redundant blank Cam12
 canvases, an editor temp file, stale `cam12/day_07.png`, and regenerable Python/test caches were
 deleted. Cam12 references were rebuilt in place; `scripts/analysis/build_reference_bg.py --camera` now
@@ -968,7 +968,7 @@ had no reference (cam12/19245 by era, cam11/4309, cam11/4310, cam09/21522 by spa
 | cam04/4065 | 43 -> 42 | 29 |
 
 All seven were inspected as clip-vs-reference crops and are scenery; renders for review are in
-`data/reports/debug_render/reference_bg_check/`. **Nothing was gained, and no real subject was
+`data/reports/archive/2026-09-07/debug-reference-bg-check/`. **Nothing was gained, and no real subject was
 lost.** It is much more conservative than stage 1 predicted (44 frames, not ~139) because the
 production references are coarser than stage 1's nearest-15, era filtering removes cam12, and
 `max_scenery_streak=2` needs 3+ consecutive frames.
@@ -1426,7 +1426,7 @@ scoring pipeline for a residual gradient to hide in.
   ramped up — the classic flare. The compensated render shows a consistently exposed scene
   throughout, with a real tracked box (solid cyan, "real diff, brightness/colour corrected")
   following what looks like a subject moving down along the fence frame to frame, not a static
-  artifact. Demo renders in `data/reports/debug_render/ir_flare_compensation/` (gitignored).
+  artifact. Demo renders in `data/reports/archive/2026-09-07/debug-ir-flare-compensation/` (gitignored).
 - Re-render both attempts: the seeded/independent-fit version was numerically validated first
   (89 clips, 0 mismatches) without touching the standing `debug_render/` set, since the scored-frame
   diff already proved nothing scored could have moved. After the reverse/chained revision above,
@@ -1771,7 +1771,7 @@ frame 0 for free, once frames 1-2 establish what the "typical" tracked size actu
 `green_light_ratio` goes 0.0 → 0.264, category flips `incident_candidate` → `guard_candidate`.
 
 **Measured on the full 678-clip labelled corpus** (same methodology as session #11,
-`data/reports/scratch/flashlight_active_override_2026-09-08/`):
+`data/reports/scratch/2026-09-08/flashlight-active-override/`):
 
 | | count |
 | --- | --- |
@@ -1897,7 +1897,7 @@ measurement was cheap to do now.
 
 Ran the active-track flashlight override against all 16,886 downloaded clips (not just the 678
 labelled ones), flag off vs on, parallelised 12-way
-(`data/reports/scratch/flashlight_active_override_full_2026-09-08/measure_full.py`, 75.2 minutes,
+(`data/reports/scratch/2026-09-08/flashlight-active-override-full/measure_full.py`, 75.2 minutes,
 zero exceptions). **1,258 of 16,886 clips changed (7.5%).**
 
 | transition | count |
@@ -1958,8 +1958,8 @@ abundance of caution.** Before this can be defaulted on:
    disappear while cam07's validated corrections survive unchanged.
 3. Only then reconsider promotion to default.
 
-Full per-clip results: `data/reports/scratch/flashlight_active_override_full_2026-09-08/results_full.csv`.
-Spot-check renders: `data/reports/debug_render/full_sweep_spotcheck_2026-09-08/`.
+Full per-clip results: `data/reports/scratch/2026-09-08/flashlight-active-override-full/results_full.csv`.
+Spot-check renders: `data/reports/archive/2026-09-08/debug-full-sweep-spotcheck/`.
 
 **CORRECTED, same session, immediately after writing the above: there was no stationary-light bug.
 The "fixed light" diagnosis was a misread of grainy night-IR frames, corrected by the user who
@@ -2058,7 +2058,7 @@ inside (0.0), 36.1% fully outside (1.0), the rest spread between. That alone doe
 - **cam07/4097** (inside=0.0) — already user-confirmed correct in an earlier session (2026-08-31
   QA pass). Not re-litigated.
 - **cam07/22393** (outside=1.0), rendered via `scripts/review/render_debug.py` and inspected frame-by-
-  frame (`data/reports/scratch/cam07_geometry_2026-09-08/`): a person is clearly visible standing
+  frame (`data/reports/scratch/2026-09-08/cam07-geometry/`): a person is clearly visible standing
   on open, textured ground on the side the geometry calls OUTSIDE, while a wire-mesh fence panel
   fills the near side of frame on the side called INSIDE — visually the same shape as cam01's
   already-resolved 10560 case (a real person on the clear side, away from the fence structure).
@@ -2072,8 +2072,9 @@ resolution cam01 got. **No config change made.** This means cam07's real problem
 ground/vegetation rather than the actual subject, not a fence-tracing error. Redirect any further
 cam07 effort there, not at re-tracing the line.
 
-Debug renders for anyone who wants to re-check this call: `data/reports/scratch/
-cam07_geometry_2026-09-08/cam07_22393_debug.mp4` and the extracted stills alongside it.
+Debug renders for anyone who wants to re-check this call:
+`data/reports/scratch/2026-09-08/cam07-geometry/cam07_22393_debug.mp4`
+and the extracted stills alongside it.
 
 **RETRACTED 2026-09-09, corrected by the user who actually knows the footage: cam07/22393 is not
 a real outside patrol.** It's a recurring failure mode this repo already has a name for elsewhere
@@ -2130,11 +2131,11 @@ below says. **Not yet committed as of writing this** — do that first if pickin
 
 ### The real measurement: 678 labelled clips, flag off vs on, real footage
 
-Script: `data/reports/scratch/flashlight_candidate_2026-09-08/measure.py` (gitignored, local-only,
+Script: `data/reports/scratch/2026-09-08/flashlight-candidate/measure.py` (gitignored, local-only,
 per this repo's scratch-analysis convention). Runs `extract_clip_features` twice per labelled clip
 (flag off, flag on) through the real `classify()` pipeline, with the same reference-background and
 `daylight_hint` wiring `scripts/analysis/backtest.py` uses in production, and diffs the resulting category.
-Full per-clip output: `data/reports/scratch/flashlight_candidate_2026-09-08/results.csv`.
+Full per-clip output: `data/reports/scratch/2026-09-08/flashlight-candidate/results.csv`.
 
 **18 of 678 labelled clips changed category:**
 
@@ -2218,7 +2219,7 @@ everywhere) is the correct place to leave it for now. Concrete next steps, in or
    single-frame foliage-spike risk above while keeping the real corrections, but unmeasured.
 
 Debug renders for direct visual comparison:
-`data/reports/scratch/flashlight_candidate_2026-09-08/cam07_11174_{off,on}.mp4`.
+`data/reports/scratch/2026-09-08/flashlight-candidate/cam07_11174_{off,on}.mp4`.
 
 ## Handoff for a new agent (2026-09-08, session close #10)
 
@@ -2242,7 +2243,7 @@ animal clip saved. `MEDIAN_FENCE_DISTANCE_MAX` is unchanged.
 
 ### cam07: a real bug found and fixed, and a bigger one found and NOT fixed
 
-Rendered 7 debug clips (`data/reports/debug_render/cam07_investigation_2026-09-08/`) of cam07's
+Rendered 7 debug clips (`data/reports/archive/2026-09-08/debug-cam07-investigation/`) of cam07's
 21 (of 36) misclassified guard clips. The user's per-clip review nailed the mechanism on sight for
 several of them; frame-level tracing confirmed each one exactly.
 
@@ -2364,7 +2365,7 @@ a stricter test).
 
 The user corrected #8: cam10's fence line is not too far left, there is a big bush outside it
 driving the environment triggers. An aggregate motion heatmap over 40 of its environment clips
-(`data/reports/scratch/zone_check_2026-09-08/cam10_env_motion_heatmap.png`) confirms it exactly —
+(`data/reports/scratch/2026-09-08/zone-check/cam10_env_motion_heatmap.png`) confirms it exactly —
 the motion mass fills the right half of frame, x 0.55–1.00, centroid (0.93, 0.41), while the
 fence lines sit at x≈0.42 with `outside: right`.
 
@@ -2540,7 +2541,7 @@ to trust the user's eyes over a plausible theory. One look at that render settle
 
 ### Suggested next steps
 
-1. **Look at `data/reports/scratch/zone_check_2026-09-08/cam01_10560.png` and say whether that
+1. **Look at `data/reports/scratch/2026-09-08/zone-check/cam01_10560.png` and say whether that
    patrol path is inside or outside the fence.** One answer settles cam01's 62% outside rate.
 2. **cam07's beam-washed-vegetation mode is the biggest remaining alert-channel source** and is
    not a colour problem, so no colour feature will fix it. The tracked blob being the illuminated
@@ -2708,7 +2709,7 @@ quoted earlier in this file.
 ### Fresh full-corpus data, ready to work from
 
 Just re-ran `scripts/analysis/backtest.py`'s full logic (not `--labelled-only` — every downloaded clip)
-via a parallel wrapper (`data/reports/scratch/full_history_2026-09-07/`, not committed — CSVs
+via a parallel wrapper (`data/reports/scratch/2026-09-07/full-history/`, not committed — CSVs
 only, regenerate with the `_worker`/`Pool(8)` pattern in that script if it's gone from `/tmp`):
 
 - **`per_clip.csv`** — 16,886 rows, one per downloaded clip, same columns as
@@ -2804,7 +2805,7 @@ the detail:
 - **Full night-time-outside discovery is barely started.** 16,582 of 16,886 clips are night (vs.
   only 304 real-daylight clips, which is why the daylight sweep finished this session but night
   didn't) — of 2,609 unlabelled night+outside candidates, only a 37-clip stratified sample was
-  reviewed (`data/reports/scratch/night_outside_review_2026-09-07/`), and even that batch isn't
+  reviewed (`data/reports/scratch/2026-09-07/night-outside-review/`), and even that batch isn't
   fully labelled. This is the largest unexplored population in the whole corpus.
 - **Ranker (`scripts/analysis/rank_candidates.py`) group-drop improvement measured, not implemented:**
   dropping the track/motion AND metric/calibration feature groups together improves leave-one-out
@@ -2840,7 +2841,7 @@ the detail:
   guard and one as environment. Visual review of the seven survivors found
   flashlight/illumination patterns rather than a credible animal, neighbour,
   or incident; they remain unlabelled in
-  `data/reports/reviews/2026-09-20/deep_night_outside_review_2026-09-20.message_ids` for human
+  `data/reports/reviews/2026-09-20/deep-night-outside-review/deep_night_outside_review_2026-09-20.message_ids` for human
   confirmation.
 - The full-sibling audit showed four of eight reported flashlight cases were
   already caught when the representative clip was scored. Two more
@@ -2871,10 +2872,11 @@ the detail:
 - `uv` for everything: `uv run ruff check . --fix && uv run pytest -q` after every module change
   and before every commit.
 - Commit logically per change, stay on `feat/phase1-finalisation`, never auto-merge.
-- After any detector/feature change, re-render the standing `data/reports/debug_render/` sample
-  set and numerically diff old vs new before trusting the change.
-- `src/` is flat, no package. `scripts/` are standalone entry points that `sys.path`-insert the
-  repo root.
+- After any detector/feature change, re-render the standing archived debug samples (see
+  `data/reports/README.md` for current paths), then numerically diff old vs new before
+  trusting the change.
+- Reusable code lives in `src/`. Operator entry points are grouped Python modules; run
+  `uv run python -m scripts.<group>.<tool>` from the repository root.
 - DB timestamps are UTC; site local time is UTC+2 (SAST).
 - Secrets live in `.env` — never grep or cat it, and never scope a search broadly enough to
   match it.

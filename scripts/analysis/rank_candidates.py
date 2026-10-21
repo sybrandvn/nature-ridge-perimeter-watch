@@ -28,7 +28,7 @@ against 1,019 individual flagged clips.
 
 Run:
     uv run python -m scripts.analysis.rank_candidates --workers 8 \\
-        --out data/reports/reviews/2026-08-30/candidates.csv
+        --out data/reports/reviews/2026-08-30/candidates/candidates.csv
 """
 
 from __future__ import annotations

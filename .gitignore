@@ -14,6 +14,7 @@ __pycache__/
 !/data/**/
 !/data/**/.gitkeep
 !/data/README.md
+!/data/reports/README.md
 *.db
 *.db-wal
 *.db-shm

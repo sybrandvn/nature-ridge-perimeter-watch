@@ -21,7 +21,7 @@ and which camera clusters are known-reliable vs. known-guard-patrol-prone.
 
 Run:
     uv run python -m scripts.analysis.find_storm_events --workers 8 \\
-        --out data/reports/reviews/2026-09-04/storm_events.csv
+        --out data/reports/reviews/2026-09-04/storm-events/storm_events.csv
 """
 
 from __future__ import annotations

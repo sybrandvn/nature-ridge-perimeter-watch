@@ -12,7 +12,7 @@ feeds on, so the box shown here is what actually produced
 
 Run:
     uv run python -m scripts.review.visualize_zone data/history/cam06/21520.mp4 cam06 \
-        --out data/reports/scratch/zone_check_cam06_21520.png
+        --out data/reports/scratch/2026-10-21/zone-check/cam06_21520.png
 """
 
 from __future__ import annotations

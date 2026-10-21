@@ -82,7 +82,7 @@ corpus diff always points at exactly one change.
 - Commit logically, one commit per numbered step below. Never auto-merge.
 - `src/` is flat, no package. `scripts/` are standalone entry points that `sys.path`-insert the
   repo root.
-- Scratch output goes in `data/reports/scratch/<name>_<date>/` (gitignored).
+- Scratch output goes in `data/reports/scratch/YYYY-MM-DD/<topic>/` (gitignored).
 
 ---
 
@@ -92,7 +92,7 @@ You cannot prove the refactor changed nothing unless you record what "nothing" l
 must run against the *unmodified* code.
 
 ```bash
-BASE=data/reports/scratch/refactor_baseline_2026-09-09
+BASE=data/reports/scratch/2026-09-09/refactor-baseline
 mkdir -p $BASE
 uv run pytest -q | tail -1 | tee $BASE/tests_before.txt
 uv run python -m scripts.analysis.backtest --labelled-only --out $BASE/labelled_before.csv
@@ -305,7 +305,7 @@ Commit: `refactor: extract classify() and friends into src/classify.py`
 ## Step 3 — Prove it byte-identical on the labelled corpus
 
 ```bash
-BASE=data/reports/scratch/refactor_baseline_2026-09-09
+BASE=data/reports/scratch/2026-09-09/refactor-baseline
 uv run python -m scripts.analysis.backtest --labelled-only --out $BASE/labelled_after_step2.csv
 diff <(sort $BASE/labelled_before.csv) <(sort $BASE/labelled_after_step2.csv) \
   && echo "IDENTICAL" || echo "DIFFERS -- STOP"
@@ -492,11 +492,11 @@ This is the one step whose output legitimately differs from the baseline: the CS
 Verify by comparing every *pre-existing* column instead:
 
 ```bash
-BASE=data/reports/scratch/refactor_baseline_2026-09-09
+BASE=data/reports/scratch/2026-09-09/refactor-baseline
 uv run python -m scripts.analysis.backtest --labelled-only --out $BASE/labelled_after_step7.csv
 uv run python - <<'PY'
 import csv
-base = "data/reports/scratch/refactor_baseline_2026-09-09"
+base = "data/reports/scratch/2026-09-09/refactor-baseline"
 before = {(r["channel_id"], r["message_id"]): r for r in csv.DictReader(open(f"{base}/labelled_before.csv"))}
 after = {(r["channel_id"], r["message_id"]): r for r in csv.DictReader(open(f"{base}/labelled_after_step7.csv"))}
 assert before.keys() == after.keys(), "row set changed -- STOP"
@@ -626,7 +626,7 @@ Commit: `feat: src/backtester.py records immutable backtest runs`
 uv run ruff check . --fix && uv run pytest -q
 uv run python -m scripts.analysis.check_incident_regression
 uv run python -m scripts.analysis.backtest --labelled-only \
-  --out data/reports/scratch/refactor_baseline_2026-09-09/labelled_final.csv
+  --out data/reports/scratch/2026-09-09/refactor-baseline/labelled_final.csv
 uv run python -c "
 from src import db; from src.config import load_app_config
 conn = db.connect(load_app_config(require_telegram=False).db_path)

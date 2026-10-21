@@ -8,7 +8,7 @@ line by eye, and converting their pixel coordinates to width/height fractions
 
 Run:
     uv run python -m scripts.review.extract_frame data/history/cam05/18269.mp4 \
-        --out data/reports/scratch/cam05_frame.png
+        --out data/reports/scratch/2026-10-21/frame-extraction/cam05_frame.png
     # --frame-index N to pick a different moment (default: middle frame)
 """
 

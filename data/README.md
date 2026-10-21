@@ -1,6 +1,6 @@
 # Local data
 
-Data lives in this working directory and is ignored by Git. Only this guide and empty-directory
+Data lives in this working directory and is ignored by Git. Only layout guides and empty-directory
 placeholders are versioned. A fresh clone has no database, session, source footage or reports.
 Run `make data-dirs` to create the standard folders without changing existing files.
 
@@ -14,10 +14,10 @@ Run `make data-dirs` to create the standard folders without changing existing fi
 | `live/watcher.heartbeat` | Watcher liveness marker |
 | `reference_bg/` | Production reference manifest and derived camera images |
 | `reports/investigations/YYYY-MM-DD/<topic>/` | Self-contained investigations, baselines and evidence |
-| `reports/reviews/YYYY-MM-DD/` | Review CSVs and paired `.message_ids` shortlists |
-| `reports/debug/YYYY-MM-DD/<topic>/<camera>/` | Deliberate visual reviews; `unfiled/` is the CLI fallback |
-| `reports/scratch/<experiment>/` | Intermediate output and disposable experiments |
-| `reports/archive/` and `reports/debug/archive/` | Preserved historical output |
+| `reports/reviews/YYYY-MM-DD/<topic>/` | Review CSVs and paired `.message_ids` shortlists |
+| `reports/debug/YYYY-MM-DD/<topic>/<camera>/` | Deliberate visual reviews; dated `unfiled/` is the CLI fallback |
+| `reports/scratch/YYYY-MM-DD/<topic>/` | Intermediate output and disposable experiments |
+| `reports/archive/YYYY-MM-DD/<topic>/` | Preserved historical output and cleanup manifests |
 | `backups/database/` | Standalone SQLite snapshots |
 | `backups/labels/` | Exported label snapshots |
 | `backups/<snapshot-name>/` | Complete upgrade/rollback bundles, kept together |
@@ -28,13 +28,14 @@ figures, validation results and reference provenance together. For example:
 
 ```text
 reports/investigations/2026-10-21/vegetation-prototype/
-reports/reviews/2026-09-20/night_outside_candidates_2026-09-20.csv
-reports/reviews/2026-09-20/night_outside_candidates_2026-09-20.message_ids
+reports/reviews/2026-09-20/night-outside-candidates/night_outside_candidates_2026-09-20.csv
+reports/reviews/2026-09-20/night-outside-candidates/night_outside_candidates_2026-09-20.message_ids
 reports/debug/2026-09-20/low-blob-environment/cam07/
 ```
 
 Use the CLI's `--out` / `--out-dir` options to select these destinations. Temporary experiments
-go under `reports/scratch/`; keep the top of `reports/` free of loose output files.
+go under a dated topic in `reports/scratch/`; keep the top of `reports/` free of loose output
+files. The [reports guide](reports/README.md) defines the common category/date/topic layout.
 
 The 2026-10-21 cleanup filed the local data as follows:
 
@@ -44,14 +45,17 @@ The 2026-10-21 cleanup filed the local data as follows:
 | `reports/false-alarm-review-2026-10-19/` | `reports/investigations/2026-10-19/false-alarm-review/` |
 | `reports/environment-investigation-2026-10-20/` | `reports/investigations/2026-10-20/environment/` |
 | `reports/vegetation-prototype-2026-10-21/` | `reports/investigations/2026-10-21/vegetation-prototype/` |
-| Loose dated review CSVs and `.message_ids` | `reports/reviews/<date>/` |
+| Loose dated review CSVs and `.message_ids` | `reports/reviews/<date>/<topic>/` |
+| Former flat scratch experiment folders | `reports/scratch/<date>/<topic>/` |
+| Former archived debug sets and backtests | `reports/archive/<date>/<topic>/` |
 | Loose `backups/*.db` | `backups/database/` |
 | Loose `backups/*.jsonl` | `backups/labels/` |
 
 All moved files were verified with SHA-256 before and after the move. The local
-`reports/archive/repository-cleanup-2026-10-21.json` records every original path, current path,
-size and checksum. Historical artifact contents retain their original provenance strings;
-use this mapping when following an old report's output paths.
+`reports/archive/2026-10-21/repository-cleanup/data-moves.json` records the initial data moves,
+and `reports/archive/2026-10-21/report-layout/moves.json` records the report standardization.
+Both contain original paths, current paths, sizes and checksums. Historical artifact contents
+retain their original provenance strings; follow the manifests in order for old output paths.
 
 Database, session, history, live-media and production-reference paths stay in place because
 configuration and persisted rows use them. Compose mounts this entire directory at `/app/data`.

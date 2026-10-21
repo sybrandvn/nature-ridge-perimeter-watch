@@ -24,7 +24,7 @@ Workflow (see docs/plan.md Phase 0c):
 
 Run:
     uv run python -m scripts.analysis.spike --camera cam_north \
-        --out data/reports/scratch/spike_cam_north.csv
+        --out data/reports/scratch/2026-10-21/spike/features.csv
 """
 
 from __future__ import annotations

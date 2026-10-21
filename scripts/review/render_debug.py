@@ -39,7 +39,7 @@ Run:
     uv run python -m scripts.review.render_debug --label incident --label animal \
         --out data/reports/debug/2026-09-20/incident-animal-review
     uv run python -m scripts.review.render_debug \
-        --message-ids-file data/reports/reviews/2026-08-30/candidates.message_ids \
+        --message-ids-file data/reports/reviews/2026-08-30/candidates/candidates.message_ids \
         --out data/reports/debug/2026-09-20/candidate-review
 """
 
@@ -48,7 +48,9 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -116,7 +118,6 @@ DEFAULTS = {
 }
 DEBUG_RENDER_VERSION = 3
 REVIEW_DEBUG_ROOT = Path("data/reports/debug")
-UNFILED_DEBUG_ROOT = REVIEW_DEBUG_ROOT / "unfiled"
 
 COLOR_TRACKED = (255, 0, 255)
 COLOR_RECOVERED = (0, 165, 255)
@@ -1311,7 +1312,11 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--message-ids-file", help="one message_id per line")
     source.add_argument("--label", action="append", help="render all clips with this label")
     source.add_argument("--limit", type=int, help="cap how many clips are rendered")
-    parser.add_argument("--out", help="output path (single clip) or directory (batch)")
+    parser.add_argument(
+        "--out",
+        help="output path (single clip) or directory (batch); default: "
+        "data/reports/debug/<SAST-date>/unfiled/<camera>/<message-id>.mp4",
+    )
     parser.add_argument("--scale", type=int, default=2, help="upscale factor (default 2)")
 
     tuning = parser.add_argument_group("detector tuning (defaults match scripts/analysis/spike.py)")
@@ -1365,8 +1370,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # A named review directory keeps inspectable artifacts separate from the
     # production cache under data/live/debug.  Keep the no-argument fallback
-    # contained too, rather than scattering files directly in data/reports.
-    out_dir = Path(args.out) if args.out and len(clips) > 1 else UNFILED_DEBUG_ROOT
+    # contained in the same category/date/topic layout as every other report.
+    today = datetime.now(ZoneInfo("Africa/Johannesburg")).date().isoformat()
+    default_out_dir = REVIEW_DEBUG_ROOT / today / "unfiled"
+    out_dir = Path(args.out) if args.out and len(clips) > 1 else default_out_dir
     rendered = 0
     for clip in clips:
         camera = cameras.by_id(clip["camera_id"])
